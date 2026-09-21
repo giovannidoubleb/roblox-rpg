@@ -1,12 +1,19 @@
 --[[
-	Declares the RemoteEvents/RemoteFunctions the game uses and creates them
-	under ReplicatedStorage on first require. Server and client both require
-	this module so the instances always exist before either side uses them.
+	Declares the RemoteEvents the game uses and creates them under
+	ReplicatedStorage on first require. Server and client both require this
+	module so the instances always exist before either side uses them.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local FOLDER_NAME = "RemoteEvents"
+
+local EVENT_NAMES = {
+	"PlayerDataUpdated",
+	"RequestAttack",
+	"LootReceived",
+	"PlayerDied",
+}
 
 local function getOrCreateFolder(): Folder
 	local existing = ReplicatedStorage:FindFirstChild(FOLDER_NAME)
@@ -34,8 +41,9 @@ end
 
 local folder = getOrCreateFolder()
 
-local Remotes = {
-	PlayerDataUpdated = getOrCreateRemoteEvent(folder, "PlayerDataUpdated"),
-}
+local Remotes = {}
+for _, name in EVENT_NAMES do
+	Remotes[name] = getOrCreateRemoteEvent(folder, name)
+end
 
 return Remotes
