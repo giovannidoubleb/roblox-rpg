@@ -4,8 +4,9 @@
 	the scaffold works without any external assets. AI is a minimal
 	chase-and-melee loop, not pathfinding.
 
-	Real level layout (spawn points, room geometry) is a future pass; the
-	spawn list below is placeholder positions for the loop to be testable.
+	Field enemies (EnemyService.Init) spawn from LevelLayout.FieldSpawns and
+	respawn forever. DungeonService spawns additional, non-respawning waves
+	through EnemyService.Spawn for the key-gated dungeon run.
 ]]
 
 local Players = game:GetService("Players")
@@ -13,6 +14,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
+local LevelLayout = require(script.Parent.LevelLayout)
 
 local EnemyService = {}
 
@@ -110,8 +112,22 @@ local function runAi(model: Model, tierName: string)
 	end
 end
 
-local function spawnAt(tierName: string, position: Vector3)
+-- options.Respawn (default true): whether a fresh copy auto-spawns after
+-- this one dies, at the same position. Field enemies respawn forever;
+-- dungeon-wave enemies (spawned by DungeonService) pass Respawn = false.
+-- options.Tags: extra attributes to set on the model, e.g. dungeon run
+-- ownership, so other services can identify/filter these enemies.
+function EnemyService.Spawn(tierName: string, position: Vector3, options: { Respawn: boolean?, Tags: { [string]: any }? }?)
+	options = options or {}
+	local respawn = options.Respawn ~= false
+
 	local model = buildEnemy(tierName)
+	if options.Tags then
+		for attributeName, value in options.Tags do
+			model:SetAttribute(attributeName, value)
+		end
+	end
+
 	model:PivotTo(CFrame.new(position))
 	model.Parent = Workspace
 
@@ -131,9 +147,11 @@ local function spawnAt(tierName: string, position: Vector3)
 		task.delay(0.5, function()
 			model:Destroy()
 		end)
-		task.delay(Config.EnemyTiers[tierName].RespawnSeconds, function()
-			spawnAt(tierName, position)
-		end)
+		if respawn then
+			task.delay(Config.EnemyTiers[tierName].RespawnSeconds, function()
+				EnemyService.Spawn(tierName, position, options)
+			end)
+		end
 	end)
 
 	task.spawn(runAi, model, tierName)
@@ -141,18 +159,9 @@ local function spawnAt(tierName: string, position: Vector3)
 	return model
 end
 
--- Placeholder spawn layout until real level geometry exists.
-local SPAWN_POINTS = {
-	{ Tier = "Trash", Position = Vector3.new(10, 5, 0) },
-	{ Tier = "Trash", Position = Vector3.new(-10, 5, 0) },
-	{ Tier = "Trash", Position = Vector3.new(0, 5, 15) },
-	{ Tier = "Elite", Position = Vector3.new(20, 5, 20) },
-	{ Tier = "Boss", Position = Vector3.new(0, 5, 40) },
-}
-
 function EnemyService.Init()
-	for _, spawnPoint in SPAWN_POINTS do
-		spawnAt(spawnPoint.Tier, spawnPoint.Position)
+	for _, spawnPoint in LevelLayout.FieldSpawns do
+		EnemyService.Spawn(spawnPoint.Tier, spawnPoint.Position)
 	end
 end
 

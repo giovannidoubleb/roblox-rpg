@@ -1,21 +1,13 @@
 --[[
 	Rolls a rarity off the kill or chest tables in Config, and picks an item
-	name for that rarity. The actual item catalog is intentionally tiny
-	placeholder content - real items are a future pass.
+	id of that rarity from ItemDatabase.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
+local ItemDatabase = require(ReplicatedStorage.Shared.Modules.ItemDatabase)
 
 local LootTable = {}
-
-local ITEM_NAMES_BY_RARITY = {
-	Common = { "Worn Dagger", "Cloth Scraps", "Minor Healing Herb" },
-	Uncommon = { "Iron Sword", "Leather Vest", "Swift Boots" },
-	Rare = { "Runed Blade", "Chainmail Hauberk", "Ring of Vigor" },
-	Epic = { "Frostbrand Greatsword", "Dragonscale Plate", "Amulet of the Phoenix" },
-	Legendary = { "Worldsplitter", "Aegis of the First King", "Crown of Eternity" },
-}
 
 local function rollRarity(rates: { [string]: number }): string
 	local roll = math.random()
@@ -41,14 +33,9 @@ local function rollRarity(rates: { [string]: number }): string
 	error("rollRarity: rates table has no entries")
 end
 
-local function pickItemName(rarity: string): string
-	local pool = ITEM_NAMES_BY_RARITY[rarity]
-	return pool[math.random(1, #pool)]
-end
-
 function LootTable.RollKill()
 	local rarity = rollRarity(Config.KillDropRates)
-	return { Rarity = rarity, Name = pickItemName(rarity) }
+	return { Rarity = rarity, ItemId = ItemDatabase.PickRandomId(rarity) }
 end
 
 -- pityForced: true when the pity counter is forcing an Epic+ result.
@@ -61,7 +48,7 @@ function LootTable.RollChest(pityForced: boolean)
 	else
 		rarity = rollRarity(Config.ChestDropRates)
 	end
-	return { Rarity = rarity, Name = pickItemName(rarity) }
+	return { Rarity = rarity, ItemId = ItemDatabase.PickRandomId(rarity) }
 end
 
 function LootTable.IsEpicOrBetter(rarity: string): boolean

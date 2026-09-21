@@ -11,8 +11,15 @@ local FOLDER_NAME = "RemoteEvents"
 local EVENT_NAMES = {
 	"PlayerDataUpdated",
 	"RequestAttack",
+	"RequestSkill",
+	"RequestUltimate",
+	"UltimateMeterUpdated",
 	"LootReceived",
 	"PlayerDied",
+	"InventoryUpdated",
+	"EquipItem",
+	"ClaimDailyLogin",
+	"Notify",
 }
 
 local function getOrCreateFolder(): Folder
