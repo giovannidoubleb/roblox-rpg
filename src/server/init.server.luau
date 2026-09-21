@@ -1,39 +1,92 @@
 --[[
 	Server entry point. Boots services and wires the kill -> XP/loot/quest
 	pipeline between them.
+
+	Every require/Init below is pcall-isolated: one broken module warns
+	loudly instead of silently halting everything after it (which is what
+	was leaving players falling through an empty void with no HUD data -
+	a single uncaught error anywhere in this file used to stop the whole
+	script). A guaranteed safety floor is also built unconditionally so a
+	fall-into-the-void can't happen even if a service is still broken.
 ]]
 
+local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Config = require(ReplicatedStorage.Shared.Modules.Config)
 
-local MapService = require(script.Services.MapService)
-local PlayerDataService = require(script.Services.PlayerDataService)
-local LootService = require(script.Services.LootService)
-local EnemyService = require(script.Services.EnemyService)
-local CombatService = require(script.Services.CombatService)
-local DungeonService = require(script.Services.DungeonService)
-local MonetizationService = require(script.Services.MonetizationService)
-
-MapService.Init()
-PlayerDataService.Init()
-CombatService.Init()
-DungeonService.Init()
-MonetizationService.Init()
-
-EnemyService.SetOnEnemyDied(function(enemy, tierName, killer)
-	if killer then
-		local tier = Config.EnemyTiers[tierName]
-		PlayerDataService.AddExperience(killer, tier.XpReward)
-		PlayerDataService.ReportQuestProgress(killer, tierName)
-
-		if tier.IsBoss then
-			LootService.AwardBossLoot(killer)
-		else
-			LootService.AwardKillLoot(killer)
-		end
+local function safeRequire(path: Instance)
+	local ok, result = pcall(require, path)
+	if not ok then
+		warn(("[Boot] Failed to require %s: %s"):format(path:GetFullName(), tostring(result)))
+		return nil
 	end
+	return result
+end
 
-	DungeonService.HandleEnemyDied(enemy, tierName, killer)
-end)
+local function safeInit(name: string, service: any)
+	if not service then
+		warn(("[Boot] Skipping %s.Init() - module failed to load"):format(name))
+		return
+	end
+	local ok, err = pcall(service.Init)
+	if not ok then
+		warn(("[Boot] %s.Init() errored: %s"):format(name, tostring(err)))
+	end
+end
 
-EnemyService.Init()
+-- Guaranteed floor + spawn so a broken MapService can never drop a player
+-- into an endless fall. MapService.Init() below builds over/replaces this
+-- with the real level once it succeeds.
+if not Workspace:FindFirstChild("SafetyFloor") then
+	local floor = Instance.new("Part")
+	floor.Name = "SafetyFloor"
+	floor.Anchored = true
+	floor.Size = Vector3.new(500, 1, 500)
+	floor.Position = Vector3.new(0, -1, 0)
+	floor.Color = Color3.fromRGB(40, 40, 40)
+	floor.Material = Enum.Material.SmoothPlastic
+	floor.Parent = Workspace
+
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "SafetySpawn"
+	spawn.Size = Vector3.new(6, 1, 6)
+	spawn.Position = Vector3.new(0, 0.5, -20)
+	spawn.Anchored = true
+	spawn.Transparency = 1
+	spawn.Parent = Workspace
+end
+
+local Config = safeRequire(ReplicatedStorage.Shared.Modules.Config)
+
+local MapService = safeRequire(script.Services.MapService)
+local PlayerDataService = safeRequire(script.Services.PlayerDataService)
+local LootService = safeRequire(script.Services.LootService)
+local EnemyService = safeRequire(script.Services.EnemyService)
+local CombatService = safeRequire(script.Services.CombatService)
+local DungeonService = safeRequire(script.Services.DungeonService)
+local MonetizationService = safeRequire(script.Services.MonetizationService)
+
+safeInit("MapService", MapService)
+safeInit("PlayerDataService", PlayerDataService)
+safeInit("CombatService", CombatService)
+safeInit("DungeonService", DungeonService)
+safeInit("MonetizationService", MonetizationService)
+
+if EnemyService then
+	EnemyService.SetOnEnemyDied(function(enemy, tierName, killer)
+		if killer then
+			local tier = Config.EnemyTiers[tierName]
+			PlayerDataService.AddExperience(killer, tier.XpReward)
+			PlayerDataService.ReportQuestProgress(killer, tierName)
+
+			if tier.IsBoss then
+				LootService.AwardBossLoot(killer)
+			else
+				LootService.AwardKillLoot(killer)
+			end
+		end
+
+		DungeonService.HandleEnemyDied(enemy, tierName, killer)
+	end)
+end
+
+safeInit("EnemyService", EnemyService)
