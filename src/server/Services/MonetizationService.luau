@@ -43,9 +43,9 @@ local GEM_POUCHES = {
 }
 
 -- Applies what a Developer Product purchase grants. Every product here has
--- a real effect now; SeasonPass is a Developer Product in the "Ledger &
--- Loot" plan but behaves like an unlock (reuses the Passes flag/HasPass
--- plumbing) rather than a stacking consumable.
+-- a real effect. SeasonPass moved to Config.Monetization.GamePasses (see the
+-- comment there) - it's granted the same way as every other pass, through
+-- checkGamePasses/PromptGamePassPurchaseFinished below, not through here.
 local function grantProduct(player: Player, productName: string)
 	if GEM_POUCHES[productName] then
 		PlayerDataService.AddGems(player, Config.Monetization.GemPouchAmounts[productName])
@@ -72,8 +72,6 @@ local function grantProduct(player: Player, productName: string)
 			PlayerDataService.AddGems(player, 150)
 			Remotes.Notify:FireClient(player, "Mystery Crate: every cosmetic already owned - +150 gems instead!")
 		end
-	elseif productName == "SeasonPass" then
-		PlayerDataService.GrantPass(player, "SeasonPass")
 	end
 end
 

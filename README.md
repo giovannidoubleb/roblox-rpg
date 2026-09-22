@@ -51,24 +51,34 @@ Loot" (monetization) design docs.
   attack, Cleave, Power Strike, and an ultimate, all range/facing/cooldown-
   checked server-side, plus crit chance and floating damage numbers. Seven
   enemy kinds (Slime, Skeleton, Bandit, Dire Wolf, Warlock, Stone Golem,
-  Ancient Treant) share three power tiers (Trash/Elite/Boss); some are
-  ranged and lob a visible bolt instead of needing to close to melee.
+  Ancient Treant) share three power tiers (Trash/Elite/Boss) but aren't just
+  reskins of each other: every attack is telegraphed (a color flash, then a
+  re-check that you're still in range before the hit lands, so backing off
+  during the flash actually avoids it), Warlock kites to hold range instead
+  of standing and trading hits, and every boss has a second, harder-hitting
+  telegraphed radius Slam on its own cooldown. Ranged kinds lob a visible
+  bolt instead of needing to close to melee.
 - **Loot & crafting** (`ItemDatabase`, `LootTable`, `LootService`,
   `CraftingService`) — the design doc's rarity tables, 15-boss pity counter,
   a 15-item catalog, and a crafting ladder (4 unequipped items of a rarity →
   1 guaranteed item of the next rarity up, on a timer a Crafting Rush charge
-  shortens).
+  shortens). Weapon and Armor are still flat Damage/Health upgrades, but
+  Trinket grants crit chance instead of duplicating Armor's flat HP, so
+  gearing is a real choice between more survivability and more burst.
 - **Inventory/equipment** (`PlayerDataService`, `InventoryController`) — loot
   goes into a real per-player inventory (capped, expandable via Backpack
-  Expansion), can be equipped, and sorts by rarity automatically for AutoSort
-  pass owners.
+  Expansion), can be equipped, shows its actual stat bonus in the panel, and
+  sorts by rarity automatically for AutoSort pass owners.
 - **Daily structure** (`Config.Daily`, `PlayerDataService`,
   `DailyController`) — 3 keys/day (8h regen), 3 daily quests re-rolled from a
   pool each calendar day, and a login streak (1-7, escalating gem reward).
 - **Dungeon** (`DungeonService`) — the portal spends a key and teleports you
   into a private instance of the dungeon room (a fresh copy built per run,
   torn down after), with three waves of trash before the boss — concurrent
-  runs never collide or aggro each other.
+  runs never collide or aggro each other. Two things make a run more than
+  the open-world grind with a boss at the end: every wave promotes one
+  random enemy to a tougher, better-rewarding Champion, and the room
+  periodically telegraphs a floor hazard you have to actually step out of.
 - **A second zone** (`LevelLayout`, `ZoneService`) — the Wilds, reached via
   shrines in the hub or the zone travel menu ("M"), with its own tougher
   enemies and a respawning field boss. Fast Travel (pass) and Zone Skip Key

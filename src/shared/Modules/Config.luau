@@ -84,13 +84,18 @@ Config.Pity = {
 
 -- Power baseline by tier. Individual enemy "kinds" below pick a tier for
 -- their numbers and layer on a look, and optionally ranged behavior via an
--- AttackRange override.
+-- AttackRange override. TelegraphSeconds is a wind-up before a basic attack
+-- lands - the enemy flashes and the hit is re-checked against range at the
+-- end of it, so backing off during the flash actually avoids the hit
+-- instead of it being purely cosmetic. Boss-only Slam* fields give every
+-- boss a second, harder-hitting radius attack on its own cooldown.
 Config.EnemyTiers = {
 	Trash = {
 		Health = 30,
 		Damage = 5,
 		AttackRange = 5,
 		AttackCooldown = 1.5,
+		TelegraphSeconds = 0.3,
 		XpReward = 5,
 		RespawnSeconds = 8,
 		IsBoss = false,
@@ -100,6 +105,7 @@ Config.EnemyTiers = {
 		Damage = 12,
 		AttackRange = 6,
 		AttackCooldown = 2,
+		TelegraphSeconds = 0.45,
 		XpReward = 40,
 		RespawnSeconds = 45,
 		IsBoss = false,
@@ -109,26 +115,61 @@ Config.EnemyTiers = {
 		Damage = 20,
 		AttackRange = 8,
 		AttackCooldown = 2.5,
+		TelegraphSeconds = 0.6,
 		XpReward = 150,
 		RespawnSeconds = 180,
 		IsBoss = true,
+
+		SlamCooldown = 9,
+		SlamTelegraphSeconds = 1.2,
+		SlamRadius = 12,
+		SlamDamage = 30,
 	},
 }
 
 -- Visual/behavioral flavors built on top of the tiers above - all still
 -- code-built parts, no external assets. Ranged kinds get a bigger
 -- AttackRange override so they can hang back and lob a bolt instead of
--- needing to close to melee.
+-- needing to close to melee. Behavior = "Kiter" backs away to KiteRange
+-- instead of standing and trading hits once a player closes the distance -
+-- everything else just chases into range (the default, "Melee" or unset).
 Config.EnemyKinds = {
 	Slime = { Tier = "Trash", Color = Color3.fromRGB(90, 200, 90), Shape = Enum.PartType.Ball, Ranged = false },
 	Skeleton = { Tier = "Trash", Color = Color3.fromRGB(220, 220, 200), Shape = Enum.PartType.Block, Ranged = false },
 	Bandit = { Tier = "Trash", Color = Color3.fromRGB(150, 110, 60), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 22 },
 
 	DireWolf = { Tier = "Elite", Color = Color3.fromRGB(80, 80, 100), Shape = Enum.PartType.Block, Ranged = false },
-	Warlock = { Tier = "Elite", Color = Color3.fromRGB(120, 40, 160), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 26 },
+	Warlock = {
+		Tier = "Elite",
+		Color = Color3.fromRGB(120, 40, 160),
+		Shape = Enum.PartType.Block,
+		Ranged = true,
+		AttackRange = 26,
+		Behavior = "Kiter",
+		KiteRange = 13,
+	},
 
 	StoneGolem = { Tier = "Boss", Color = Color3.fromRGB(120, 115, 100), Shape = Enum.PartType.Block, Ranged = false },
 	AncientTreant = { Tier = "Boss", Color = Color3.fromRGB(70, 100, 50), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 24 },
+}
+
+-- The daily dungeon's own twist so it isn't just the open-world grind in a
+-- box: one random enemy per wave is upgraded to a tougher, better-rewarding
+-- Champion, and the room periodically telegraphs a floor hazard players
+-- have to step out of. See DungeonService.
+Config.Dungeon = {
+	Champion = {
+		HealthMultiplier = 2.2,
+		DamageMultiplier = 1.6,
+		XpMultiplier = 1.5,
+	},
+	Hazard = {
+		MinIntervalSeconds = 4,
+		MaxIntervalSeconds = 7,
+		TelegraphSeconds = 1.5,
+		Radius = 8,
+		Damage = 15,
+	},
 }
 
 Config.Daily = {
@@ -238,6 +279,13 @@ Config.Zones = {
 -- Fill these in once the passes/products exist in the experience's
 -- Monetization page, then republish.
 Config.Monetization = {
+	-- SeasonPass lives here, not in DeveloperProducts: it's a permanent
+	-- unlock (reward track access), which is what a Game Pass actually is on
+	-- Roblox (UserOwnsGamePassAsync-checked, one-time purchase UI). A
+	-- Developer Product is meant for repeatable/consumable buys; using one
+	-- for a permanent unlock only worked here because the code re-implements
+	-- ownership tracking itself, and it doesn't match how Roblox's own
+	-- purchase prompt and refund handling treat that product type.
 	GamePasses = {
 		FoundersPass = 0,
 		BackpackExpansion = 0,
@@ -245,6 +293,7 @@ Config.Monetization = {
 		CompanionSlotExpansion = 0,
 		FastTravel = 0,
 		AutoSort = 0,
+		SeasonPass = 0,
 	},
 	DeveloperProducts = {
 		GemPouchSmall = 0,
@@ -257,7 +306,6 @@ Config.Monetization = {
 		CharacterRenameToken = 0,
 		ZoneSkipKey = 0,
 		CraftingRush = 0,
-		SeasonPass = 0,
 	},
 	GemPouchAmounts = {
 		GemPouchSmall = 100,

@@ -7,13 +7,21 @@
 	a handful of trash. Killing the boss reports the "complete the daily
 	dungeon" quest (XP/loot for the kill itself already flow through the
 	normal EnemyService/LootService pipeline) and returns you to the hub.
+
+	Two things make a run more than the open-world grind with a boss at the
+	end: every wave promotes one random enemy to a Champion (tougher, hits
+	harder, guaranteed bonus loot - see EnemyService's Champion option and
+	the bonus-loot hook in init.server.luau), and the room periodically
+	telegraphs a floor hazard players have to actually reposition out of.
 ]]
 
 local Players = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
+local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local LevelLayout = require(script.Parent.LevelLayout)
 local EnemyService = require(script.Parent.EnemyService)
@@ -26,6 +34,7 @@ local SPAWN_JITTER = 6
 local INSTANCE_BASE = Vector3.new(0, 0, 1200)
 local INSTANCE_SLOT_SPACING = 500
 local RETURN_DELAY_SECONDS = 3
+local HAZARD_MARGIN = 12
 
 -- [Player]: { Slot, Folder, Offset, WaveIndex, RemainingInWave }
 local activeRuns: { [Player]: { [string]: any } } = {}
@@ -85,12 +94,90 @@ local function spawnWave(player: Player, runState, waveIndex: number)
 	runState.WaveIndex = waveIndex
 	runState.RemainingInWave = #wave
 
+	-- One random enemy per wave is promoted to a Champion - a real "this
+	-- wave hits different" moment instead of every wave being interchangeable
+	-- trash, plus a guaranteed bonus loot roll on top of the normal drop.
+	local championIndex = math.random(1, #wave)
+
 	local tags = { DungeonRun = true, Owner = player.UserId }
-	for _, spawnPoint in wave do
-		EnemyService.Spawn(spawnPoint.Kind, jittered(spawnPoint.Position + runState.Offset), { Respawn = false, Tags = tags })
+	for index, spawnPoint in wave do
+		EnemyService.Spawn(spawnPoint.Kind, jittered(spawnPoint.Position + runState.Offset), {
+			Respawn = false,
+			Tags = tags,
+			Champion = index == championIndex,
+		})
 	end
 
-	Remotes.Notify:FireClient(player, string.format("Wave %d/%d incoming!", waveIndex, #LevelLayout.DungeonWaves))
+	Remotes.Notify:FireClient(player, string.format("Wave %d/%d incoming! One enemy is a Champion - watch for it.", waveIndex, #LevelLayout.DungeonWaves))
+end
+
+-- A telegraphed danger zone on the dungeon floor: a translucent red circle
+-- brightens over Hazard.TelegraphSeconds, then deals damage to anyone still
+-- standing in it. Parented to the run's own instance Folder so it's cleaned
+-- up automatically (with everything else) when the run ends.
+local function spawnHazard(runState)
+	local hazardCfg = Config.Dungeon.Hazard
+	local center = LevelLayout.DungeonRoom.Center + runState.Offset
+	local half = LevelLayout.DungeonRoom.HalfSize
+	local position = Vector3.new(
+		center.X + math.random(-(half.X - HAZARD_MARGIN), half.X - HAZARD_MARGIN),
+		center.Y + 0.2,
+		center.Z + math.random(-(half.Z - HAZARD_MARGIN), half.Z - HAZARD_MARGIN)
+	)
+
+	local marker = Instance.new("Part")
+	marker.Name = "DungeonHazard"
+	marker.Anchored = true
+	marker.CanCollide = false
+	marker.Shape = Enum.PartType.Cylinder
+	marker.Size = Vector3.new(0.2, hazardCfg.Radius * 2, hazardCfg.Radius * 2)
+	marker.Orientation = Vector3.new(0, 0, 90)
+	marker.CFrame = CFrame.new(position)
+	marker.Material = Enum.Material.Neon
+	marker.Color = Color3.fromRGB(220, 40, 40)
+	marker.Transparency = 0.85
+	marker.Parent = runState.Folder
+
+	local tween = TweenService:Create(marker, TweenInfo.new(hazardCfg.TelegraphSeconds, Enum.EasingStyle.Linear), {
+		Transparency = 0.3,
+	})
+	tween:Play()
+
+	task.delay(hazardCfg.TelegraphSeconds, function()
+		if not marker.Parent then
+			return
+		end
+		marker.Transparency = 0
+
+		for _, player in Players:GetPlayers() do
+			local character = player.Character
+			local hrp = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if hrp and humanoid and humanoid.Health > 0 then
+				local flatOffset = Vector3.new(hrp.Position.X - position.X, 0, hrp.Position.Z - position.Z)
+				if flatOffset.Magnitude <= hazardCfg.Radius then
+					humanoid:TakeDamage(hazardCfg.Damage)
+				end
+			end
+		end
+
+		task.delay(0.25, function()
+			if marker.Parent then
+				marker:Destroy()
+			end
+		end)
+	end)
+end
+
+local function runHazardLoop(player: Player, runState)
+	local hazardCfg = Config.Dungeon.Hazard
+	while activeRuns[player] == runState do
+		task.wait(math.random(hazardCfg.MinIntervalSeconds * 10, hazardCfg.MaxIntervalSeconds * 10) / 10)
+		if activeRuns[player] ~= runState then
+			break
+		end
+		spawnHazard(runState)
+	end
 end
 
 local function startRun(player: Player)
@@ -102,8 +189,9 @@ local function startRun(player: Player)
 	activeRuns[player] = runState
 
 	teleportPlayer(player, LevelLayout.DungeonEntryPosition + offset)
-	Remotes.Notify:FireClient(player, "Dungeon run started - fight through every wave to reach the boss!")
+	Remotes.Notify:FireClient(player, "Dungeon run started - fight through every wave to reach the boss! Watch the floor for danger zones.")
 	spawnWave(player, runState, 1)
+	task.spawn(runHazardLoop, player, runState)
 end
 
 local function onPromptTriggered(prompt: ProximityPrompt, player: Player)

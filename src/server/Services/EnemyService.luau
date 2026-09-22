@@ -1,19 +1,26 @@
 --[[
-	Spawns and drives simple enemy NPCs. Enemies are built from parts at
-	runtime rather than Studio-authored models, so the scaffold works
-	without any external assets. AI is a minimal chase-and-melee (or
-	chase-and-lob, for ranged kinds) loop, not pathfinding.
+	Spawns and drives enemy NPCs. Enemies are built from parts at runtime
+	rather than Studio-authored models, so the scaffold works without any
+	external assets. AI is chase-into-range, not pathfinding, but attacks
+	are telegraphed rather than an instant on-cooldown tick: the enemy
+	flashes for TelegraphSeconds before a hit is actually applied, and the
+	hit is re-checked against range at the end of the flash, so stepping
+	away during the telegraph is a real way to avoid damage. Kiter kinds
+	(Warlock) back off to hold range instead of standing and trading hits,
+	and every boss has a second, harder-hitting telegraphed radius Slam on
+	its own cooldown.
 
-	Config.EnemyKinds gives each enemy a look and picks a Config.EnemyTiers
-	power baseline (Health/Damage/XP/etc.) for it; EnemyService.Spawn takes
-	a kind name (e.g. "Slime"), not a tier name directly, but still reports
-	deaths with the base tier name so XP/loot/quest matching (which only
-	knows about Trash/Elite/Boss) is unaffected by how many kinds exist.
+	Config.EnemyKinds gives each enemy a look/behavior and picks a
+	Config.EnemyTiers power baseline (Health/Damage/XP/etc.) for it;
+	EnemyService.Spawn takes a kind name (e.g. "Slime"), not a tier name
+	directly, but still reports deaths with the base tier name so XP/loot/
+	quest matching (which only knows about Trash/Elite/Boss) is unaffected
+	by how many kinds or champion multipliers exist.
 
 	Field enemies (EnemyService.Init) spawn from LevelLayout.FieldSpawns/
 	WildsFieldSpawns and respawn forever. DungeonService spawns additional,
 	non-respawning waves through EnemyService.Spawn for the key-gated
-	dungeon run.
+	dungeon run, including its per-wave Champion enemy (options.Champion).
 ]]
 
 local Players = game:GetService("Players")
@@ -33,6 +40,8 @@ local EnemyService = {}
 local AGGRO_RANGE = 20
 local AI_TICK_SECONDS = 0.5
 local BOLT_TRAVEL_SECONDS = 0.2
+local TELEGRAPH_COLOR = Color3.fromRGB(255, 235, 90)
+local SLAM_TELEGRAPH_COLOR = Color3.fromRGB(255, 80, 80)
 
 local onEnemyDied: (enemy: Model, tierName: string, killer: Player?) -> () = function() end
 
@@ -67,31 +76,48 @@ local function fireBolt(fromPosition: Vector3, toPosition: Vector3, color: Color
 	end)
 end
 
-local function buildEnemy(kindName: string): Model
+-- options.Champion (dungeon wave modifier): scales Health/Damage up via
+-- Config.Dungeon.Champion and makes the model visibly bigger/gilded so
+-- players can tell at a glance this one hits differently and drops bonus
+-- loot. The damage multiplier is stored as a model attribute since the AI
+-- loop below reads tier.Damage directly and needs to scale it per-instance.
+local function buildEnemy(kindName: string, champion: boolean?): Model
 	local kindDef = Config.EnemyKinds[kindName]
 	local tier = Config.EnemyTiers[kindDef.Tier]
 
+	local healthMultiplier = 1
+	local damageMultiplier = 1
+	if champion then
+		healthMultiplier = Config.Dungeon.Champion.HealthMultiplier
+		damageMultiplier = Config.Dungeon.Champion.DamageMultiplier
+	end
+
 	local model = Instance.new("Model")
-	model.Name = kindName
+	model.Name = champion and (kindName .. " Champion") or kindName
 
 	local root = Instance.new("Part")
 	root.Name = "HumanoidRootPart"
 	root.Shape = kindDef.Shape
-	root.Size = tier.IsBoss and Vector3.new(5, 7, 5) or Vector3.new(2.2, 3, 2.2)
-	root.Color = kindDef.Color
+	local baseSize = tier.IsBoss and Vector3.new(5, 7, 5) or Vector3.new(2.2, 3, 2.2)
+	root.Size = champion and baseSize * 1.3 or baseSize
+	root.Color = champion and kindDef.Color:Lerp(Color3.fromRGB(255, 215, 90), 0.5) or kindDef.Color
 	root.TopSurface = Enum.SurfaceType.Smooth
 	root.BottomSurface = Enum.SurfaceType.Smooth
 	root.Parent = model
 
 	local humanoid = Instance.new("Humanoid")
-	humanoid.MaxHealth = tier.Health
-	humanoid.Health = tier.Health
+	humanoid.MaxHealth = tier.Health * healthMultiplier
+	humanoid.Health = humanoid.MaxHealth
 	humanoid.WalkSpeed = tier.IsBoss and 10 or 14
 	humanoid.Parent = model
 
 	model.PrimaryPart = root
 	model:SetAttribute("Tier", kindDef.Tier)
 	model:SetAttribute("Kind", kindName)
+	model:SetAttribute("DamageMultiplier", damageMultiplier)
+	if champion then
+		model:SetAttribute("Champion", true)
+	end
 
 	return model
 end
@@ -115,15 +141,103 @@ local function nearestPlayerCharacter(fromPosition: Vector3)
 	return closest, closestDistance
 end
 
+local function livingHumanoid(character: Model?): Humanoid?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 then
+		return humanoid
+	end
+	return nil
+end
+
 local function runAi(model: Model, kindName: string)
 	local kindDef = Config.EnemyKinds[kindName]
 	local tier = Config.EnemyTiers[kindDef.Tier]
 	local attackRange = kindDef.AttackRange or tier.AttackRange
+	local isKiter = kindDef.Behavior == "Kiter"
 
 	local humanoid = model:FindFirstChildOfClass("Humanoid") :: Humanoid
 	local root = model.PrimaryPart :: BasePart
 
 	local lastAttackAt = 0
+	local lastSlamAt = 0
+	local busy = false
+
+	-- Flashes TELEGRAPH_COLOR for the tier's wind-up, then re-checks the
+	-- target is still in range/alive before the hit actually lands - this
+	-- is what makes the telegraph a real dodge window instead of decoration.
+	local function performAttack(target: Player)
+		busy = true
+		local originalColor = root.Color
+		root.Color = TELEGRAPH_COLOR
+		task.wait(tier.TelegraphSeconds)
+		if root.Parent then
+			root.Color = originalColor
+		end
+
+		if model.Parent and humanoid.Health > 0 and target.Character then
+			local targetHumanoid = livingHumanoid(target.Character)
+			local targetHrp = target.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			if targetHumanoid and targetHrp then
+				local distance = (targetHrp.Position - root.Position).Magnitude
+				if distance <= attackRange * 1.15 then
+					local damage = tier.Damage * (model:GetAttribute("DamageMultiplier") or 1)
+					if kindDef.Ranged then
+						fireBolt(root.Position, targetHrp.Position, kindDef.Color)
+					end
+					targetHumanoid:TakeDamage(damage)
+				end
+			end
+		end
+		busy = false
+	end
+
+	-- Boss-only: a slower, harder-hitting radius attack telegraphed with a
+	-- growing warning ring on the floor, on its own cooldown separate from
+	-- the basic attack - gives every boss fight a beat where standing still
+	-- is the wrong answer, not just a bigger health bar.
+	local function performSlam()
+		busy = true
+		local originalColor = root.Color
+		root.Color = SLAM_TELEGRAPH_COLOR
+
+		local ring = Instance.new("Part")
+		ring.Name = "SlamTelegraph"
+		ring.Anchored = true
+		ring.CanCollide = false
+		ring.Shape = Enum.PartType.Cylinder
+		ring.Material = Enum.Material.Neon
+		ring.Color = SLAM_TELEGRAPH_COLOR
+		ring.Transparency = 0.7
+		ring.Size = Vector3.new(0.2, tier.SlamRadius * 2, tier.SlamRadius * 2)
+		ring.Orientation = Vector3.new(0, 0, 90)
+		ring.CFrame = CFrame.new(root.Position - Vector3.new(0, root.Size.Y / 2 - 0.15, 0))
+		ring.Parent = Workspace
+
+		local tween = TweenService:Create(ring, TweenInfo.new(tier.SlamTelegraphSeconds, Enum.EasingStyle.Linear), {
+			Transparency = 0.25,
+		})
+		tween:Play()
+
+		task.wait(tier.SlamTelegraphSeconds)
+		ring:Destroy()
+		if root.Parent then
+			root.Color = originalColor
+		end
+
+		if model.Parent and humanoid.Health > 0 then
+			for _, player in Players:GetPlayers() do
+				local character = player.Character
+				local targetHumanoid = livingHumanoid(character)
+				local targetHrp = targetHumanoid and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				if targetHumanoid and targetHrp then
+					if (targetHrp.Position - root.Position).Magnitude <= tier.SlamRadius then
+						targetHumanoid:TakeDamage(tier.SlamDamage)
+					end
+				end
+			end
+		end
+		busy = false
+	end
 
 	while model.Parent and humanoid.Health > 0 do
 		task.wait(AI_TICK_SECONDS)
@@ -134,19 +248,26 @@ local function runAi(model: Model, kindName: string)
 		local target, distance = nearestPlayerCharacter(root.Position)
 		if target then
 			local targetHrp = target.Character.HumanoidRootPart :: BasePart
+			local now = os.clock()
 
-			if distance <= attackRange then
+			if
+				tier.IsBoss
+				and not busy
+				and now - lastSlamAt >= tier.SlamCooldown
+				and distance <= tier.SlamRadius * 1.4
+			then
+				lastSlamAt = now
 				humanoid:MoveTo(root.Position)
-				local now = os.clock()
-				if now - lastAttackAt >= tier.AttackCooldown then
+				task.spawn(performSlam)
+			elseif isKiter and distance < kindDef.KiteRange then
+				local away = (root.Position - targetHrp.Position)
+				local fleeDirection = away.Magnitude > 0.1 and away.Unit or Vector3.new(1, 0, 0)
+				humanoid:MoveTo(root.Position + fleeDirection * (kindDef.KiteRange - distance + 4))
+			elseif distance <= attackRange then
+				humanoid:MoveTo(root.Position)
+				if not busy and now - lastAttackAt >= tier.AttackCooldown then
 					lastAttackAt = now
-					local targetHumanoid = target.Character:FindFirstChildOfClass("Humanoid")
-					if targetHumanoid then
-						if kindDef.Ranged then
-							fireBolt(root.Position, targetHrp.Position, kindDef.Color)
-						end
-						targetHumanoid:TakeDamage(tier.Damage)
-					end
+					task.spawn(performAttack, target)
 				end
 			else
 				humanoid:MoveTo(targetHrp.Position)
@@ -160,11 +281,16 @@ end
 -- dungeon-wave enemies (spawned by DungeonService) pass Respawn = false.
 -- options.Tags: extra attributes to set on the model, e.g. dungeon run
 -- ownership, so other services can identify/filter these enemies.
-function EnemyService.Spawn(kindName: string, position: Vector3, options: { Respawn: boolean?, Tags: { [string]: any }? }?)
+-- options.Champion: DungeonService's per-wave modifier - see buildEnemy.
+function EnemyService.Spawn(
+	kindName: string,
+	position: Vector3,
+	options: { Respawn: boolean?, Tags: { [string]: any }?, Champion: boolean? }?
+)
 	options = options or {}
 	local respawn = options.Respawn ~= false
 
-	local model = buildEnemy(kindName)
+	local model = buildEnemy(kindName, options.Champion)
 	if options.Tags then
 		for attributeName, value in options.Tags do
 			model:SetAttribute(attributeName, value)

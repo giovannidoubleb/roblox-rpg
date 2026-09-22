@@ -56,6 +56,7 @@ if not Workspace:FindFirstChild("SafetyFloor") then
 end
 
 local Config = safeRequire(ReplicatedStorage.Shared.Modules.Config)
+local Remotes = safeRequire(ReplicatedStorage.Shared.Remotes)
 
 local MapService = safeRequire(script.Services.MapService)
 local PlayerDataService = safeRequire(script.Services.PlayerDataService)
@@ -85,13 +86,27 @@ if EnemyService then
 	EnemyService.SetOnEnemyDied(function(enemy, tierName, killer)
 		if killer then
 			local tier = Config.EnemyTiers[tierName]
-			PlayerDataService.AddExperience(killer, tier.XpReward)
+			local isChampion = enemy:GetAttribute("Champion") == true
+
+			local xp = tier.XpReward
+			if isChampion then
+				xp = math.floor(xp * Config.Dungeon.Champion.XpMultiplier)
+			end
+			PlayerDataService.AddExperience(killer, xp)
 			PlayerDataService.ReportQuestProgress(killer, tierName)
 
 			if tier.IsBoss then
 				LootService.AwardBossLoot(killer)
 			else
 				LootService.AwardKillLoot(killer)
+			end
+
+			-- Dungeon Champion: a guaranteed bonus roll on top of the normal
+			-- kill drop, on the theory that beating the wave's hardest hit is
+			-- worth more than one more identical trash drop.
+			if isChampion then
+				LootService.AwardKillLoot(killer)
+				Remotes.Notify:FireClient(killer, "Champion defeated - bonus loot!")
 			end
 		end
 

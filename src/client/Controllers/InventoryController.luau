@@ -58,7 +58,7 @@ function InventoryController.Init()
 
 	local equippedLabel = Instance.new("TextLabel")
 	equippedLabel.Name = "Equipped"
-	equippedLabel.Size = UDim2.new(1, -20, 0, 50)
+	equippedLabel.Size = UDim2.new(1, -20, 0, 58)
 	equippedLabel.Position = UDim2.new(0, 10, 0, 32)
 	equippedLabel.BackgroundTransparency = 1
 	equippedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
@@ -71,8 +71,8 @@ function InventoryController.Init()
 
 	local scroll = Instance.new("ScrollingFrame")
 	scroll.Name = "Items"
-	scroll.Position = UDim2.new(0, 10, 0, 86)
-	scroll.Size = UDim2.new(1, -20, 1, -96)
+	scroll.Position = UDim2.new(0, 10, 0, 94)
+	scroll.Size = UDim2.new(1, -20, 1, -104)
 	scroll.BackgroundTransparency = 1
 	scroll.BorderSizePixel = 0
 	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -85,17 +85,29 @@ function InventoryController.Init()
 	list.Padding = UDim.new(0, 4)
 	list.Parent = scroll
 
-	local function describeEquipped(equipped)
+	local function describeItemStat(item)
+		if item.DamageBonus then
+			return string.format("+%d Dmg", item.DamageBonus)
+		elseif item.HealthBonus then
+			return string.format("+%d HP", item.HealthBonus)
+		elseif item.CritChanceBonus then
+			return string.format("+%d%% Crit", math.floor(item.CritChanceBonus * 100 + 0.5))
+		end
+		return ""
+	end
+
+	local function describeEquipped(equipped, inventory)
 		local parts = {}
 		for _, slot in { "Weapon", "Armor", "Trinket" } do
 			local instanceId = equipped[slot]
-			if instanceId then
-				table.insert(parts, slot .. ": (equipped)")
+			local item = instanceId and inventory[instanceId] and ItemDatabase.Items[inventory[instanceId]]
+			if item then
+				table.insert(parts, string.format("%s: %s (%s)", slot, item.Name, describeItemStat(item)))
 			else
 				table.insert(parts, slot .. ": (empty)")
 			end
 		end
-		return table.concat(parts, "   ")
+		return table.concat(parts, "\n")
 	end
 
 	local hasAutoSort = false
@@ -104,7 +116,7 @@ function InventoryController.Init()
 	end)
 
 	local function refresh(payload)
-		equippedLabel.Text = describeEquipped(payload.Equipped)
+		equippedLabel.Text = describeEquipped(payload.Equipped, payload.Inventory)
 
 		for _, child in scroll:GetChildren() do
 			if child:IsA("Frame") then
@@ -147,7 +159,14 @@ function InventoryController.Init()
 				label.Font = Enum.Font.Gotham
 				label.TextSize = 13
 				label.TextColor3 = RARITY_COLOR[item.Rarity] or Color3.new(1, 1, 1)
-				label.Text = string.format("%s [%s]%s", item.Name, item.Slot, isEquipped and " (equipped)" or "")
+				local stat = describeItemStat(item)
+				label.Text = string.format(
+					"%s [%s] %s%s",
+					item.Name,
+					item.Slot,
+					stat,
+					isEquipped and " (equipped)" or ""
+				)
 				label.Parent = row
 
 				local button = Instance.new("TextButton")

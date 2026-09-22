@@ -304,7 +304,20 @@ end
 
 function PlayerDataService.GetCritChance(player: Player): number
 	local data = profiles[player]
-	return data and data.AllocatedSkills.CritChance * Config.SkillTree.CritChancePerPoint or 0
+	if not data then
+		return 0
+	end
+
+	local bonus = data.AllocatedSkills.CritChance * Config.SkillTree.CritChancePerPoint
+
+	local trinketInstanceId = data.Equipped.Trinket
+	local itemId = trinketInstanceId and data.Inventory[trinketInstanceId]
+	local item = itemId and ItemDatabase.Items[itemId]
+	if item then
+		bonus += item.CritChanceBonus or 0
+	end
+
+	return bonus
 end
 
 function PlayerDataService.AllocateSkillPoint(player: Player, statName: string): boolean
