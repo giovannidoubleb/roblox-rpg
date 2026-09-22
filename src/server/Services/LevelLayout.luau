@@ -46,16 +46,15 @@ LevelLayout.FieldSpawns = {
 LevelLayout.DungeonEntryPosition = Vector3.new(0, 5, 110)
 LevelLayout.DungeonBossPosition = Vector3.new(0, 5, 195)
 
--- Two distinct dungeon compositions sharing the same room/positions -
--- DungeonService picks one deterministically per UTC calendar day (see
--- DungeonService.SelectVariant), so the run actually looks and plays
--- differently from one day to the next instead of being static forever.
+-- Wave composition and boss rotate on independent day-based cycles (see
+-- DungeonService.selectVariant/selectBoss), so the pairing isn't always the
+-- same two "flavors of one thing" - 2 wave sets x 2 bosses gives 4
+-- distinguishable dungeon days before the combination repeats, not 2.
 -- Waves reuse the same spawn positions across variants (each position was
 -- tuned to be sensible within DungeonRoom's bounds); only Kind changes.
 LevelLayout.DungeonVariants = {
 	{
 		Name = "Stonebound Depths",
-		BossKind = "StoneGolem",
 		Waves = {
 			{
 				{ Kind = "Skeleton", Position = Vector3.new(20, 5, 130) },
@@ -79,11 +78,9 @@ LevelLayout.DungeonVariants = {
 	},
 	{
 		-- An "ambush" flavor: more ranged/kiting enemies (Bandit, Warlock)
-		-- instead of Stonebound's melee-heavy trash, capped by the Wilds
-		-- field boss instead of the Golem - a genuinely different fight,
-		-- not just a recolor of the same waves.
+		-- instead of Stonebound's melee-heavy trash - a genuinely different
+		-- fight, not just a recolor of the same waves.
 		Name = "Wilds Incursion",
-		BossKind = "AncientTreant",
 		Waves = {
 			{
 				{ Kind = "Bandit", Position = Vector3.new(20, 5, 130) },
@@ -105,6 +102,13 @@ LevelLayout.DungeonVariants = {
 			},
 		},
 	},
+}
+
+-- Rotates on its own day-based cycle, independent of DungeonVariants above -
+-- see DungeonService.selectBoss.
+LevelLayout.DungeonBosses = {
+	{ Kind = "StoneGolem", Name = "the Stone Golem" },
+	{ Kind = "AncientTreant", Name = "the Ancient Treant" },
 }
 
 -- The Wilds: a second zone reached via the hub's travel shrine, built far

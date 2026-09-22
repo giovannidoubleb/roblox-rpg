@@ -82,10 +82,12 @@ Loot" (monetization) design docs.
   (a fresh copy built per run, torn down after), with three waves of trash
   before the boss — concurrent runs never collide or aggro each other. Three
   things make a run more than the open-world grind with a boss at the end:
-  the wave composition and boss alternate between two variants by UTC
-  calendar day (a melee-heavy "Stonebound Depths" and a ranged/kiting-heavy
-  "Wilds Incursion" with a different boss), so today's run is a different
-  fight from yesterday's; every wave also promotes one random enemy to a
+  the wave composition (a melee-heavy "Stonebound Depths" or a ranged/
+  kiting-heavy "Wilds Incursion") and the boss (Stone Golem or Ancient
+  Treant) each rotate by UTC calendar day on their own independent cycle,
+  so the pairing isn't always the same two "flavors of one thing" — 2 wave
+  sets x 2 bosses is 4 distinguishable dungeon days before it repeats, not
+  2; every wave also promotes one random enemy to a
   tougher, better-rewarding Champion; and the room periodically telegraphs a
   floor hazard you have to actually step out of.
 - **A second zone** (`LevelLayout`, `ZoneService`) — the Wilds, reached via

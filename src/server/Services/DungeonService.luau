@@ -87,10 +87,22 @@ local function selectVariant()
 	return variants[(dayIndex % #variants) + 1]
 end
 
+-- Rotates on a slower, independent cycle from selectVariant so the boss
+-- isn't always locked to the same wave composition - with 2 of each, that's
+-- 4 distinguishable dungeon days (wave x boss) across a 4-day cycle instead
+-- of the pairing always moving in lockstep and reading as "two flavors of
+-- one thing" after a couple of visits.
+local function selectBoss()
+	local dayIndex = os.date("!*t").yday :: number
+	local bosses = LevelLayout.DungeonBosses
+	local cycleStep = dayIndex // #LevelLayout.DungeonVariants
+	return bosses[(cycleStep % #bosses) + 1]
+end
+
 local function spawnBoss(player: Player, runState)
 	local tags = { DungeonRun = true, Owner = player.UserId, IsBoss = true }
-	EnemyService.Spawn(runState.Variant.BossKind, LevelLayout.DungeonBossPosition + runState.Offset, { Respawn = false, Tags = tags })
-	Remotes.Notify:FireClient(player, "The dungeon boss appears!")
+	EnemyService.Spawn(runState.Boss.Kind, LevelLayout.DungeonBossPosition + runState.Offset, { Respawn = false, Tags = tags })
+	Remotes.Notify:FireClient(player, "The dungeon boss appears: " .. runState.Boss.Name .. "!")
 end
 
 local function spawnWave(player: Player, runState, waveIndex: number)
@@ -194,12 +206,14 @@ local function startRun(player: Player)
 	local offset = INSTANCE_BASE + Vector3.new(slot * INSTANCE_SLOT_SPACING, 0, 0)
 	local folder = MapService.BuildDungeonInstance(offset)
 	local variant = selectVariant()
+	local boss = selectBoss()
 
 	local runState = {
 		Slot = slot,
 		Folder = folder,
 		Offset = offset,
 		Variant = variant,
+		Boss = boss,
 		WaveIndex = 0,
 		RemainingInWave = 0,
 	}
@@ -208,7 +222,11 @@ local function startRun(player: Player)
 	teleportPlayer(player, LevelLayout.DungeonEntryPosition + offset)
 	Remotes.Notify:FireClient(
 		player,
-		string.format("Today's dungeon: %s. Fight through every wave to reach the boss! Watch the floor for danger zones.", variant.Name)
+		string.format(
+			"Today's dungeon: %s, defended by %s. Fight through every wave to reach the boss! Watch the floor for danger zones.",
+			variant.Name,
+			boss.Name
+		)
 	)
 	spawnWave(player, runState, 1)
 	task.spawn(runHazardLoop, player, runState)
