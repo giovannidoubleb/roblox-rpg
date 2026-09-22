@@ -31,10 +31,25 @@ local function livingEnemies()
 	return enemies
 end
 
-local function damageEnemy(enemy: Model, player: Player, damage: number)
+local function getPlayerDamageBonus(player: Player): number
+	return PlayerDataService.GetWeaponDamageBonus(player) + PlayerDataService.GetSkillDamageBonus(player)
+end
+
+-- Rolls crit on top of the given base damage, applies it, attributes the
+-- hit for kill/loot tracking, and tells the attacker's client what landed
+-- (for the floating damage number).
+local function damageEnemy(enemy: Model, player: Player, baseDamage: number)
+	local critChance = math.clamp(PlayerDataService.GetCritChance(player), 0, Config.SkillTree.MaxCritChance)
+	local isCrit = math.random() < critChance
+	local damage = isCrit and baseDamage * Config.SkillTree.CritDamageMultiplier or baseDamage
+
 	enemy:SetAttribute("LastDamagedBy", player.UserId)
 	local humanoid = enemy:FindFirstChildOfClass("Humanoid") :: Humanoid
 	humanoid:TakeDamage(damage)
+
+	if enemy.PrimaryPart then
+		Remotes.DamageDealt:FireClient(player, enemy.PrimaryPart.Position, math.floor(damage), isCrit)
+	end
 end
 
 -- Closest enemy within range, in front of root (frontal cone). Used by the
@@ -111,7 +126,7 @@ local function onRequestAttack(player: Player)
 		return
 	end
 
-	damageEnemy(target, player, attack.Damage + PlayerDataService.GetWeaponDamageBonus(player))
+	damageEnemy(target, player, attack.Damage + getPlayerDamageBonus(player))
 	addUltimateMeter(player, Config.Combat.Ultimate.MeterPerBasicAttack)
 end
 
@@ -137,7 +152,7 @@ local function onRequestSkill(player: Player, skillName: string)
 		return
 	end
 
-	local bonus = PlayerDataService.GetWeaponDamageBonus(player)
+	local bonus = getPlayerDamageBonus(player)
 
 	if skillName == "Cleave" then
 		local targets = findFrontalTargets(root, skill.Range)
@@ -177,7 +192,7 @@ local function onRequestUltimate(player: Player)
 	ultimateMeter[player] = 0
 	Remotes.UltimateMeterUpdated:FireClient(player, 0, ultimate.MeterMax)
 
-	local bonus = PlayerDataService.GetWeaponDamageBonus(player)
+	local bonus = getPlayerDamageBonus(player)
 	for _, enemy in targets do
 		damageEnemy(enemy, player, ultimate.Damage + bonus)
 	end

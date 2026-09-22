@@ -82,6 +82,9 @@ Config.Pity = {
 	BossKillThreshold = 15,
 }
 
+-- Power baseline by tier. Individual enemy "kinds" below pick a tier for
+-- their numbers and layer on a look, and optionally ranged behavior via an
+-- AttackRange override.
 Config.EnemyTiers = {
 	Trash = {
 		Health = 30,
@@ -112,6 +115,22 @@ Config.EnemyTiers = {
 	},
 }
 
+-- Visual/behavioral flavors built on top of the tiers above - all still
+-- code-built parts, no external assets. Ranged kinds get a bigger
+-- AttackRange override so they can hang back and lob a bolt instead of
+-- needing to close to melee.
+Config.EnemyKinds = {
+	Slime = { Tier = "Trash", Color = Color3.fromRGB(90, 200, 90), Shape = Enum.PartType.Ball, Ranged = false },
+	Skeleton = { Tier = "Trash", Color = Color3.fromRGB(220, 220, 200), Shape = Enum.PartType.Block, Ranged = false },
+	Bandit = { Tier = "Trash", Color = Color3.fromRGB(150, 110, 60), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 22 },
+
+	DireWolf = { Tier = "Elite", Color = Color3.fromRGB(80, 80, 100), Shape = Enum.PartType.Block, Ranged = false },
+	Warlock = { Tier = "Elite", Color = Color3.fromRGB(120, 40, 160), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 26 },
+
+	StoneGolem = { Tier = "Boss", Color = Color3.fromRGB(120, 115, 100), Shape = Enum.PartType.Block, Ranged = false },
+	AncientTreant = { Tier = "Boss", Color = Color3.fromRGB(70, 100, 50), Shape = Enum.PartType.Block, Ranged = true, AttackRange = 24 },
+}
+
 Config.Daily = {
 	KeysPerDay = 3,
 	KeyRegenSeconds = 8 * 60 * 60,
@@ -136,6 +155,82 @@ Config.Inventory = {
 	BaseSlots = 20,
 	-- Matches the Backpack Expansion Game Pass in the monetization plan.
 	BackpackExpansionBonusSlots = 20,
+}
+
+-- One point per level-up, spent into a handful of permanent combat stats.
+-- StatRespecToken refunds every spent point.
+Config.SkillTree = {
+	PointsPerLevel = 1,
+	Stats = { Damage = true, Health = true, CritChance = true },
+	DamagePerPoint = 1, -- flat bonus, stacks with weapon DamageBonus
+	HealthPerPoint = 5, -- flat bonus, stacks with equipment HealthBonus
+	CritChancePerPoint = 0.01, -- +1% crit chance per point
+	MaxCritChance = 0.6,
+	CritDamageMultiplier = 2,
+}
+
+-- Combine copies of a rarity into one guaranteed item of the next rarity up.
+-- CraftingRush cuts CraftSeconds; the recipe consumes items of any type at
+-- that rarity (not specific items) so any grind pays toward the next tier.
+Config.Crafting = {
+	CraftSeconds = 30,
+	RushedCraftSeconds = 3,
+	Recipes = {
+		{ Id = "CommonToUncommon", ConsumeRarity = "Common", ConsumeCount = 4, ResultRarity = "Uncommon" },
+		{ Id = "UncommonToRare", ConsumeRarity = "Uncommon", ConsumeCount = 4, ResultRarity = "Rare" },
+		{ Id = "RareToEpic", ConsumeRarity = "Rare", ConsumeCount = 3, ResultRarity = "Epic" },
+		{ Id = "EpicToLegendary", ConsumeRarity = "Epic", ConsumeCount = 3, ResultRarity = "Legendary" },
+	},
+}
+
+-- Cosmetic follower pets - no combat stats, purely a gem sink and a reason
+-- to visit the merchant. CompanionSlotExpansion (pass) raises how many can
+-- be active at once.
+Config.Companions = {
+	BaseSlots = 1,
+	ExpansionBonusSlots = 2,
+	Available = {
+		Sprite = { Name = "Sprite", GemCost = 150, Color = Color3.fromRGB(120, 220, 255), Shape = Enum.PartType.Ball },
+		Ember = { Name = "Ember", GemCost = 250, Color = Color3.fromRGB(255, 130, 60), Shape = Enum.PartType.Ball },
+		Golem = { Name = "Mini Golem", GemCost = 400, Color = Color3.fromRGB(140, 140, 100), Shape = Enum.PartType.Block },
+		Wisp = { Name = "Wisp", GemCost = 600, Color = Color3.fromRGB(200, 120, 255), Shape = Enum.PartType.Ball },
+	},
+}
+
+-- Palette/material re-skins for the player's character - no external art,
+-- just recolors, so they work with zero Studio-authored assets. Mystery
+-- Cosmetic Crate grants a random unowned one; the merchant sells specific
+-- ones for gems.
+Config.Cosmetics = {
+	Available = {
+		Crimson = { Name = "Crimson", GemCost = 200, Color = Color3.fromRGB(200, 40, 40), Material = Enum.Material.Neon },
+		Azure = { Name = "Azure", GemCost = 200, Color = Color3.fromRGB(40, 120, 220), Material = Enum.Material.Neon },
+		Gilded = { Name = "Gilded", GemCost = 500, Color = Color3.fromRGB(230, 190, 60), Material = Enum.Material.Metal },
+		Shadow = { Name = "Shadow", GemCost = 500, Color = Color3.fromRGB(30, 30, 35), Material = Enum.Material.Slate },
+		Prism = { Name = "Prism", GemCost = 900, Color = Color3.fromRGB(200, 255, 240), Material = Enum.Material.Glass },
+	},
+}
+
+-- A long-running reward track gated by character level rather than a
+-- separate XP counter, so ordinary play advances it. SeasonPass (game
+-- pass) is required to claim a reached tier's reward.
+Config.Season = {
+	Tiers = {
+		{ Level = 3, Gems = 40 },
+		{ Level = 6, Gems = 60 },
+		{ Level = 10, Gems = 90 },
+		{ Level = 15, Gems = 120 },
+		{ Level = 20, Gems = 160 },
+		{ Level = 25, Gems = 220 },
+		{ Level = 30, Gems = 300 },
+		{ Level = 40, Gems = 450 },
+		{ Level = 50, Gems = 700 },
+	},
+}
+
+Config.Zones = {
+	Hub = { DisplayName = "Hub" },
+	Wilds = { DisplayName = "The Wilds" },
 }
 
 -- Robux asset ids from the Roblox Creator Dashboard. These are placeholders
@@ -170,6 +265,11 @@ Config.Monetization = {
 		GemPouchLarge = 700,
 		GemPouchMega = 1600,
 	},
+
+	-- Founder's Pass: a one-time gem bonus plus a permanent XP boost for as
+	-- long as it's owned.
+	FounderBonusGems = 500,
+	FounderXpBoost = 1.1,
 }
 
 return Config

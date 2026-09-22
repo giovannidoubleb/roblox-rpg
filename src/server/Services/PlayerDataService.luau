@@ -9,6 +9,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local ItemDatabase = require(ReplicatedStorage.Shared.Modules.ItemDatabase)
@@ -18,6 +19,9 @@ local PlayerProfileStore = require(script.Parent.PlayerProfileStore)
 local PlayerDataService = {}
 
 local SAVE_INTERVAL_SECONDS = 120
+local REGEN_TICK_SECONDS = 1
+local REGEN_DELAY_AFTER_DAMAGE = 5
+local REGEN_PERCENT_PER_TICK = 0.02
 
 local profiles: { [Player]: { [string]: any } } = {}
 
@@ -45,7 +49,35 @@ local function defaultData()
 		InventoryCount = 0,
 		NextInstanceId = 1,
 		Equipped = {},
+
+		SkillPoints = 0,
+		AllocatedSkills = { Damage = 0, Health = 0, CritChance = 0 },
+
+		Consumables = { InstantReviveToken = 0, StatRespecToken = 0, CharacterRenameToken = 0, ZoneSkipKey = 0, CraftingRush = 0 },
+		Nickname = "",
+
+		Companions = { Owned = {}, Active = {} },
+		Cosmetics = { Owned = {}, Equipped = "" },
+
+		DiscoveredZones = { Hub = true },
+		SeasonClaimedTiers = {},
+		FounderPerkGranted = false,
+
+		CraftPending = nil,
 	}
+end
+
+-- Fills in any field a saved profile predates (new systems added after that
+-- profile was first written) from a fresh default, without touching what's
+-- already there. Recurses into nested tables like Consumables/Companions.
+local function backfillDefaults(data, defaults)
+	for key, value in defaults do
+		if data[key] == nil then
+			data[key] = value
+		elseif typeof(value) == "table" and typeof(data[key]) == "table" then
+			backfillDefaults(data[key], value)
+		end
+	end
 end
 
 local function applyKeyRegen(data)
@@ -86,6 +118,7 @@ local function applyMaxHealth(player: Player, data)
 			bonus += item.HealthBonus or 0
 		end
 	end
+	bonus += data.AllocatedSkills.Health * Config.SkillTree.HealthPerPoint
 	data.MaxHealth = data.BaseMaxHealth + bonus
 
 	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
@@ -130,6 +163,9 @@ function PlayerDataService.AddExperience(player: Player, amount: number)
 	if data.Passes.DoubleXp then
 		amount *= 2
 	end
+	if data.Passes.FoundersPass then
+		amount = math.floor(amount * Config.Monetization.FounderXpBoost)
+	end
 
 	data.Experience += amount
 
@@ -142,6 +178,8 @@ function PlayerDataService.AddExperience(player: Player, amount: number)
 		data.Experience -= xpToNext
 		data.Level += 1
 		data.BaseMaxHealth += Config.Leveling.HealthPerLevel
+		data.SkillPoints += Config.SkillTree.PointsPerLevel
+		Remotes.LevelUp:FireClient(player, data.Level)
 	end
 
 	if data.Level >= Config.Leveling.MaxLevel then
@@ -242,6 +280,298 @@ function PlayerDataService.EquipItem(player: Player, instanceId: string): boolea
 	pushInventory(player, data)
 	pushToClient(player)
 	return true
+end
+
+-- Generic re-push helpers so sibling services (skill tree, crafting,
+-- companions, cosmetics, season, zones) can mutate the profile table
+-- returned by PlayerDataService.Get directly and then notify the client,
+-- the same way this module's own methods do.
+function PlayerDataService.PushUpdate(player: Player)
+	pushToClient(player)
+end
+
+function PlayerDataService.PushInventoryUpdate(player: Player)
+	local data = profiles[player]
+	if data then
+		pushInventory(player, data)
+	end
+end
+
+function PlayerDataService.GetSkillDamageBonus(player: Player): number
+	local data = profiles[player]
+	return data and data.AllocatedSkills.Damage * Config.SkillTree.DamagePerPoint or 0
+end
+
+function PlayerDataService.GetCritChance(player: Player): number
+	local data = profiles[player]
+	return data and data.AllocatedSkills.CritChance * Config.SkillTree.CritChancePerPoint or 0
+end
+
+function PlayerDataService.AllocateSkillPoint(player: Player, statName: string): boolean
+	local data = profiles[player]
+	if not data or not Config.SkillTree.Stats[statName] then
+		return false
+	end
+	if data.SkillPoints <= 0 then
+		return false
+	end
+
+	data.SkillPoints -= 1
+	data.AllocatedSkills[statName] += 1
+
+	if statName == "Health" then
+		applyMaxHealth(player, data)
+	end
+
+	pushToClient(player)
+	return true
+end
+
+function PlayerDataService.RespecSkills(player: Player): boolean
+	local data = profiles[player]
+	if not data or (data.Consumables.StatRespecToken or 0) <= 0 then
+		return false
+	end
+
+	local refunded = 0
+	for statName, points in data.AllocatedSkills do
+		refunded += points
+		data.AllocatedSkills[statName] = 0
+	end
+
+	if refunded == 0 then
+		return false
+	end
+
+	data.Consumables.StatRespecToken -= 1
+	data.SkillPoints += refunded
+	applyMaxHealth(player, data)
+	pushToClient(player)
+	Remotes.Notify:FireClient(player, "Skills reset - " .. refunded .. " points refunded.")
+	return true
+end
+
+function PlayerDataService.AddConsumable(player: Player, name: string, amount: number)
+	local data = profiles[player]
+	if not data or amount == 0 then
+		return
+	end
+
+	data.Consumables[name] = (data.Consumables[name] or 0) + amount
+	pushToClient(player)
+end
+
+-- Instant Revive: if the player is holding a token when they die, skip the
+-- normal walk-back-from-spawn respawn and drop them back at their death
+-- spot at full health a moment later instead.
+function PlayerDataService.HandleDeath(player: Player)
+	local data = profiles[player]
+	if not data or (data.Consumables.InstantReviveToken or 0) <= 0 then
+		return
+	end
+
+	local character = player.Character
+	local deathCFrame = character and character.PrimaryPart and character.PrimaryPart.CFrame
+	if not deathCFrame then
+		return
+	end
+
+	data.Consumables.InstantReviveToken -= 1
+	pushToClient(player)
+
+	task.delay(1.5, function()
+		if not player.Parent then
+			return
+		end
+
+		player:LoadCharacter()
+
+		local newCharacter = player.Character
+		if not newCharacter then
+			return
+		end
+
+		local hrp = newCharacter:FindFirstChild("HumanoidRootPart") or newCharacter:WaitForChild("HumanoidRootPart", 5)
+		if hrp then
+			hrp.CFrame = deathCFrame + Vector3.new(0, 3, 0)
+		end
+
+		Remotes.Notify:FireClient(player, "Instant Revive Token used - back in the fight!")
+	end)
+end
+
+function PlayerDataService.SetNickname(player: Player, rawName: string): boolean
+	local data = profiles[player]
+	if not data or (data.Consumables.CharacterRenameToken or 0) <= 0 then
+		return false
+	end
+
+	local trimmed = rawName:sub(1, 20)
+	if #trimmed < 1 then
+		return false
+	end
+
+	local ok, filtered = pcall(function()
+		local result = TextService:FilterStringAsync(trimmed, player.UserId)
+		return result:GetNonChatStringForBroadcastAsync()
+	end)
+
+	if not ok or not filtered or #filtered < 1 then
+		Remotes.Notify:FireClient(player, "That name couldn't be used - try something else.")
+		return false
+	end
+
+	data.Consumables.CharacterRenameToken -= 1
+	data.Nickname = filtered
+	player:SetAttribute("Nickname", filtered)
+	pushToClient(player)
+	PlayerProfileStore.Save(player.UserId, data)
+	return true
+end
+
+function PlayerDataService.GetCompanionSlotCount(player: Player): number
+	return Config.Companions.BaseSlots + (PlayerDataService.HasPass(player, "CompanionSlotExpansion") and Config.Companions.ExpansionBonusSlots or 0)
+end
+
+function PlayerDataService.PurchaseCompanion(player: Player, companionId: string): boolean
+	local data = profiles[player]
+	local def = Config.Companions.Available[companionId]
+	if not data or not def or data.Companions.Owned[companionId] then
+		return false
+	end
+
+	if data.Gems < def.GemCost then
+		Remotes.Notify:FireClient(player, "Not enough gems for that companion.")
+		return false
+	end
+
+	data.Gems -= def.GemCost
+	data.Companions.Owned[companionId] = true
+	pushToClient(player)
+	return true
+end
+
+function PlayerDataService.SetActiveCompanions(player: Player, companionIds: { string }): boolean
+	local data = profiles[player]
+	if not data then
+		return false
+	end
+
+	local slots = PlayerDataService.GetCompanionSlotCount(player)
+	if #companionIds > slots then
+		Remotes.Notify:FireClient(player, "You don't have enough companion slots for that.")
+		return false
+	end
+
+	for _, companionId in companionIds do
+		if not data.Companions.Owned[companionId] then
+			return false
+		end
+	end
+
+	data.Companions.Active = companionIds
+	pushToClient(player)
+	return true
+end
+
+-- Unconditional grant (Mystery Crate). See PurchaseCosmeticWithGems for the
+-- merchant's pay-for-a-specific-one path.
+function PlayerDataService.GrantCosmetic(player: Player, cosmeticId: string)
+	local data = profiles[player]
+	if not data or not Config.Cosmetics.Available[cosmeticId] then
+		return
+	end
+
+	data.Cosmetics.Owned[cosmeticId] = true
+	pushToClient(player)
+end
+
+function PlayerDataService.PurchaseCosmeticWithGems(player: Player, cosmeticId: string): boolean
+	local data = profiles[player]
+	local def = Config.Cosmetics.Available[cosmeticId]
+	if not data or not def or data.Cosmetics.Owned[cosmeticId] then
+		return false
+	end
+
+	if data.Gems < def.GemCost then
+		Remotes.Notify:FireClient(player, "Not enough gems for that cosmetic.")
+		return false
+	end
+
+	data.Gems -= def.GemCost
+	data.Cosmetics.Owned[cosmeticId] = true
+	pushToClient(player)
+	return true
+end
+
+function PlayerDataService.EquipCosmetic(player: Player, cosmeticId: string): boolean
+	local data = profiles[player]
+	if not data then
+		return false
+	end
+
+	if cosmeticId ~= "" and not data.Cosmetics.Owned[cosmeticId] then
+		return false
+	end
+
+	data.Cosmetics.Equipped = cosmeticId
+	player:SetAttribute("Cosmetic", cosmeticId)
+	pushToClient(player)
+	return true
+end
+
+function PlayerDataService.DiscoverZone(player: Player, zoneName: string)
+	local data = profiles[player]
+	if not data then
+		return
+	end
+
+	if not data.DiscoveredZones[zoneName] then
+		data.DiscoveredZones[zoneName] = true
+		pushToClient(player)
+	end
+end
+
+function PlayerDataService.ClaimSeasonTier(player: Player, tierIndex: number): boolean
+	local data = profiles[player]
+	local tier = Config.Season.Tiers[tierIndex]
+	if not data or not tier then
+		return false
+	end
+
+	if not PlayerDataService.HasPass(player, "SeasonPass") then
+		Remotes.Notify:FireClient(player, "Season Pass required to claim season rewards.")
+		return false
+	end
+
+	if data.Level < tier.Level then
+		return false
+	end
+
+	if data.SeasonClaimedTiers[tostring(tierIndex)] then
+		return false
+	end
+
+	data.SeasonClaimedTiers[tostring(tierIndex)] = true
+	PlayerDataService.AddGems(player, tier.Gems)
+	Remotes.Notify:FireClient(player, string.format("Season tier %d claimed: +%d gems!", tierIndex, tier.Gems))
+	pushToClient(player)
+	return true
+end
+
+-- One-time Founder's Pass bonus (gems), on top of the permanent XP boost
+-- that AddExperience applies for as long as the pass is owned. Called both
+-- on purchase and on join (in case the pass was bought outside a live
+-- session and never got its one-time grant).
+function PlayerDataService.ApplyFounderPerkIfNeeded(player: Player)
+	local data = profiles[player]
+	if not data or data.FounderPerkGranted or not data.Passes.FoundersPass then
+		return
+	end
+
+	data.FounderPerkGranted = true
+	PlayerDataService.AddGems(player, Config.Monetization.FounderBonusGems)
+	Remotes.Notify:FireClient(player, string.format("Founder's Pass bonus: +%d gems!", Config.Monetization.FounderBonusGems))
 end
 
 function PlayerDataService.EnsureDailyQuests(player: Player)
@@ -346,6 +676,11 @@ function PlayerDataService.GrantPass(player: Player, passName: string)
 
 	data.Passes[passName] = true
 	pushToClient(player)
+
+	if passName == "FoundersPass" then
+		PlayerDataService.ApplyFounderPerkIfNeeded(player)
+	end
+
 	PlayerProfileStore.Save(player.UserId, data)
 end
 
@@ -364,6 +699,27 @@ function PlayerDataService.MarkReceiptGranted(player: Player, purchaseId: string
 	PlayerProfileStore.Save(player.UserId, data)
 end
 
+-- Slow out-of-combat regen so a rough pull isn't a death spiral while the
+-- player walks back to safety. Stops the moment the character dies or is
+-- replaced (loop exits on its own next tick via the humanoid/parent check).
+local function runRegen(character: Model, humanoid: Humanoid)
+	local lastDamageAt = os.clock()
+	humanoid.HealthChanged:Connect(function()
+		lastDamageAt = os.clock()
+	end)
+
+	while character.Parent and humanoid.Health > 0 do
+		task.wait(REGEN_TICK_SECONDS)
+		if not character.Parent or humanoid.Health <= 0 then
+			break
+		end
+
+		if os.clock() - lastDamageAt >= REGEN_DELAY_AFTER_DAMAGE and humanoid.Health < humanoid.MaxHealth then
+			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + humanoid.MaxHealth * REGEN_PERCENT_PER_TICK)
+		end
+	end
+end
+
 local function onCharacterAdded(player: Player, character: Model)
 	local data = profiles[player]
 	if not data then
@@ -376,7 +732,10 @@ local function onCharacterAdded(player: Player, character: Model)
 
 	humanoid.Died:Connect(function()
 		Remotes.PlayerDied:FireClient(player)
+		PlayerDataService.HandleDeath(player)
 	end)
+
+	task.spawn(runRegen, character, humanoid)
 end
 
 local function onPlayerAdded(player: Player)
@@ -388,9 +747,13 @@ local function onPlayerAdded(player: Player)
 		return
 	end
 
+	backfillDefaults(data, defaultData())
 	applyKeyRegen(data)
 	profiles[player] = data
 	PlayerDataService.EnsureDailyQuests(player)
+	PlayerDataService.ApplyFounderPerkIfNeeded(player)
+	player:SetAttribute("Nickname", data.Nickname)
+	player:SetAttribute("Cosmetic", data.Cosmetics.Equipped)
 	pushToClient(player)
 	pushInventory(player, data)
 

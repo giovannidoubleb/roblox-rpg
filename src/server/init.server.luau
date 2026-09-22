@@ -64,12 +64,22 @@ local EnemyService = safeRequire(script.Services.EnemyService)
 local CombatService = safeRequire(script.Services.CombatService)
 local DungeonService = safeRequire(script.Services.DungeonService)
 local MonetizationService = safeRequire(script.Services.MonetizationService)
+local ZoneService = safeRequire(script.Services.ZoneService)
+local NpcService = safeRequire(script.Services.NpcService)
+local ProgressionService = safeRequire(script.Services.ProgressionService)
+local CraftingService = safeRequire(script.Services.CraftingService)
+local CompanionService = safeRequire(script.Services.CompanionService)
 
 safeInit("MapService", MapService)
 safeInit("PlayerDataService", PlayerDataService)
 safeInit("CombatService", CombatService)
 safeInit("DungeonService", DungeonService)
 safeInit("MonetizationService", MonetizationService)
+safeInit("ZoneService", ZoneService)
+safeInit("NpcService", NpcService)
+safeInit("ProgressionService", ProgressionService)
+safeInit("CraftingService", CraftingService)
+safeInit("CompanionService", CompanionService)
 
 if EnemyService then
 	EnemyService.SetOnEnemyDied(function(enemy, tierName, killer)
@@ -85,7 +95,9 @@ if EnemyService then
 			end
 		end
 
-		DungeonService.HandleEnemyDied(enemy, tierName, killer)
+		if DungeonService then
+			DungeonService.HandleEnemyDied(enemy, tierName, killer)
+		end
 	end)
 end
 

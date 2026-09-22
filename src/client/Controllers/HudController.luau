@@ -11,6 +11,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Sfx = require(script.Parent.Parent.Sfx)
+local UiKit = require(script.Parent.Parent.UiKit)
 
 local HudController = {}
 
@@ -25,12 +27,15 @@ local function bar(parent: Instance, name: string, fillColor: Color3, yOffset: n
 	container.BorderSizePixel = 0
 	container.Parent = parent
 
+	UiKit.RoundPanel(container, 4)
+
 	local fill = Instance.new("Frame")
 	fill.Name = "Fill"
 	fill.Size = UDim2.new(0, 0, 1, 0)
 	fill.BackgroundColor3 = fillColor
 	fill.BorderSizePixel = 0
 	fill.Parent = container
+	UiKit.RoundButton(fill, 4)
 
 	local label = Instance.new("TextLabel")
 	label.Name = "Label"
@@ -71,6 +76,7 @@ function HudController.Init()
 	local _, healthFill, healthLabel = bar(root, "Health", Color3.fromRGB(200, 60, 60), 20)
 	local _, xpFill, xpLabel = bar(root, "Experience", Color3.fromRGB(80, 160, 230), 42)
 	local _, ultimateFill, ultimateLabel = bar(root, "Ultimate", Color3.fromRGB(230, 190, 60), 64)
+	ultimateLabel.Text = "Ultimate 0%"
 
 	local gemsLabel = Instance.new("TextLabel")
 	gemsLabel.Name = "Gems"
@@ -96,9 +102,16 @@ function HudController.Init()
 
 	Remotes.PlayerDataUpdated.OnClientEvent:Connect(onDataUpdated)
 
+	local wasReady = false
 	Remotes.UltimateMeterUpdated.OnClientEvent:Connect(function(meter: number, meterMax: number)
 		ultimateFill.Size = UDim2.new(math.clamp(meter / meterMax, 0, 1), 0, 1, 0)
-		ultimateLabel.Text = meter >= meterMax and "ULTIMATE READY (R)" or string.format("Ultimate %d%%", math.floor(meter / meterMax * 100))
+		local isReady = meter >= meterMax
+		ultimateLabel.Text = isReady and "ULTIMATE READY (R)" or string.format("Ultimate %d%%", math.floor(meter / meterMax * 100))
+
+		if isReady and not wasReady then
+			Sfx.Play(Sfx.Ids.UltimateReady, 0.5)
+		end
+		wasReady = isReady
 	end)
 
 	local function trackHealth(character: Model)

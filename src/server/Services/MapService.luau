@@ -81,6 +81,45 @@ local function buildPortal(folder: Instance)
 	prompt.Parent = portal
 end
 
+local function buildShrine(folder: Instance, name: string, position: Vector3, promptName: string, actionText: string, objectText: string)
+	local shrine = Instance.new("Part")
+	shrine.Name = name
+	shrine.Anchored = true
+	shrine.CanCollide = true
+	shrine.Shape = Enum.PartType.Cylinder
+	shrine.Size = Vector3.new(6, 2, 2)
+	shrine.Orientation = Vector3.new(0, 0, 90)
+	shrine.Position = position
+	shrine.Color = Color3.fromRGB(80, 200, 220)
+	shrine.Material = Enum.Material.Neon
+	shrine.Parent = folder
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = promptName
+	prompt.ActionText = actionText
+	prompt.ObjectText = objectText
+	prompt.HoldDuration = 0.5
+	prompt.MaxActivationDistance = 10
+	prompt.Parent = shrine
+end
+
+-- A private, fully-enclosed copy of just the dungeon room, offset far from
+-- the hub/wilds/every other instance so concurrent runs never see or aggro
+-- each other. DungeonService builds and tears one of these down per run
+-- instead of using the always-there room the corridor walks into (that one
+-- stays as hub-adjacent scenery).
+function MapService.BuildDungeonInstance(offset: Vector3): Folder
+	local folder = Instance.new("Folder")
+	folder.Name = "DungeonInstance"
+	folder.Parent = Workspace
+
+	local center = LevelLayout.DungeonRoom.Center + offset
+	buildFloor(folder, "Dungeon", center, LevelLayout.DungeonRoom.HalfSize, Color3.fromRGB(50, 40, 60))
+	buildWalls(folder, "Dungeon", center, LevelLayout.DungeonRoom.HalfSize, LevelLayout.DungeonRoom.WallHeight, Color3.fromRGB(70, 60, 80), {})
+
+	return folder
+end
+
 function MapService.Init()
 	if Workspace:FindFirstChild("Level") then
 		return
@@ -100,6 +139,7 @@ function MapService.Init()
 	buildWalls(folder, "Dungeon", LevelLayout.DungeonRoom.Center, LevelLayout.DungeonRoom.HalfSize, LevelLayout.DungeonRoom.WallHeight, Color3.fromRGB(70, 60, 80), { South = true })
 
 	buildPortal(folder)
+	buildShrine(folder, "HubShrine", LevelLayout.HubShrinePosition, "TravelToWildsPrompt", "Travel", "The Wilds")
 
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "PlayerSpawn"
@@ -108,6 +148,10 @@ function MapService.Init()
 	spawn.Anchored = true
 	spawn.Transparency = 1
 	spawn.Parent = folder
+
+	buildFloor(folder, "Wilds", LevelLayout.Wilds.Center, LevelLayout.Wilds.HalfSize, Color3.fromRGB(70, 100, 50))
+	buildWalls(folder, "Wilds", LevelLayout.Wilds.Center, LevelLayout.Wilds.HalfSize, LevelLayout.Wilds.WallHeight, Color3.fromRGB(60, 80, 45), {})
+	buildShrine(folder, "WildsShrine", LevelLayout.WildsShrinePosition, "TravelToHubPrompt", "Travel", "The Hub")
 end
 
 return MapService

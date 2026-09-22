@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local UiKit = require(script.Parent.Parent.UiKit)
 
 local DailyController = {}
 
@@ -39,6 +40,7 @@ function DailyController.Init()
 	panel.BackgroundTransparency = 0.1
 	panel.Visible = false
 	panel.Parent = screenGui
+	UiKit.RoundPanel(panel)
 
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
@@ -68,6 +70,7 @@ function DailyController.Init()
 	claimButton.TextSize = 13
 	claimButton.TextColor3 = Color3.new(1, 1, 1)
 	claimButton.Parent = panel
+	UiKit.RoundButton(claimButton)
 
 	claimButton.MouseButton1Click:Connect(function()
 		Remotes.ClaimDailyLogin:FireServer()
@@ -116,6 +119,9 @@ function DailyController.Init()
 	end
 
 	Remotes.PlayerDataUpdated.OnClientEvent:Connect(refresh)
+	Remotes.OpenDailyPanel.OnClientEvent:Connect(function()
+		panel.Visible = true
+	end)
 
 	ContextActionService:BindAction("ToggleDaily", function(_name, inputState)
 		if inputState == Enum.UserInputState.Begin then

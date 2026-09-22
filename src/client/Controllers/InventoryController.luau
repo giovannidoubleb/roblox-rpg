@@ -8,10 +8,17 @@ local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local ItemDatabase = require(ReplicatedStorage.Shared.Modules.ItemDatabase)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local UiKit = require(script.Parent.Parent.UiKit)
 
 local InventoryController = {}
+
+local RARITY_RANK = {}
+for index, rarity in Config.RarityOrder do
+	RARITY_RANK[rarity] = index
+end
 
 local player = Players.LocalPlayer
 
@@ -38,6 +45,7 @@ function InventoryController.Init()
 	panel.BackgroundTransparency = 0.1
 	panel.Visible = false
 	panel.Parent = screenGui
+	UiKit.RoundPanel(panel)
 
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
@@ -90,6 +98,11 @@ function InventoryController.Init()
 		return table.concat(parts, "   ")
 	end
 
+	local hasAutoSort = false
+	Remotes.PlayerDataUpdated.OnClientEvent:Connect(function(data)
+		hasAutoSort = data.Passes.AutoSort == true
+	end)
+
 	local function refresh(payload)
 		equippedLabel.Text = describeEquipped(payload.Equipped)
 
@@ -99,7 +112,24 @@ function InventoryController.Init()
 			end
 		end
 
+		local entries = {}
 		for instanceId, itemId in payload.Inventory do
+			table.insert(entries, { InstanceId = instanceId, ItemId = itemId })
+		end
+
+		if hasAutoSort then
+			table.sort(entries, function(a, b)
+				local itemA, itemB = ItemDatabase.Items[a.ItemId], ItemDatabase.Items[b.ItemId]
+				local rankA, rankB = RARITY_RANK[itemA.Rarity] or 0, RARITY_RANK[itemB.Rarity] or 0
+				if rankA ~= rankB then
+					return rankA > rankB
+				end
+				return itemA.Name < itemB.Name
+			end)
+		end
+
+		for _, entry in entries do
+			local instanceId, itemId = entry.InstanceId, entry.ItemId
 			local item = ItemDatabase.Items[itemId]
 			if item then
 				local row = Instance.new("Frame")
@@ -130,6 +160,7 @@ function InventoryController.Init()
 				button.TextColor3 = Color3.new(1, 1, 1)
 				button.AutoButtonColor = not isEquipped
 				button.Parent = row
+				UiKit.RoundButton(button, 4)
 
 				button.MouseButton1Click:Connect(function()
 					if not isEquipped then

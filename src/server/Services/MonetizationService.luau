@@ -16,6 +16,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
+local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
 local MonetizationService = {}
@@ -41,18 +42,39 @@ local GEM_POUCHES = {
 	GemPouchMega = true,
 }
 
--- Applies what a Developer Product purchase grants. Anything whose
--- underlying system isn't built yet (skill tree, cosmetics, zones,
--- crafting, season track) is still granted - Roblox expects
--- PurchaseGranted or it keeps retrying and can refund - it just has no
--- in-game effect until that system exists.
+-- Applies what a Developer Product purchase grants. Every product here has
+-- a real effect now; SeasonPass is a Developer Product in the "Ledger &
+-- Loot" plan but behaves like an unlock (reuses the Passes flag/HasPass
+-- plumbing) rather than a stacking consumable.
 local function grantProduct(player: Player, productName: string)
 	if GEM_POUCHES[productName] then
 		PlayerDataService.AddGems(player, Config.Monetization.GemPouchAmounts[productName])
+	elseif productName == "InstantReviveToken" or productName == "StatRespecToken" or productName == "CharacterRenameToken" or productName == "ZoneSkipKey" or productName == "CraftingRush" then
+		PlayerDataService.AddConsumable(player, productName, 1)
+	elseif productName == "MysteryCosmeticCrate" then
+		local data = PlayerDataService.Get(player)
+		if not data then
+			return
+		end
+
+		local unowned = {}
+		for cosmeticId in Config.Cosmetics.Available do
+			if not data.Cosmetics.Owned[cosmeticId] then
+				table.insert(unowned, cosmeticId)
+			end
+		end
+
+		if #unowned > 0 then
+			local pick = unowned[math.random(1, #unowned)]
+			PlayerDataService.GrantCosmetic(player, pick)
+			Remotes.Notify:FireClient(player, "Mystery Crate: unlocked " .. Config.Cosmetics.Available[pick].Name .. "!")
+		else
+			PlayerDataService.AddGems(player, 150)
+			Remotes.Notify:FireClient(player, "Mystery Crate: every cosmetic already owned - +150 gems instead!")
+		end
+	elseif productName == "SeasonPass" then
+		PlayerDataService.GrantPass(player, "SeasonPass")
 	end
-	-- InstantReviveToken, StatRespecToken, MysteryCosmeticCrate,
-	-- CharacterRenameToken, ZoneSkipKey, CraftingRush, SeasonPass: no
-	-- effect yet, see module doc comment.
 end
 
 local function waitForProfile(player: Player)

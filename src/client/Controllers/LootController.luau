@@ -7,6 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local ToastController = require(script.Parent.ToastController)
+local Sfx = require(script.Parent.Parent.Sfx)
 
 local LootController = {}
 
@@ -21,6 +22,7 @@ local RARITY_COLOR = {
 function LootController.Init()
 	Remotes.LootReceived.OnClientEvent:Connect(function(loot)
 		ToastController.Show(string.format("+ %s (%s)", loot.Name, loot.Rarity), RARITY_COLOR[loot.Rarity])
+		Sfx.Play(Sfx.Ids.Loot, 0.4)
 	end)
 end
 

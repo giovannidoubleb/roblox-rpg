@@ -7,6 +7,8 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 
+local UiKit = require(script.Parent.Parent.UiKit)
+
 local ToastController = {}
 
 local player = Players.LocalPlayer
@@ -49,6 +51,7 @@ function ToastController.Show(text: string, color: Color3?)
 	label.TextSize = 14
 	label.Text = text
 	label.Parent = container
+	UiKit.RoundPanel(label, 6)
 
 	task.delay(3, function()
 		local tween = TweenService:Create(label, TweenInfo.new(0.5), { TextTransparency = 1, BackgroundTransparency = 1 })

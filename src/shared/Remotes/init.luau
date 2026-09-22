@@ -20,6 +20,21 @@ local EVENT_NAMES = {
 	"EquipItem",
 	"ClaimDailyLogin",
 	"Notify",
+
+	"LevelUp",
+	"DamageDealt",
+	"RequestAllocateSkill",
+	"RequestRespecSkills",
+	"RequestSetNickname",
+	"RequestCraft",
+	"RequestPurchaseCosmetic",
+	"RequestEquipCosmetic",
+	"RequestPurchaseCompanion",
+	"RequestSetActiveCompanions",
+	"RequestClaimSeasonTier",
+	"RequestZoneTravel",
+	"OpenDailyPanel",
+	"OpenMerchantPanel",
 }
 
 local function getOrCreateFolder(): Folder

@@ -1,15 +1,12 @@
 --[[
 	The key-gated "daily dungeon" run: touch the portal in the hub, spend a
-	key, and a trash-then-boss wave spawns in the dungeon room. Killing the
-	boss reports the "complete the daily dungeon" quest (XP/loot for the
-	kill itself already flow through the normal EnemyService/LootService
-	pipeline).
-
-	Simplification versus the design doc: this is one boss + a few trash,
-	not a full 15-25 mob run, and the dungeon room is shared rather than a
-	private instance per player (enemies are tagged with an Owner so
-	kills/completion still attribute correctly). Real instancing would need
-	reserved servers/TeleportService - a bigger feature for later.
+	key, and get teleported into a private instance of the dungeon room -
+	your own copy, built fresh and torn down when you're done, so concurrent
+	runs never collide or aggro each other. Multiple waves of trash clear
+	before the boss spawns, closer to the design doc's full mob count than
+	a handful of trash. Killing the boss reports the "complete the daily
+	dungeon" quest (XP/loot for the kill itself already flow through the
+	normal EnemyService/LootService pipeline) and returns you to the hub.
 ]]
 
 local Players = game:GetService("Players")
@@ -20,29 +17,93 @@ local Workspace = game:GetService("Workspace")
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local LevelLayout = require(script.Parent.LevelLayout)
 local EnemyService = require(script.Parent.EnemyService)
+local MapService = require(script.Parent.MapService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
 local DungeonService = {}
 
 local SPAWN_JITTER = 6
-local activeRuns: { [Player]: boolean } = {}
+local INSTANCE_BASE = Vector3.new(0, 0, 1200)
+local INSTANCE_SLOT_SPACING = 500
+local RETURN_DELAY_SECONDS = 3
+
+-- [Player]: { Slot, Folder, Offset, WaveIndex, RemainingInWave }
+local activeRuns: { [Player]: { [string]: any } } = {}
+
+local freeSlots: { number } = {}
+local nextSlot = 0
+
+local function acquireSlot(): number
+	if #freeSlots > 0 then
+		return table.remove(freeSlots) :: number
+	end
+	nextSlot += 1
+	return nextSlot
+end
+
+local function releaseSlot(slot: number)
+	table.insert(freeSlots, slot)
+end
 
 local function jittered(position: Vector3): Vector3
 	return position + Vector3.new(math.random(-SPAWN_JITTER, SPAWN_JITTER), 0, math.random(-SPAWN_JITTER, SPAWN_JITTER))
 end
 
-local function startRun(player: Player)
-	activeRuns[player] = true
+local function teleportPlayer(player: Player, position: Vector3)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if hrp then
+		hrp.CFrame = CFrame.new(position)
+	end
+end
 
-	local tags = { DungeonRun = true, Owner = player.UserId }
+local function destroyRunLeftovers(player: Player, runState)
+	for _, model in Workspace:GetChildren() do
+		if model:IsA("Model") and model:GetAttribute("Owner") == player.UserId and model:GetAttribute("DungeonRun") then
+			model:Destroy()
+		end
+	end
+	if runState.Folder then
+		runState.Folder:Destroy()
+	end
+	releaseSlot(runState.Slot)
+end
 
-	for _, position in LevelLayout.DungeonTrashPositions do
-		EnemyService.Spawn("Trash", jittered(position), { Respawn = false, Tags = tags })
+local function spawnBoss(player: Player, runState)
+	local tags = { DungeonRun = true, Owner = player.UserId, IsBoss = true }
+	EnemyService.Spawn(LevelLayout.DungeonBossKind, LevelLayout.DungeonBossPosition + runState.Offset, { Respawn = false, Tags = tags })
+	Remotes.Notify:FireClient(player, "The dungeon boss appears!")
+end
+
+local function spawnWave(player: Player, runState, waveIndex: number)
+	local wave = LevelLayout.DungeonWaves[waveIndex]
+	if not wave then
+		spawnBoss(player, runState)
+		return
 	end
 
-	EnemyService.Spawn("Boss", LevelLayout.DungeonBossPosition, { Respawn = false, Tags = tags })
+	runState.WaveIndex = waveIndex
+	runState.RemainingInWave = #wave
 
-	Remotes.Notify:FireClient(player, "Dungeon run started - fight through to the boss!")
+	local tags = { DungeonRun = true, Owner = player.UserId }
+	for _, spawnPoint in wave do
+		EnemyService.Spawn(spawnPoint.Kind, jittered(spawnPoint.Position + runState.Offset), { Respawn = false, Tags = tags })
+	end
+
+	Remotes.Notify:FireClient(player, string.format("Wave %d/%d incoming!", waveIndex, #LevelLayout.DungeonWaves))
+end
+
+local function startRun(player: Player)
+	local slot = acquireSlot()
+	local offset = INSTANCE_BASE + Vector3.new(slot * INSTANCE_SLOT_SPACING, 0, 0)
+	local folder = MapService.BuildDungeonInstance(offset)
+
+	local runState = { Slot = slot, Folder = folder, Offset = offset, WaveIndex = 0, RemainingInWave = 0 }
+	activeRuns[player] = runState
+
+	teleportPlayer(player, LevelLayout.DungeonEntryPosition + offset)
+	Remotes.Notify:FireClient(player, "Dungeon run started - fight through every wave to reach the boss!")
+	spawnWave(player, runState, 1)
 end
 
 local function onPromptTriggered(prompt: ProximityPrompt, player: Player)
@@ -64,37 +125,44 @@ local function onPromptTriggered(prompt: ProximityPrompt, player: Player)
 end
 
 -- Called from the central enemy-died handler in init.server.luau for every
--- enemy death, so it can react specifically to a dungeon boss going down.
+-- enemy death, so it can react specifically to dungeon-run enemies.
 function DungeonService.HandleEnemyDied(enemy: Model, tierName: string, killer: Player?)
-	if tierName ~= "Boss" or not enemy:GetAttribute("DungeonRun") then
+	if not enemy:GetAttribute("DungeonRun") then
 		return
 	end
 
 	local ownerId = enemy:GetAttribute("Owner")
 	local owner = ownerId and Players:GetPlayerByUserId(ownerId)
-	if owner then
+	local runState = owner and activeRuns[owner]
+	if not owner or not runState then
+		return
+	end
+
+	if enemy:GetAttribute("IsBoss") then
 		activeRuns[owner] = nil
 		PlayerDataService.ReportQuestProgress(owner, "Dungeon")
-	end
-
-	-- Clear out any trash from this run the player left unkilled so the
-	-- room doesn't accumulate corpses run after run.
-	for _, model in Workspace:GetChildren() do
-		if model:IsA("Model") and model:GetAttribute("Owner") == ownerId and model:GetAttribute("DungeonRun") then
-			local humanoid = model:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health > 0 then
-				model:Destroy()
-			end
+		if killer then
+			Remotes.Notify:FireClient(killer, "Dungeon boss defeated! Heading back to the hub.")
 		end
-	end
 
-	if killer then
-		Remotes.Notify:FireClient(killer, "Dungeon boss defeated!")
+		teleportPlayer(owner, LevelLayout.DungeonPortal + Vector3.new(0, 3, -6))
+		task.delay(RETURN_DELAY_SECONDS, function()
+			destroyRunLeftovers(owner, runState)
+		end)
+	else
+		runState.RemainingInWave -= 1
+		if runState.RemainingInWave <= 0 then
+			spawnWave(owner, runState, runState.WaveIndex + 1)
+		end
 	end
 end
 
 local function onPlayerRemoving(player: Player)
+	local runState = activeRuns[player]
 	activeRuns[player] = nil
+	if runState then
+		destroyRunLeftovers(player, runState)
+	end
 end
 
 function DungeonService.Init()
