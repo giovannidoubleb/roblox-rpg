@@ -36,8 +36,9 @@ local function getPlayerDamageBonus(player: Player): number
 end
 
 -- Rolls crit on top of the given base damage, applies it, attributes the
--- hit for kill/loot tracking, and tells the attacker's client what landed
--- (for the floating damage number).
+-- hit for kill/loot tracking, heals the attacker if their weapon has
+-- Lifesteal, and tells the attacker's client what landed (for the floating
+-- damage number).
 local function damageEnemy(enemy: Model, player: Player, baseDamage: number)
 	local critChance = math.clamp(PlayerDataService.GetCritChance(player), 0, Config.SkillTree.MaxCritChance)
 	local isCrit = math.random() < critChance
@@ -46,6 +47,15 @@ local function damageEnemy(enemy: Model, player: Player, baseDamage: number)
 	enemy:SetAttribute("LastDamagedBy", player.UserId)
 	local humanoid = enemy:FindFirstChildOfClass("Humanoid") :: Humanoid
 	humanoid:TakeDamage(damage)
+
+	local lifesteal = PlayerDataService.GetLifestealPercent(player)
+	if lifesteal > 0 then
+		local character = player.Character
+		local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if playerHumanoid and playerHumanoid.Health > 0 then
+			playerHumanoid.Health = math.min(playerHumanoid.MaxHealth, playerHumanoid.Health + damage * lifesteal)
+		end
+	end
 
 	if enemy.PrimaryPart then
 		Remotes.DamageDealt:FireClient(player, enemy.PrimaryPart.Position, math.floor(damage), isCrit)
@@ -143,7 +153,8 @@ local function onRequestSkill(player: Player, skillName: string)
 	end
 
 	local now = os.clock()
-	if (cooldowns[skillName] or 0) + skill.Cooldown > now then
+	local effectiveCooldown = skill.Cooldown * (1 - PlayerDataService.GetCooldownReduction(player))
+	if (cooldowns[skillName] or 0) + effectiveCooldown > now then
 		return
 	end
 

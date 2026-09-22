@@ -53,6 +53,13 @@ Config.Combat = {
 		MeterPerBasicAttack = 12,
 		MeterMax = 100,
 	},
+
+	-- Caps for the Rare+ sustain gear stats (see ItemDatabase). Each stat
+	-- only ever comes from one equipped item in one slot, so there's no
+	-- stacking to worry about - these just keep a single item's roll sane.
+	MaxLifestealPercent = 0.3,
+	MaxDamageReductionPercent = 0.4,
+	MaxCooldownReductionPercent = 0.4,
 }
 
 -- Order matters: rarity roll tables below are cumulative in this order.

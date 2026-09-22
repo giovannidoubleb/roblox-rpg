@@ -154,6 +154,54 @@ function PlayerDataService.GetWeaponDamageBonus(player: Player): number
 	return item and item.DamageBonus or 0
 end
 
+-- Shared lookup for the Rare+ sustain stats (Lifesteal/DamageReduction/
+-- CooldownReduction), each of which only ever comes from one equipped item
+-- in one specific slot.
+local function equippedItemStat(data, slot: string, statName: string): number
+	local instanceId = data.Equipped[slot]
+	local itemId = instanceId and data.Inventory[instanceId]
+	local item = itemId and ItemDatabase.Items[itemId]
+	return (item and item[statName]) or 0
+end
+
+function PlayerDataService.GetLifestealPercent(player: Player): number
+	local data = profiles[player]
+	if not data then
+		return 0
+	end
+	return math.clamp(equippedItemStat(data, "Weapon", "LifestealPercent"), 0, Config.Combat.MaxLifestealPercent)
+end
+
+function PlayerDataService.GetDamageReduction(player: Player): number
+	local data = profiles[player]
+	if not data then
+		return 0
+	end
+	return math.clamp(equippedItemStat(data, "Armor", "DamageReductionPercent"), 0, Config.Combat.MaxDamageReductionPercent)
+end
+
+function PlayerDataService.GetCooldownReduction(player: Player): number
+	local data = profiles[player]
+	if not data then
+		return 0
+	end
+	return math.clamp(equippedItemStat(data, "Trinket", "CooldownReductionPercent"), 0, Config.Combat.MaxCooldownReductionPercent)
+end
+
+-- The one path every hit against a player should go through, so
+-- DamageReduction always applies no matter which system deals the damage
+-- (enemy basic attacks, boss Slam, dungeon floor hazards, ...).
+function PlayerDataService.DamagePlayer(player: Player, amount: number)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
+	local reduction = PlayerDataService.GetDamageReduction(player)
+	humanoid:TakeDamage(amount * (1 - reduction))
+end
+
 function PlayerDataService.AddExperience(player: Player, amount: number)
 	local data = profiles[player]
 	if not data or amount <= 0 then

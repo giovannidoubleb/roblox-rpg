@@ -30,6 +30,7 @@ local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local LevelLayout = require(script.Parent.LevelLayout)
+local PlayerDataService = require(script.Parent.PlayerDataService)
 
 local EnemyService = {}
 
@@ -161,6 +162,12 @@ local function runAi(model: Model, kindName: string)
 	local lastAttackAt = 0
 	local lastSlamAt = 0
 	local busy = false
+	-- Hysteresis for Kiter kinds: once fleeing starts, keep fleeing until the
+	-- player is comfortably past KiteRange rather than flipping every tick at
+	-- the exact boundary (which reads as vibrating in place instead of a
+	-- clean retreat-then-fight rhythm).
+	local kiting = false
+	local KITE_RELEASE_BUFFER = 3
 
 	-- Flashes TELEGRAPH_COLOR for the tier's wind-up, then re-checks the
 	-- target is still in range/alive before the hit actually lands - this
@@ -184,7 +191,7 @@ local function runAi(model: Model, kindName: string)
 					if kindDef.Ranged then
 						fireBolt(root.Position, targetHrp.Position, kindDef.Color)
 					end
-					targetHumanoid:TakeDamage(damage)
+					PlayerDataService.DamagePlayer(target, damage)
 				end
 			end
 		end
@@ -231,7 +238,7 @@ local function runAi(model: Model, kindName: string)
 				local targetHrp = targetHumanoid and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 				if targetHumanoid and targetHrp then
 					if (targetHrp.Position - root.Position).Magnitude <= tier.SlamRadius then
-						targetHumanoid:TakeDamage(tier.SlamDamage)
+						PlayerDataService.DamagePlayer(player, tier.SlamDamage)
 					end
 				end
 			end
@@ -250,6 +257,14 @@ local function runAi(model: Model, kindName: string)
 			local targetHrp = target.Character.HumanoidRootPart :: BasePart
 			local now = os.clock()
 
+			if isKiter then
+				if distance < kindDef.KiteRange then
+					kiting = true
+				elseif distance > kindDef.KiteRange + KITE_RELEASE_BUFFER then
+					kiting = false
+				end
+			end
+
 			if
 				tier.IsBoss
 				and not busy
@@ -259,7 +274,7 @@ local function runAi(model: Model, kindName: string)
 				lastSlamAt = now
 				humanoid:MoveTo(root.Position)
 				task.spawn(performSlam)
-			elseif isKiter and distance < kindDef.KiteRange then
+			elseif isKiter and kiting then
 				local away = (root.Position - targetHrp.Position)
 				local fleeDirection = away.Magnitude > 0.1 and away.Unit or Vector3.new(1, 0, 0)
 				humanoid:MoveTo(root.Position + fleeDirection * (kindDef.KiteRange - distance + 4))

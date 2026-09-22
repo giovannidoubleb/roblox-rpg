@@ -5,6 +5,14 @@
 	second Armor slot with a different name); they grant crit chance instead,
 	so gearing is a real choice between more survivability (Armor) and more
 	burst (Trinket) rather than always-take-the-bigger-number.
+
+	Common/Uncommon stay single-stat on purpose (legible for new players, no
+	build decision needed yet). From Rare up, each slot also has a sustain-
+	flavored alternative alongside the burst/greedy default - a lower-damage
+	Weapon that lifesteals, a lower-health Armor that flat-reduces incoming
+	damage, and a Trinket that cuts skill cooldowns instead of granting crit.
+	Same rarity, same drop odds, genuinely different playstyle - that's the
+	actual build choice, not just a bigger number every tier.
 ]]
 
 local ItemDatabase = {}
@@ -21,14 +29,23 @@ ItemDatabase.Items = {
 	runed_blade = { Name = "Runed Blade", Rarity = "Rare", Slot = "Weapon", DamageBonus = 6 },
 	chainmail_hauberk = { Name = "Chainmail Hauberk", Rarity = "Rare", Slot = "Armor", HealthBonus = 30 },
 	ring_of_vigor = { Name = "Ring of Vigor", Rarity = "Rare", Slot = "Trinket", CritChanceBonus = 0.07 },
+	thirsting_blade = { Name = "Thirsting Blade", Rarity = "Rare", Slot = "Weapon", DamageBonus = 4, LifestealPercent = 0.08 },
+	bulwark_plating = { Name = "Bulwark Plating", Rarity = "Rare", Slot = "Armor", HealthBonus = 15, DamageReductionPercent = 0.06 },
+	hourglass_charm = { Name = "Hourglass Charm", Rarity = "Rare", Slot = "Trinket", CooldownReductionPercent = 0.08 },
 
 	frostbrand_greatsword = { Name = "Frostbrand Greatsword", Rarity = "Epic", Slot = "Weapon", DamageBonus = 12 },
 	dragonscale_plate = { Name = "Dragonscale Plate", Rarity = "Epic", Slot = "Armor", HealthBonus = 60 },
 	amulet_of_the_phoenix = { Name = "Amulet of the Phoenix", Rarity = "Epic", Slot = "Trinket", CritChanceBonus = 0.10 },
+	vampiric_edge = { Name = "Vampiric Edge", Rarity = "Epic", Slot = "Weapon", DamageBonus = 8, LifestealPercent = 0.12 },
+	aegis_ward = { Name = "Aegis Ward", Rarity = "Epic", Slot = "Armor", HealthBonus = 30, DamageReductionPercent = 0.10 },
+	clockwork_band = { Name = "Clockwork Band", Rarity = "Epic", Slot = "Trinket", CooldownReductionPercent = 0.14 },
 
 	worldsplitter = { Name = "Worldsplitter", Rarity = "Legendary", Slot = "Weapon", DamageBonus = 25 },
 	aegis_of_the_first_king = { Name = "Aegis of the First King", Rarity = "Legendary", Slot = "Armor", HealthBonus = 120 },
 	crown_of_eternity = { Name = "Crown of Eternity", Rarity = "Legendary", Slot = "Trinket", CritChanceBonus = 0.15 },
+	the_hungering_maw = { Name = "The Hungering Maw", Rarity = "Legendary", Slot = "Weapon", DamageBonus = 16, LifestealPercent = 0.18 },
+	unbreakable_bastion = { Name = "Unbreakable Bastion", Rarity = "Legendary", Slot = "Armor", HealthBonus = 60, DamageReductionPercent = 0.15 },
+	eternal_metronome = { Name = "Eternal Metronome", Rarity = "Legendary", Slot = "Trinket", CooldownReductionPercent = 0.20 },
 }
 
 -- Built once: { [rarity]: { itemId, itemId, ... } }

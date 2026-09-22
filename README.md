@@ -55,16 +55,21 @@ Loot" (monetization) design docs.
   reskins of each other: every attack is telegraphed (a color flash, then a
   re-check that you're still in range before the hit lands, so backing off
   during the flash actually avoids it), Warlock kites to hold range instead
-  of standing and trading hits, and every boss has a second, harder-hitting
-  telegraphed radius Slam on its own cooldown. Ranged kinds lob a visible
-  bolt instead of needing to close to melee.
+  of standing and trading hits (with hysteresis so it commits to a clean
+  retreat instead of vibrating in place at the range boundary), and every
+  boss has a second, harder-hitting telegraphed radius Slam on its own
+  cooldown. Ranged kinds lob a visible bolt instead of needing to close to
+  melee.
 - **Loot & crafting** (`ItemDatabase`, `LootTable`, `LootService`,
   `CraftingService`) — the design doc's rarity tables, 15-boss pity counter,
-  a 15-item catalog, and a crafting ladder (4 unequipped items of a rarity →
+  a 24-item catalog, and a crafting ladder (4 unequipped items of a rarity →
   1 guaranteed item of the next rarity up, on a timer a Crafting Rush charge
-  shortens). Weapon and Armor are still flat Damage/Health upgrades, but
-  Trinket grants crit chance instead of duplicating Armor's flat HP, so
-  gearing is a real choice between more survivability and more burst.
+  shortens). Common/Uncommon items are single-stat and legible for new
+  players; Rare+ adds a sustain-flavored alternative in every slot alongside
+  the burst default — a lower-damage Weapon that lifesteals, a lower-health
+  Armor that flat-reduces incoming damage, a Trinket that cuts skill
+  cooldowns instead of granting crit — so gearing is a real playstyle choice,
+  not just a bigger number every tier.
 - **Inventory/equipment** (`PlayerDataService`, `InventoryController`) — loot
   goes into a real per-player inventory (capped, expandable via Backpack
   Expansion), can be equipped, shows its actual stat bonus in the panel, and
@@ -72,13 +77,17 @@ Loot" (monetization) design docs.
 - **Daily structure** (`Config.Daily`, `PlayerDataService`,
   `DailyController`) — 3 keys/day (8h regen), 3 daily quests re-rolled from a
   pool each calendar day, and a login streak (1-7, escalating gem reward).
-- **Dungeon** (`DungeonService`) — the portal spends a key and teleports you
-  into a private instance of the dungeon room (a fresh copy built per run,
-  torn down after), with three waves of trash before the boss — concurrent
-  runs never collide or aggro each other. Two things make a run more than
-  the open-world grind with a boss at the end: every wave promotes one
-  random enemy to a tougher, better-rewarding Champion, and the room
-  periodically telegraphs a floor hazard you have to actually step out of.
+- **Dungeon** (`DungeonService`, `LevelLayout.DungeonVariants`) — the portal
+  spends a key and teleports you into a private instance of the dungeon room
+  (a fresh copy built per run, torn down after), with three waves of trash
+  before the boss — concurrent runs never collide or aggro each other. Three
+  things make a run more than the open-world grind with a boss at the end:
+  the wave composition and boss alternate between two variants by UTC
+  calendar day (a melee-heavy "Stonebound Depths" and a ranged/kiting-heavy
+  "Wilds Incursion" with a different boss), so today's run is a different
+  fight from yesterday's; every wave also promotes one random enemy to a
+  tougher, better-rewarding Champion; and the room periodically telegraphs a
+  floor hazard you have to actually step out of.
 - **A second zone** (`LevelLayout`, `ZoneService`) — the Wilds, reached via
   shrines in the hub or the zone travel menu ("M"), with its own tougher
   enemies and a respawning field boss. Fast Travel (pass) and Zone Skip Key

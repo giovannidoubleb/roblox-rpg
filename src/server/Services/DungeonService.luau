@@ -78,14 +78,23 @@ local function destroyRunLeftovers(player: Player, runState)
 	releaseSlot(runState.Slot)
 end
 
+-- Deterministic per UTC calendar day - every player sees the same "today's
+-- dungeon" and it's not something a run needs to persist, it just falls out
+-- of the current date, same as the daily quest pool re-rolling by date.
+local function selectVariant()
+	local dayIndex = os.date("!*t").yday :: number
+	local variants = LevelLayout.DungeonVariants
+	return variants[(dayIndex % #variants) + 1]
+end
+
 local function spawnBoss(player: Player, runState)
 	local tags = { DungeonRun = true, Owner = player.UserId, IsBoss = true }
-	EnemyService.Spawn(LevelLayout.DungeonBossKind, LevelLayout.DungeonBossPosition + runState.Offset, { Respawn = false, Tags = tags })
+	EnemyService.Spawn(runState.Variant.BossKind, LevelLayout.DungeonBossPosition + runState.Offset, { Respawn = false, Tags = tags })
 	Remotes.Notify:FireClient(player, "The dungeon boss appears!")
 end
 
 local function spawnWave(player: Player, runState, waveIndex: number)
-	local wave = LevelLayout.DungeonWaves[waveIndex]
+	local wave = runState.Variant.Waves[waveIndex]
 	if not wave then
 		spawnBoss(player, runState)
 		return
@@ -108,7 +117,7 @@ local function spawnWave(player: Player, runState, waveIndex: number)
 		})
 	end
 
-	Remotes.Notify:FireClient(player, string.format("Wave %d/%d incoming! One enemy is a Champion - watch for it.", waveIndex, #LevelLayout.DungeonWaves))
+	Remotes.Notify:FireClient(player, string.format("Wave %d/%d incoming! One enemy is a Champion - watch for it.", waveIndex, #runState.Variant.Waves))
 end
 
 -- A telegraphed danger zone on the dungeon floor: a translucent red circle
@@ -156,7 +165,7 @@ local function spawnHazard(runState)
 			if hrp and humanoid and humanoid.Health > 0 then
 				local flatOffset = Vector3.new(hrp.Position.X - position.X, 0, hrp.Position.Z - position.Z)
 				if flatOffset.Magnitude <= hazardCfg.Radius then
-					humanoid:TakeDamage(hazardCfg.Damage)
+					PlayerDataService.DamagePlayer(player, hazardCfg.Damage)
 				end
 			end
 		end
@@ -184,12 +193,23 @@ local function startRun(player: Player)
 	local slot = acquireSlot()
 	local offset = INSTANCE_BASE + Vector3.new(slot * INSTANCE_SLOT_SPACING, 0, 0)
 	local folder = MapService.BuildDungeonInstance(offset)
+	local variant = selectVariant()
 
-	local runState = { Slot = slot, Folder = folder, Offset = offset, WaveIndex = 0, RemainingInWave = 0 }
+	local runState = {
+		Slot = slot,
+		Folder = folder,
+		Offset = offset,
+		Variant = variant,
+		WaveIndex = 0,
+		RemainingInWave = 0,
+	}
 	activeRuns[player] = runState
 
 	teleportPlayer(player, LevelLayout.DungeonEntryPosition + offset)
-	Remotes.Notify:FireClient(player, "Dungeon run started - fight through every wave to reach the boss! Watch the floor for danger zones.")
+	Remotes.Notify:FireClient(
+		player,
+		string.format("Today's dungeon: %s. Fight through every wave to reach the boss! Watch the floor for danger zones.", variant.Name)
+	)
 	spawnWave(player, runState, 1)
 	task.spawn(runHazardLoop, player, runState)
 end

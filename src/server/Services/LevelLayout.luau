@@ -44,29 +44,66 @@ LevelLayout.FieldSpawns = {
 }
 
 LevelLayout.DungeonEntryPosition = Vector3.new(0, 5, 110)
-LevelLayout.DungeonBossKind = "StoneGolem"
 LevelLayout.DungeonBossPosition = Vector3.new(0, 5, 195)
 
--- Multiple waves so a run is closer to the design doc's full mob count
--- instead of a handful of trash then the boss.
-LevelLayout.DungeonWaves = {
+-- Two distinct dungeon compositions sharing the same room/positions -
+-- DungeonService picks one deterministically per UTC calendar day (see
+-- DungeonService.SelectVariant), so the run actually looks and plays
+-- differently from one day to the next instead of being static forever.
+-- Waves reuse the same spawn positions across variants (each position was
+-- tuned to be sensible within DungeonRoom's bounds); only Kind changes.
+LevelLayout.DungeonVariants = {
 	{
-		{ Kind = "Skeleton", Position = Vector3.new(20, 5, 130) },
-		{ Kind = "Skeleton", Position = Vector3.new(-20, 5, 130) },
-		{ Kind = "Slime", Position = Vector3.new(0, 5, 122) },
-		{ Kind = "Bandit", Position = Vector3.new(12, 5, 118) },
+		Name = "Stonebound Depths",
+		BossKind = "StoneGolem",
+		Waves = {
+			{
+				{ Kind = "Skeleton", Position = Vector3.new(20, 5, 130) },
+				{ Kind = "Skeleton", Position = Vector3.new(-20, 5, 130) },
+				{ Kind = "Slime", Position = Vector3.new(0, 5, 122) },
+				{ Kind = "Bandit", Position = Vector3.new(12, 5, 118) },
+			},
+			{
+				{ Kind = "Skeleton", Position = Vector3.new(25, 5, 150) },
+				{ Kind = "Skeleton", Position = Vector3.new(-25, 5, 150) },
+				{ Kind = "Slime", Position = Vector3.new(15, 5, 155) },
+				{ Kind = "Slime", Position = Vector3.new(-15, 5, 155) },
+				{ Kind = "Bandit", Position = Vector3.new(0, 5, 148) },
+			},
+			{
+				{ Kind = "DireWolf", Position = Vector3.new(15, 5, 172) },
+				{ Kind = "DireWolf", Position = Vector3.new(-15, 5, 172) },
+				{ Kind = "Warlock", Position = Vector3.new(0, 5, 178) },
+			},
+		},
 	},
 	{
-		{ Kind = "Skeleton", Position = Vector3.new(25, 5, 150) },
-		{ Kind = "Skeleton", Position = Vector3.new(-25, 5, 150) },
-		{ Kind = "Slime", Position = Vector3.new(15, 5, 155) },
-		{ Kind = "Slime", Position = Vector3.new(-15, 5, 155) },
-		{ Kind = "Bandit", Position = Vector3.new(0, 5, 148) },
-	},
-	{
-		{ Kind = "DireWolf", Position = Vector3.new(15, 5, 172) },
-		{ Kind = "DireWolf", Position = Vector3.new(-15, 5, 172) },
-		{ Kind = "Warlock", Position = Vector3.new(0, 5, 178) },
+		-- An "ambush" flavor: more ranged/kiting enemies (Bandit, Warlock)
+		-- instead of Stonebound's melee-heavy trash, capped by the Wilds
+		-- field boss instead of the Golem - a genuinely different fight,
+		-- not just a recolor of the same waves.
+		Name = "Wilds Incursion",
+		BossKind = "AncientTreant",
+		Waves = {
+			{
+				{ Kind = "Bandit", Position = Vector3.new(20, 5, 130) },
+				{ Kind = "Bandit", Position = Vector3.new(-20, 5, 130) },
+				{ Kind = "Slime", Position = Vector3.new(0, 5, 122) },
+				{ Kind = "Skeleton", Position = Vector3.new(12, 5, 118) },
+			},
+			{
+				{ Kind = "DireWolf", Position = Vector3.new(25, 5, 150) },
+				{ Kind = "DireWolf", Position = Vector3.new(-25, 5, 150) },
+				{ Kind = "Bandit", Position = Vector3.new(15, 5, 155) },
+				{ Kind = "Bandit", Position = Vector3.new(-15, 5, 155) },
+				{ Kind = "Skeleton", Position = Vector3.new(0, 5, 148) },
+			},
+			{
+				{ Kind = "Warlock", Position = Vector3.new(15, 5, 172) },
+				{ Kind = "Warlock", Position = Vector3.new(-15, 5, 172) },
+				{ Kind = "DireWolf", Position = Vector3.new(0, 5, 178) },
+			},
+		},
 	},
 }
 

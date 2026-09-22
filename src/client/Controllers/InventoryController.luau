@@ -85,15 +85,30 @@ function InventoryController.Init()
 	list.Padding = UDim.new(0, 4)
 	list.Parent = scroll
 
+	-- Common/Uncommon items have exactly one stat; Rare+ sustain alternatives
+	-- (Thirsting Blade, Bulwark Plating, ...) have two, so this builds a list
+	-- instead of returning on the first match.
 	local function describeItemStat(item)
+		local parts = {}
 		if item.DamageBonus then
-			return string.format("+%d Dmg", item.DamageBonus)
-		elseif item.HealthBonus then
-			return string.format("+%d HP", item.HealthBonus)
-		elseif item.CritChanceBonus then
-			return string.format("+%d%% Crit", math.floor(item.CritChanceBonus * 100 + 0.5))
+			table.insert(parts, string.format("+%d Dmg", item.DamageBonus))
 		end
-		return ""
+		if item.HealthBonus then
+			table.insert(parts, string.format("+%d HP", item.HealthBonus))
+		end
+		if item.CritChanceBonus then
+			table.insert(parts, string.format("+%d%% Crit", math.floor(item.CritChanceBonus * 100 + 0.5)))
+		end
+		if item.LifestealPercent then
+			table.insert(parts, string.format("+%d%% Lifesteal", math.floor(item.LifestealPercent * 100 + 0.5)))
+		end
+		if item.DamageReductionPercent then
+			table.insert(parts, string.format("+%d%% Dmg Reduction", math.floor(item.DamageReductionPercent * 100 + 0.5)))
+		end
+		if item.CooldownReductionPercent then
+			table.insert(parts, string.format("+%d%% Cooldown Reduction", math.floor(item.CooldownReductionPercent * 100 + 0.5)))
+		end
+		return table.concat(parts, ", ")
 	end
 
 	local function describeEquipped(equipped, inventory)
