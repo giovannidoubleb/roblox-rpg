@@ -1,7 +1,9 @@
 --[[
 	Hit/level-up/damage-taken feedback: floating damage numbers where your
-	attacks land, a hit sound, a red screen flash when you take damage, and
-	a level-up burst (flash + sound + toast).
+	attacks land, a hit sound, a red screen flash when you take damage, a
+	level-up burst (flash + sound + toast), and camera shake + particle
+	sparks so every hit reads as satisfying - pure presentation, no change
+	to the underlying combat numbers.
 ]]
 
 local Players = game:GetService("Players")
@@ -12,6 +14,8 @@ local Workspace = game:GetService("Workspace")
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local ToastController = require(script.Parent.ToastController)
 local Sfx = require(script.Parent.Parent.Sfx)
+local Shake = require(script.Parent.Parent.Shake)
+local Particles = require(script.Parent.Parent.Particles)
 
 local FeedbackController = {}
 
@@ -103,6 +107,7 @@ local function trackDamageTaken(character: Model)
 	humanoid.HealthChanged:Connect(function(newHealth)
 		if newHealth < lastHealth then
 			flashDamage()
+			Shake.Trigger(math.clamp((lastHealth - newHealth) / 40, 0.1, 0.5))
 		end
 		lastHealth = newHealth
 	end)
@@ -112,11 +117,20 @@ function FeedbackController.Init()
 	Remotes.DamageDealt.OnClientEvent:Connect(function(worldPosition, amount, isCrit)
 		showDamageNumber(worldPosition, amount, isCrit)
 		Sfx.Play(Sfx.Ids.Hit, isCrit and 0.6 or 0.35)
+		Particles.Burst(worldPosition, isCrit and Color3.fromRGB(255, 210, 60) or Color3.new(1, 1, 1), isCrit and 14 or 6)
+		Shake.Trigger(isCrit and 0.35 or 0.12)
 	end)
 
 	Remotes.LevelUp.OnClientEvent:Connect(function(level)
 		flashLevelUp()
 		Sfx.Play(Sfx.Ids.LevelUp, 0.6)
+		Shake.Trigger(0.6)
+		if player.Character then
+			local root = player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			if root then
+				Particles.Burst(root.Position, Color3.fromRGB(255, 220, 120), 30, 12)
+			end
+		end
 		ToastController.Show("Level Up! You are now level " .. level, Color3.fromRGB(255, 220, 120))
 	end)
 

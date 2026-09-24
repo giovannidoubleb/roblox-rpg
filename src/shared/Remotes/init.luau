@@ -35,6 +35,8 @@ local EVENT_NAMES = {
 	"RequestZoneTravel",
 	"OpenDailyPanel",
 	"OpenMerchantPanel",
+	"RequestSetLanguage",
+	"RequestMarkOnboarded",
 }
 
 local function getOrCreateFolder(): Folder

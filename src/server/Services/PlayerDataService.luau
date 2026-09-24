@@ -13,6 +13,7 @@ local TextService = game:GetService("TextService")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local ItemDatabase = require(ReplicatedStorage.Shared.Modules.ItemDatabase)
+local Localization = require(ReplicatedStorage.Shared.Modules.Localization)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local PlayerProfileStore = require(script.Parent.PlayerProfileStore)
 
@@ -64,6 +65,15 @@ local function defaultData()
 		FounderPerkGranted = false,
 
 		CraftPending = nil,
+
+		Settings = { Language = "en" },
+		HasOnboarded = false,
+
+		-- Userids of friends this player has already been credited for
+		-- joining alongside (see SocialService). Keyed both ways (on the
+		-- inviter's profile and the joiner's) so a pair is only ever
+		-- rewarded once, even across separate sessions or server restarts.
+		RewardedFriendUserIds = {},
 	}
 end
 
@@ -729,6 +739,38 @@ function PlayerDataService.ClaimDailyLogin(player: Player)
 	pushToClient(player)
 end
 
+function PlayerDataService.SetLanguage(player: Player, languageCode: string): boolean
+	local data = profiles[player]
+	if not data or not table.find(Localization.Languages, languageCode) then
+		return false
+	end
+
+	data.Settings.Language = languageCode
+	pushToClient(player)
+	PlayerProfileStore.Save(player.UserId, data)
+	return true
+end
+
+-- True the first time this is called for a given pair (in either order);
+-- records it on both profiles so the reward can never double-fire.
+function PlayerDataService.TryRewardFriendJoin(playerA: Player, playerB: Player): boolean
+	local dataA = profiles[playerA]
+	local dataB = profiles[playerB]
+	if not dataA or not dataB then
+		return false
+	end
+
+	local keyForA = tostring(playerB.UserId)
+	local keyForB = tostring(playerA.UserId)
+	if dataA.RewardedFriendUserIds[keyForA] or dataB.RewardedFriendUserIds[keyForB] then
+		return false
+	end
+
+	dataA.RewardedFriendUserIds[keyForA] = true
+	dataB.RewardedFriendUserIds[keyForB] = true
+	return true
+end
+
 function PlayerDataService.GrantPass(player: Player, passName: string)
 	local data = profiles[player]
 	if not data then
@@ -837,6 +879,18 @@ local function onPlayerRemoving(player: Player)
 	profiles[player] = nil
 end
 
+-- Called once, the first time a player's HUD has actually rendered (client
+-- tells the server after playing its first-10-seconds onboarding), so a
+-- returning player never sees it again.
+function PlayerDataService.MarkOnboarded(player: Player)
+	local data = profiles[player]
+	if not data or data.HasOnboarded then
+		return
+	end
+	data.HasOnboarded = true
+	PlayerProfileStore.Save(player.UserId, data)
+end
+
 function PlayerDataService.Init()
 	Remotes.ClaimDailyLogin.OnServerEvent:Connect(function(player)
 		PlayerDataService.ClaimDailyLogin(player)
@@ -846,6 +900,16 @@ function PlayerDataService.Init()
 		if typeof(instanceId) == "string" then
 			PlayerDataService.EquipItem(player, instanceId)
 		end
+	end)
+
+	Remotes.RequestSetLanguage.OnServerEvent:Connect(function(player, languageCode)
+		if typeof(languageCode) == "string" then
+			PlayerDataService.SetLanguage(player, languageCode)
+		end
+	end)
+
+	Remotes.RequestMarkOnboarded.OnServerEvent:Connect(function(player)
+		PlayerDataService.MarkOnboarded(player)
 	end)
 
 	Players.PlayerAdded:Connect(onPlayerAdded)

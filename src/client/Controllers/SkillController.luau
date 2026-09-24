@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Locale = require(script.Parent.Parent.Locale)
 local UiKit = require(script.Parent.Parent.UiKit)
 
 local SkillController = {}
@@ -42,7 +43,7 @@ function SkillController.Init()
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
 	title.BackgroundTransparency = 1
-	title.Text = "Skills (press K to close)"
+	title.Text = Locale.T("SkillsTitle")
 	title.Font = Enum.Font.GothamBold
 	title.TextSize = 16
 	title.TextColor3 = Color3.new(1, 1, 1)
@@ -110,7 +111,7 @@ function SkillController.Init()
 	respecButton.Size = UDim2.new(1, -20, 0, 28)
 	respecButton.Position = UDim2.new(0, 10, 1, -38)
 	respecButton.BackgroundColor3 = Color3.fromRGB(150, 70, 70)
-	respecButton.Text = "Respec (uses a Stat Respec Token)"
+	respecButton.Text = Locale.T("RespecButton")
 	respecButton.Font = Enum.Font.GothamBold
 	respecButton.TextSize = 12
 	respecButton.TextColor3 = Color3.new(1, 1, 1)
@@ -122,13 +123,17 @@ function SkillController.Init()
 	end)
 
 	local function refresh(data)
-		pointsLabel.Text = string.format("Unspent points: %d", data.SkillPoints)
+		pointsLabel.Text = string.format(Locale.T("UnspentPoints"), data.SkillPoints)
 		for statName, row in rows do
 			row.Value.Text = tostring(data.AllocatedSkills[statName])
 		end
 	end
 
 	Remotes.PlayerDataUpdated.OnClientEvent:Connect(refresh)
+	Locale.OnChanged(function()
+		title.Text = Locale.T("SkillsTitle")
+		respecButton.Text = Locale.T("RespecButton")
+	end)
 
 	ContextActionService:BindAction("ToggleSkills", function(_name, inputState)
 		if inputState == Enum.UserInputState.Begin then

@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Locale = require(script.Parent.Parent.Locale)
 local UiKit = require(script.Parent.Parent.UiKit)
 
 local CraftingController = {}
@@ -35,11 +36,14 @@ function CraftingController.Init()
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
 	title.BackgroundTransparency = 1
-	title.Text = "Crafting (press C to close)"
+	title.Text = Locale.T("CraftingTitle")
 	title.Font = Enum.Font.GothamBold
 	title.TextSize = 16
 	title.TextColor3 = Color3.new(1, 1, 1)
 	title.Parent = panel
+	Locale.OnChanged(function()
+		title.Text = Locale.T("CraftingTitle")
+	end)
 
 	local statusLabel = Instance.new("TextLabel")
 	statusLabel.Size = UDim2.new(1, -20, 0, 20)
@@ -74,7 +78,7 @@ function CraftingController.Init()
 		button.Size = UDim2.new(0, 64, 0, 24)
 		button.Position = UDim2.new(1, -70, 0, 5)
 		button.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
-		button.Text = "Craft"
+		button.Text = Locale.T("CraftButton")
 		button.Font = Enum.Font.GothamBold
 		button.TextSize = 12
 		button.TextColor3 = Color3.new(1, 1, 1)

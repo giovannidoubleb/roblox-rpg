@@ -12,6 +12,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Locale = require(script.Parent.Parent.Locale)
 local UiKit = require(script.Parent.Parent.UiKit)
 
 local NicknameController = {}
@@ -77,11 +78,14 @@ local function buildPanel(screenGui: ScreenGui)
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
 	title.BackgroundTransparency = 1
-	title.Text = "Set Nickname (press N to close)"
+	title.Text = Locale.T("NicknameTitle")
 	title.Font = Enum.Font.GothamBold
 	title.TextSize = 14
 	title.TextColor3 = Color3.new(1, 1, 1)
 	title.Parent = panel
+	Locale.OnChanged(function()
+		title.Text = Locale.T("NicknameTitle")
+	end)
 
 	local textBox = Instance.new("TextBox")
 	textBox.Size = UDim2.new(1, -20, 0, 30)
@@ -99,7 +103,7 @@ local function buildPanel(screenGui: ScreenGui)
 	submit.Size = UDim2.new(1, -20, 0, 28)
 	submit.Position = UDim2.new(0, 10, 0, 74)
 	submit.BackgroundColor3 = Color3.fromRGB(70, 130, 200)
-	submit.Text = "Set Nickname"
+	submit.Text = Locale.T("SetNicknameButton")
 	submit.Font = Enum.Font.GothamBold
 	submit.TextSize = 13
 	submit.TextColor3 = Color3.new(1, 1, 1)
@@ -110,6 +114,10 @@ local function buildPanel(screenGui: ScreenGui)
 		if #textBox.Text > 0 then
 			Remotes.RequestSetNickname:FireServer(textBox.Text)
 		end
+	end)
+
+	Locale.OnChanged(function()
+		submit.Text = Locale.T("SetNicknameButton")
 	end)
 
 	return panel

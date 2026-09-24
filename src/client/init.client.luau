@@ -1,7 +1,11 @@
 --[[
-	Client entry point. Boots all client-side controllers. ToastController
-	goes first since LootController/NotifyController both feed into it.
+	Client entry point. Boots all client-side controllers. PerformanceController
+	goes first (nothing else depends on Init having run, but it should own
+	graphics settings before anything renders), then ToastController since
+	LootController/NotifyController both feed into it.
 ]]
+
+local PerformanceController = require(script.PerformanceController)
 
 local ToastController = require(script.Controllers.ToastController)
 local HudController = require(script.Controllers.HudController)
@@ -19,6 +23,11 @@ local ZoneController = require(script.Controllers.ZoneController)
 local SeasonController = require(script.Controllers.SeasonController)
 local NicknameController = require(script.Controllers.NicknameController)
 local CosmeticController = require(script.Controllers.CosmeticController)
+local SettingsController = require(script.Controllers.SettingsController)
+local InviteController = require(script.Controllers.InviteController)
+local OnboardingController = require(script.Controllers.OnboardingController)
+
+PerformanceController.Init()
 
 ToastController.Init()
 HudController.Init()
@@ -36,3 +45,6 @@ ZoneController.Init()
 SeasonController.Init()
 NicknameController.Init()
 CosmeticController.Init()
+SettingsController.Init()
+InviteController.Init()
+OnboardingController.Init()
