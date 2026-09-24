@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Locale = require(script.Parent.Parent.Locale)
 local UiKit = require(script.Parent.Parent.UiKit)
 
 local MerchantController = {}
@@ -35,11 +36,14 @@ function MerchantController.Init()
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
 	title.BackgroundTransparency = 1
-	title.Text = "Merchant (press B to close)"
+	title.Text = Locale.T("MerchantTitle")
 	title.Font = Enum.Font.GothamBold
 	title.TextSize = 16
 	title.TextColor3 = Color3.new(1, 1, 1)
 	title.Parent = panel
+	Locale.OnChanged(function()
+		title.Text = Locale.T("MerchantTitle")
+	end)
 
 	local gemsLabel = Instance.new("TextLabel")
 	gemsLabel.Size = UDim2.new(1, -20, 0, 20)

@@ -13,6 +13,11 @@
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- Streams in terrain/instances near each player instead of loading the
+-- whole map for everyone at once - cuts client memory and initial-load cost
+-- on mobile/low-end devices, which only grows as more zones get added.
+Workspace.StreamingEnabled = true
+
 local function safeRequire(path: Instance)
 	local ok, result = pcall(require, path)
 	if not ok then
@@ -70,6 +75,7 @@ local NpcService = safeRequire(script.Services.NpcService)
 local ProgressionService = safeRequire(script.Services.ProgressionService)
 local CraftingService = safeRequire(script.Services.CraftingService)
 local CompanionService = safeRequire(script.Services.CompanionService)
+local SocialService = safeRequire(script.Services.SocialService)
 
 safeInit("MapService", MapService)
 safeInit("PlayerDataService", PlayerDataService)
@@ -81,6 +87,7 @@ safeInit("NpcService", NpcService)
 safeInit("ProgressionService", ProgressionService)
 safeInit("CraftingService", CraftingService)
 safeInit("CompanionService", CompanionService)
+safeInit("SocialService", SocialService)
 
 if EnemyService then
 	EnemyService.SetOnEnemyDied(function(enemy, tierName, killer)

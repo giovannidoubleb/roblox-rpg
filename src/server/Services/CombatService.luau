@@ -6,11 +6,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
 local PlayerDataService = require(script.Parent.PlayerDataService)
+local EnemyService = require(script.Parent.EnemyService)
 
 local CombatService = {}
 
@@ -18,14 +18,17 @@ local lastAttackAt: { [Player]: number } = {}
 local lastSkillAt: { [Player]: { [string]: number } } = {}
 local ultimateMeter: { [Player]: number } = {}
 
+-- Reads EnemyService's maintained registry instead of scanning every
+-- top-level Workspace child on every single attack/skill/ultimate request -
+-- that scan (bolts, telegraph rings, damage-number anchors and all) used to
+-- run once per player per attack and was the single biggest avoidable
+-- server-side cost in combat.
 local function livingEnemies()
 	local enemies = {}
-	for _, model in Workspace:GetChildren() do
-		if model:IsA("Model") and model:GetAttribute("Tier") then
-			local humanoid = model:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health > 0 and model.PrimaryPart then
-				table.insert(enemies, model)
-			end
+	for _, model in EnemyService.GetActiveEnemies() do
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 and model.PrimaryPart then
+			table.insert(enemies, model)
 		end
 	end
 	return enemies

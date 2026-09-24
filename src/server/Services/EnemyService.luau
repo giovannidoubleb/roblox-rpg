@@ -40,6 +40,13 @@ local EnemyService = {}
 -- regen has nothing to do with a bug, it's an aggro-range balance problem).
 local AGGRO_RANGE = 20
 local AI_TICK_SECONDS = 0.5
+-- LOD: an enemy nobody is anywhere near (e.g. Hub trash while everyone is in
+-- the Wilds or the dungeon instance) has nothing useful to compute every
+-- 0.5s - it can't aggro, attack, or move toward anyone. Falling back to a
+-- slow idle tick for those keeps the always-on field spawns across two zones
+-- from burning CPU on players that aren't there.
+local IDLE_CHECK_RADIUS = 100
+local IDLE_TICK_SECONDS = 2.5
 local BOLT_TRAVEL_SECONDS = 0.2
 local TELEGRAPH_COLOR = Color3.fromRGB(255, 235, 90)
 local SLAM_TELEGRAPH_COLOR = Color3.fromRGB(255, 80, 80)
@@ -48,6 +55,23 @@ local onEnemyDied: (enemy: Model, tierName: string, killer: Player?) -> () = fun
 
 function EnemyService.SetOnEnemyDied(callback)
 	onEnemyDied = callback
+end
+
+-- Live registry of currently-spawned enemy models, maintained incrementally
+-- on spawn/death. CombatService used to rebuild this list by scanning every
+-- top-level Workspace child (bolts, telegraph rings, damage-number anchors,
+-- other enemies) on *every single attack request from every player* - the
+-- main source of avoidable server lag once more than a handful of enemies
+-- and players were in play. Reading from this table instead is O(active
+-- enemies) instead of O(everything ever parented to Workspace).
+local activeEnemies: { [Model]: boolean } = {}
+
+function EnemyService.GetActiveEnemies(): { Model }
+	local list = {}
+	for enemy in activeEnemies do
+		list[#list + 1] = enemy
+	end
+	return list
 end
 
 local function fireBolt(fromPosition: Vector3, toPosition: Vector3, color: Color3)
@@ -140,6 +164,17 @@ local function nearestPlayerCharacter(fromPosition: Vector3)
 	end
 
 	return closest, closestDistance
+end
+
+local function anyPlayerWithin(fromPosition: Vector3, radius: number): boolean
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		local hrp = character and character:FindFirstChild("HumanoidRootPart")
+		if hrp and (hrp.Position - fromPosition).Magnitude <= radius then
+			return true
+		end
+	end
+	return false
 end
 
 local function livingHumanoid(character: Model?): Humanoid?
@@ -247,6 +282,11 @@ local function runAi(model: Model, kindName: string)
 	end
 
 	while model.Parent and humanoid.Health > 0 do
+		if not anyPlayerWithin(root.Position, IDLE_CHECK_RADIUS) then
+			task.wait(IDLE_TICK_SECONDS)
+			continue
+		end
+
 		task.wait(AI_TICK_SECONDS)
 		if not model.Parent then
 			break
@@ -314,6 +354,7 @@ function EnemyService.Spawn(
 
 	model:PivotTo(CFrame.new(position))
 	model.Parent = Workspace
+	activeEnemies[model] = true
 
 	local humanoid = model:FindFirstChildOfClass("Humanoid") :: Humanoid
 	local tierName = Config.EnemyKinds[kindName].Tier
@@ -328,6 +369,7 @@ function EnemyService.Spawn(
 	end)
 
 	humanoid.Died:Connect(function()
+		activeEnemies[model] = nil
 		onEnemyDied(model, tierName, killer)
 		task.delay(0.5, function()
 			model:Destroy()

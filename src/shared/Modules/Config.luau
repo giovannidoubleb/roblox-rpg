@@ -276,6 +276,14 @@ Config.Season = {
 	},
 }
 
+-- "Invite a friend" reward: granted once per unique friend pair, and only
+-- when the invited friend actually joins a server with the inviter present
+-- - never for merely sending an invite - per Roblox's rules on this kind of
+-- mechanic. See SocialService.
+Config.Social = {
+	FriendJoinRewardGems = 75,
+}
+
 Config.Zones = {
 	Hub = { DisplayName = "Hub" },
 	Wilds = { DisplayName = "The Wilds" },

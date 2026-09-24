@@ -11,6 +11,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Modules.Config)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
+local Locale = require(script.Parent.Parent.Locale)
 local UiKit = require(script.Parent.Parent.UiKit)
 
 local ZoneController = {}
@@ -36,11 +37,14 @@ function ZoneController.Init()
 	local title = Instance.new("TextLabel")
 	title.Size = UDim2.new(1, 0, 0, 30)
 	title.BackgroundTransparency = 1
-	title.Text = "Travel (press M to close)"
+	title.Text = Locale.T("ZonesTitle")
 	title.Font = Enum.Font.GothamBold
 	title.TextSize = 16
 	title.TextColor3 = Color3.new(1, 1, 1)
 	title.Parent = panel
+	Locale.OnChanged(function()
+		title.Text = Locale.T("ZonesTitle")
+	end)
 
 	local list = Instance.new("Frame")
 	list.Position = UDim2.new(0, 10, 0, 36)
@@ -83,7 +87,7 @@ function ZoneController.Init()
 			button.Size = UDim2.new(0, 60, 0, 20)
 			button.Position = UDim2.new(1, -64, 0, 3)
 			button.BackgroundColor3 = discovered and Color3.fromRGB(70, 130, 200) or Color3.fromRGB(60, 60, 60)
-			button.Text = "Travel"
+			button.Text = Locale.T("TravelButton")
 			button.Font = Enum.Font.GothamBold
 			button.TextSize = 11
 			button.TextColor3 = Color3.new(1, 1, 1)
