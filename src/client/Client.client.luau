@@ -11,6 +11,21 @@ local player = Players.LocalPlayer
 
 Movement.start()
 HUD.start()
+
+-- Phase 3 life systems. They start before the phone so their apps
+-- (Phone.addApp) land on the home screen.
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+	local module = script:FindFirstChild(name)
+	if module then
+		local ok, err = pcall(function()
+			require(module).start()
+		end)
+		if not ok then
+			warn("[CityGrind] " .. name .. " failed to start:", err)
+		end
+	end
+end
+
 Phone.start()
 Basketball.start()
 

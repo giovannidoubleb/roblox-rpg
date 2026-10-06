@@ -5,28 +5,56 @@
     "ReplicatedStorage": {
       "CityGrind": {
         "$className": "Folder",
-        "Config": { "$path": "src/shared/Config.luau" }
+        "Config": {
+          "$path": "src/shared/Config.luau"
+        }
       }
     },
     "ServerScriptService": {
       "CityGrindServer": {
         "$path": "src/server/Main.server.luau",
-        "PlayerData": { "$path": "src/server/PlayerData.luau" },
-        "CityBuilder": { "$path": "src/server/CityBuilder.luau" },
-        "Basketball": { "$path": "src/server/Basketball.luau" },
-        "CourtGames": { "$path": "src/server/CourtGames.luau" }
+        "Basketball": {
+          "$path": "src/server/Basketball.luau"
+        },
+        "CityBuilder": {
+          "$path": "src/server/CityBuilder.luau"
+        },
+        "CourtGames": {
+          "$path": "src/server/CourtGames.luau"
+        },
+        "Net": {
+          "$path": "src/server/Net.luau"
+        },
+        "Places": {
+          "$path": "src/server/Places.luau"
+        },
+        "PlayerData": {
+          "$path": "src/server/PlayerData.luau"
+        }
       }
     },
     "StarterPlayer": {
-      "$properties": { "EnableMouseLockOption": false },
+      "$properties": {
+        "EnableMouseLockOption": false
+      },
       "StarterPlayerScripts": {
         "CityGrindClient": {
           "$path": "src/client/Client.client.luau",
-          "UI": { "$path": "src/client/UI.luau" },
-          "Movement": { "$path": "src/client/Movement.luau" },
-          "HUD": { "$path": "src/client/HUD.luau" },
-          "Phone": { "$path": "src/client/Phone.luau" },
-          "Basketball": { "$path": "src/client/Basketball.luau" }
+          "Basketball": {
+            "$path": "src/client/Basketball.luau"
+          },
+          "HUD": {
+            "$path": "src/client/HUD.luau"
+          },
+          "Movement": {
+            "$path": "src/client/Movement.luau"
+          },
+          "Phone": {
+            "$path": "src/client/Phone.luau"
+          },
+          "UI": {
+            "$path": "src/client/UI.luau"
+          }
         }
       }
     }

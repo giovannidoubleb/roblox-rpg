@@ -1,4 +1,4 @@
--- CITY GRIND Phase 1 installer. Paste all of this into Studio's Command Bar
+-- CITY GRIND installer. Paste all of this into Studio's Command Bar
 -- (View > Command Bar) and press Enter. Re-running it updates the scripts in place.
 local function put(parent, className, name, source)
 	local existing = parent:FindFirstChild(name)
@@ -156,16 +156,9 @@ local CourtGames = require(script:WaitForChild("CourtGames"))
 ---------------------------------------------------------------------------
 -- Remotes
 ---------------------------------------------------------------------------
-local remotes = shared:FindFirstChild("Remotes") or Instance.new("Folder")
-remotes.Name = "Remotes"
-remotes.Parent = shared
-
-local function remote(className: string, name: string): any
-	local r = remotes:FindFirstChild(name) or Instance.new(className)
-	r.Name = name
-	r.Parent = remotes
-	return r
-end
+local Net = require(script:WaitForChild("Net"))
+local remote = Net.remote
+local allow = Net.allow
 
 local Notify = remote("RemoteEvent", "Notify") -- server -> client (title, body)
 local StaminaRefill = remote("RemoteEvent", "StaminaRefill") -- server -> client
@@ -174,22 +167,6 @@ local GetProfile = remote("RemoteFunction", "GetProfile") -- client -> server
 local SetSetting = remote("RemoteFunction", "SetSetting") -- client -> server (key, value)
 local BallAction = remote("RemoteEvent", "BallAction") -- client -> server (action)
 local BallFx = remote("RemoteEvent", "BallFx") -- server -> client (kind, ...)
-
--- Simple per-player cooldowns so no remote can be spammed.
-local lastCall: { [Player]: { [string]: number } } = {}
-local function allow(player: Player, key: string, cooldown: number): boolean
-	local now = os.clock()
-	local calls = lastCall[player]
-	if not calls then
-		calls = {}
-		lastCall[player] = calls
-	end
-	if calls[key] and now - calls[key] < cooldown then
-		return false
-	end
-	calls[key] = now
-	return true
-end
 
 PlayerData.onNotify.Event:Connect(function(player: Player, title: string, body: string)
 	Notify:FireClient(player, title, body)
@@ -437,6 +414,21 @@ end)
 CourtGames.start()
 
 ---------------------------------------------------------------------------
+-- Phase 3 life systems. Each one builds its own places and remotes.
+---------------------------------------------------------------------------
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+	local module = script:FindFirstChild(name)
+	if module then
+		local ok, err = pcall(function()
+			require(module).start(city.city)
+		end)
+		if not ok then
+			warn("[CityGrind] " .. name .. " failed to start:", err)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
 -- Player lifecycle
 ---------------------------------------------------------------------------
 -- Shift is Sprint, so turn off Roblox's Shift-to-lock-mouse toggle.
@@ -463,7 +455,6 @@ end
 Players.PlayerRemoving:Connect(function(player)
 	runs[player] = nil
 	runCooldownUntil[player] = nil
-	lastCall[player] = nil
 end)
 
 PlayerData.start()
@@ -488,401 +479,698 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 end)
 ]=====])
-put(server, 'ModuleScript', 'PlayerData', [=====[
--- CITY GRIND: server-authoritative player data.
--- The server owns every number. Clients only ever see copies through
--- Player attributes (read-only for them) and the GetProfile remote.
+put(server, 'ModuleScript', 'Basketball', [=====[
+-- CITY GRIND: server-owned basketballs (section 70).
+-- Possession, dribbling, shooting, passing, stealing, blocking and scoring all
+-- happen here. The client only says "I pressed shoot / released / pass / steal";
+-- the server times the release itself and decides every outcome.
 
-local DataStoreService = game:GetService("DataStoreService")
-local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local PhysicsService = game:GetService("PhysicsService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local B = Config.Ball
 
-local PlayerData = {}
+local Basketball = {}
 
-local SERVER_ID = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
+export type Hoop = { model: Model, rim: Vector3, radius: number, court: Model?, side: string }
+export type Shot = { shooter: Player, points: number, kind: string, perfect: boolean, at: number, contestedBy: Player? }
+export type Ball = {
+	part: BasePart,
+	force: VectorForce,
+	holder: Player?,
+	weld: Weld?,
+	lastHolder: Player?,
+	court: Model?, -- the court a free-play ball belongs to
+	gameCourt: Model?, -- set while the ball is the game ball of a court
+	owner: Player?,
+	shot: Shot?,
+	shootingSince: number?,
+	regrab: { [Player]: number },
+	lastPos: Vector3,
+	scoreDebounce: number,
+	lastActive: number,
+}
 
-local store: DataStore? = nil
-do
-	local ok, result = pcall(function()
-		return DataStoreService:GetDataStore(Config.DATASTORE_NAME)
-	end)
-	if ok then
-		store = result
-	else
-		warn("[CityGrind] DataStore unavailable, progress will NOT save this session:", result)
+local balls: { [Ball]: boolean } = {}
+local heldBy: { [Player]: Ball } = {}
+local hoops: { Hoop } = {}
+local stealCooldown: { [Player]: number } = {}
+local trainCooldown: { [Player]: { [string]: number } } = {}
+local rng = Random.new()
+
+local ballFolder = Instance.new("Folder")
+ballFolder.Name = "Basketballs"
+ballFolder.Parent = workspace
+
+---------------------------------------------------------------------------
+-- Collision groups: the ball never collides with characters, so it can't be
+-- body-blocked into glitches or used to fling people.
+---------------------------------------------------------------------------
+local BALL_GROUP, CHARACTER_GROUP = "CityBall", "CityCharacters"
+pcall(function()
+	PhysicsService:RegisterCollisionGroup(BALL_GROUP)
+end)
+pcall(function()
+	PhysicsService:RegisterCollisionGroup(CHARACTER_GROUP)
+end)
+PhysicsService:CollisionGroupSetCollidable(BALL_GROUP, CHARACTER_GROUP, false)
+
+function Basketball.tagCharacter(character: Model)
+	local function tag(d: Instance)
+		if d:IsA("BasePart") then
+			d.CollisionGroup = CHARACTER_GROUP
+		end
 	end
+	for _, d in character:GetDescendants() do
+		tag(d)
+	end
+	character.DescendantAdded:Connect(tag)
 end
 
-local profiles: { [Player]: any } = {}
-local dirty: { [Player]: boolean } = {}
-local loadFailed: { [Player]: boolean } = {}
-
--- Fired as (player, title, body). Main wires this to the Notify remote.
-PlayerData.onNotify = Instance.new("BindableEvent")
-
-local function defaultProfile()
-	local stats = {}
-	for _, stat in Config.STATS do
-		stats[stat] = 1
-	end
-	local statXP = {}
-	for _, stat in Config.STATS do
-		statXP[stat] = 0
-	end
+---------------------------------------------------------------------------
+-- Tiny signal so listeners get the real ball table (BindableEvents copy tables).
+---------------------------------------------------------------------------
+local function signal()
+	local listeners = {}
 	return {
-		version = 1,
-		cash = Config.STARTING_CASH,
-		xp = 0,
-		level = 1,
-		reputation = 0,
-		fame = 0,
-		stats = stats,
-		statXP = statXP,
-		runsCompleted = 0,
-		bestRunSeconds = 0,
-		basketball = { games = 0, wins = 0, losses = 0, points = 0, threes = 0, dunks = 0, blocks = 0, steals = 0 },
-		transactions = {
-			{ t = os.time(), amount = Config.STARTING_CASH, label = "Welcome to the city" },
-		},
-		settings = { wallpaper = 1, uiScale = 1, notificationSounds = true },
-		firstJoin = os.time(),
+		connect = function(fn)
+			table.insert(listeners, fn)
+		end,
+		fire = function(...)
+			for _, fn in listeners do
+				task.spawn(fn, ...)
+			end
+		end,
 	}
 end
 
--- Fill in any fields added after a player's data was first saved.
-local function reconcile(data: any)
-	local template = defaultProfile()
-	for key, value in template do
-		if data[key] == nil then
-			data[key] = value
-		elseif type(value) == "table" and type(data[key]) == "table" and key ~= "transactions" then
-			for subKey, subValue in value do
-				if data[key][subKey] == nil then
-					data[key][subKey] = subValue
+Basketball.scored = signal() -- (ball, hoop, shot?)
+Basketball.blocked = signal() -- (ball, blocker, shooter)
+Basketball.stolen = signal() -- (ball, stealer, victim)
+Basketball.possession = signal() -- (ball, player?)
+
+-- Set by Main: send big on-screen text ("GAME WINNER!") to these players.
+Basketball.announce = function(_players: { Player }, _text: string) end
+-- Set by Main: tell one client to jump at the rim for a dunk.
+Basketball.dunkJump = function(_player: Player, _rim: Vector3) end
+-- Set by Main: award training progress toward a stat.
+Basketball.onTrain = function(_player: Player, _stat: string, _amount: number) end
+
+-- Rules that depend on whether a game is being played. CourtGames replaces these.
+Basketball.policy = {
+	canHold = function(_player: Player, _ball: Ball): boolean
+		return true
+	end,
+	targetHoop = function(_player: Player, _ball: Ball): Hoop?
+		return nil
+	end,
+	opponents = function(_player: Player, _ball: Ball): { Player }
+		return {}
+	end,
+	passTargets = function(player: Player, _ball: Ball): { Player }
+		local list = {}
+		for _, other in Players:GetPlayers() do
+			if other ~= player then
+				table.insert(list, other)
+			end
+		end
+		return list
+	end,
+	canSteal = function(_player: Player, _victim: Player, _ball: Ball): boolean
+		return true
+	end,
+}
+
+function Basketball.registerHoop(hoop: Hoop)
+	table.insert(hoops, hoop)
+end
+
+function Basketball.heldBall(player: Player): Ball?
+	return heldBy[player]
+end
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function humanoidOf(player: Player): Humanoid?
+	local character = player.Character
+	return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function canAct(player: Player): boolean
+	local humanoid = humanoidOf(player)
+	return humanoid ~= nil and humanoid.Health > 0 and humanoid.SeatPart == nil and rootOf(player) ~= nil
+end
+
+local function flat(v: Vector3): Vector3
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+local function stat(player: Player, name: string): number
+	return player:GetAttribute(name) or 1
+end
+
+-- Small training rewards, throttled so spamming shots doesn't farm stats.
+local function train(player: Player, statName: string, amount: number)
+	local now = os.clock()
+	local cooldowns = trainCooldown[player]
+	if not cooldowns then
+		cooldowns = {}
+		trainCooldown[player] = cooldowns
+	end
+	if cooldowns[statName] and now - cooldowns[statName] < 2 then
+		return
+	end
+	cooldowns[statName] = now
+	Basketball.onTrain(player, statName, amount)
+end
+Basketball.train = train
+
+local function nearestHoop(position: Vector3): (Hoop?, number)
+	local best, bestDist = nil, math.huge
+	for _, hoop in hoops do
+		local d = flat(hoop.rim - position).Magnitude
+		if d < bestDist then
+			best, bestDist = hoop, d
+		end
+	end
+	return best, bestDist
+end
+
+-- Velocity that carries the ball from `from` to `to` in `t` seconds under ball gravity.
+local function launchVelocity(from: Vector3, to: Vector3, t: number): Vector3
+	return (to - from) / t + Vector3.new(0, 0.5 * B.GRAVITY * t, 0)
+end
+
+---------------------------------------------------------------------------
+-- Ball lifecycle
+---------------------------------------------------------------------------
+function Basketball.newBall(position: Vector3): Ball
+	local part = Instance.new("Part")
+	part.Name = "Basketball"
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.one * B.DIAMETER
+	part.Color = Color3.fromRGB(230, 110, 30)
+	part.Material = Enum.Material.Rubber
+	part.CustomPhysicalProperties = PhysicalProperties.new(0.35, 0.6, 0.78, 1, 1)
+	part.CollisionGroup = BALL_GROUP
+	part.CFrame = CFrame.new(position)
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	-- two thin dark discs, slightly wider than the ball, read as seams
+	for _, rot in { CFrame.Angles(0, 0, 0), CFrame.Angles(0, math.pi / 2, 0) } do
+		local seam = Instance.new("Part")
+		seam.Name = "Seam"
+		seam.Size = Vector3.new(0.05, B.DIAMETER + 0.03, B.DIAMETER + 0.03)
+		seam.Color = Color3.fromRGB(30, 20, 15)
+		seam.Material = Enum.Material.SmoothPlastic
+		seam.CanCollide = false
+		seam.CanQuery = false
+		seam.CanTouch = false
+		seam.Massless = true
+		seam.CollisionGroup = BALL_GROUP
+		seam.CFrame = part.CFrame * rot
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = seam
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = part
+		weld.Part1 = seam
+		weld.Parent = seam
+		seam.Parent = part
+	end
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = part
+	local force = Instance.new("VectorForce")
+	force.Attachment0 = attachment
+	force.RelativeTo = Enum.ActuatorRelativeTo.World
+	force.ApplyAtCenterOfMass = true
+	force.Parent = part
+	part.Parent = ballFolder
+	force.Force = Vector3.new(0, part:GetMass() * (workspace.Gravity - B.GRAVITY), 0)
+	pcall(part.SetNetworkOwner, part, nil)
+
+	local ball: Ball = {
+		part = part,
+		force = force,
+		regrab = {},
+		lastPos = position,
+		scoreDebounce = 0,
+		lastActive = os.clock(),
+	}
+	balls[ball] = true
+	return ball
+end
+
+local function detach(ball: Ball)
+	local holder = ball.holder
+	if ball.weld then
+		ball.weld:Destroy()
+		ball.weld = nil
+	end
+	if holder then
+		heldBy[holder] = nil
+		if holder.Parent then
+			holder:SetAttribute("HasBall", false)
+		end
+		ball.lastHolder = holder
+	end
+	ball.holder = nil
+	ball.shootingSince = nil
+	ball.part.Massless = false
+	ball.part.CanCollide = true
+	ball.force.Enabled = true
+	pcall(ball.part.SetNetworkOwner, ball.part, nil)
+end
+
+function Basketball.give(ball: Ball, player: Player)
+	local root = rootOf(player)
+	if not root then
+		return
+	end
+	if heldBy[player] and heldBy[player] ~= ball then
+		return
+	end
+	detach(ball)
+	ball.part.CanCollide = false
+	ball.part.Massless = true
+	ball.force.Enabled = false
+	ball.part.CFrame = root.CFrame * CFrame.new(1.1, -1.5, -1.3)
+	local weld = Instance.new("Weld")
+	weld.Part0 = root
+	weld.Part1 = ball.part
+	weld.C0 = CFrame.new(1.1, -1.5, -1.3)
+	weld.Parent = ball.part
+	ball.weld = weld
+	ball.holder = player
+	ball.lastHolder = player
+	ball.shot = nil
+	ball.lastActive = os.clock()
+	heldBy[player] = ball
+	player:SetAttribute("HasBall", true)
+	Basketball.possession.fire(ball, player)
+end
+
+function Basketball.drop(ball: Ball)
+	local holder = ball.holder
+	local root = holder and rootOf(holder)
+	detach(ball)
+	if root then
+		ball.part.CFrame = CFrame.new(root.Position + root.CFrame.LookVector * 2)
+	end
+	ball.part.AssemblyLinearVelocity = Vector3.zero
+	Basketball.possession.fire(ball, nil)
+end
+
+function Basketball.destroy(ball: Ball)
+	if not balls[ball] then
+		return
+	end
+	detach(ball)
+	balls[ball] = nil
+	ball.part:Destroy()
+end
+
+function Basketball.moveTo(ball: Ball, position: Vector3)
+	detach(ball)
+	ball.part.CFrame = CFrame.new(position)
+	ball.part.AssemblyLinearVelocity = Vector3.zero
+	ball.part.AssemblyAngularVelocity = Vector3.zero
+	ball.lastPos = position
+end
+
+local function launch(ball: Ball, from: Vector3, velocity: Vector3, spin: Vector3?)
+	detach(ball)
+	ball.part.CFrame = CFrame.new(from)
+	ball.part.AssemblyLinearVelocity = velocity
+	ball.part.AssemblyAngularVelocity = spin or Vector3.zero
+	ball.lastPos = from
+	ball.lastActive = os.clock()
+end
+
+function Basketball.balls(): { [Ball]: boolean }
+	return balls
+end
+
+---------------------------------------------------------------------------
+-- Shooting
+---------------------------------------------------------------------------
+function Basketball.shootStart(player: Player)
+	local ball = heldBy[player]
+	if not ball or ball.shootingSince or not canAct(player) then
+		return
+	end
+	ball.shootingSince = os.clock()
+end
+
+local function nearestOpponent(player: Player, ball: Ball, position: Vector3): (Player?, number)
+	local best, bestDist = nil, math.huge
+	for _, other in Basketball.policy.opponents(player, ball) do
+		local r = rootOf(other)
+		if r and canAct(other) then
+			local d = flat(r.Position - position).Magnitude
+			if d < bestDist then
+				best, bestDist = other, d
+			end
+		end
+	end
+	return best, bestDist
+end
+
+local function shoot(player: Player, ball: Ball, held: number)
+	local root = rootOf(player)
+	local humanoid = humanoidOf(player)
+	if not root or not humanoid then
+		return
+	end
+	local hoop = Basketball.policy.targetHoop(player, ball)
+	local dist
+	if hoop then
+		dist = flat(hoop.rim - root.Position).Magnitude
+	else
+		hoop, dist = nearestHoop(root.Position)
+	end
+	local look = flat(root.CFrame.LookVector)
+	look = if look.Magnitude > 0.01 then look.Unit else Vector3.new(0, 0, -1)
+	local from = root.Position + Vector3.new(0, 2.6, 0) + look * 0.8
+
+	if not hoop or dist > B.MAX_SHOT_RANGE then
+		-- Nowhere to shoot: just toss it forward.
+		launch(ball, from, launchVelocity(from, from + look * 20 + Vector3.new(0, -2, 0), 0.9))
+		ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+		return
+	end
+
+	local offBy = math.abs(held - B.PERFECT_RELEASE)
+	local timing = math.clamp(1 - offBy / B.RELEASE_WINDOW, 0, 1)
+	local perfect = offBy <= B.PERFECT_TOLERANCE
+	local moving = flat(root.AssemblyLinearVelocity).Magnitude
+	local airborne = humanoid.FloorMaterial == Enum.Material.Air
+
+	local kind
+	if dist <= B.DUNK_RANGE and (moving > 16 or airborne) then
+		kind = "dunk"
+	elseif dist <= 7 then
+		kind = "layup"
+	elseif dist <= B.THREE_POINT_RANGE then
+		kind = "mid"
+	elseif dist <= 26 then
+		kind = "three"
+	else
+		kind = "deep"
+	end
+	local points = if dist > B.THREE_POINT_RANGE + 0.3 then 3 else 2
+
+	local defender, defenderDist = nearestOpponent(player, ball, root.Position)
+
+	-- Block: a jumping defender right on the shooter can swat it.
+	if defender and defenderDist <= B.BLOCK_RANGE then
+		local defHumanoid = humanoidOf(defender)
+		if defHumanoid and defHumanoid.FloorMaterial == Enum.Material.Air then
+			local chance = 0.3 + (stat(defender, "Vertical") + stat(defender, "Defense")) * 0.002 - stat(player, "Vertical") * 0.001
+			if rng:NextNumber() < math.clamp(chance, 0.1, 0.65) then
+				local away = flat(root.Position - hoop.rim)
+				away = if away.Magnitude > 0.01 then away.Unit else -look
+				local side = Vector3.new(-away.Z, 0, away.X) * rng:NextNumber(-12, 12)
+				launch(ball, from + Vector3.new(0, 1, 0), away * 28 + side + Vector3.new(0, 18, 0))
+				ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+				train(defender, "Defense", 6)
+				train(defender, "Vertical", 4)
+				Basketball.blocked.fire(ball, defender, player)
+				return
+			end
+		end
+	end
+
+	local base
+	if kind == "dunk" then
+		base = 0.9
+	elseif kind == "layup" then
+		base = 0.72
+	elseif kind == "mid" then
+		base = 0.52 - (dist - 7) * 0.008
+	elseif kind == "three" then
+		base = 0.36 - (dist - B.THREE_POINT_RANGE) * 0.01
+	else
+		base = math.max(0.04, 0.22 - (dist - 26) * 0.012)
+	end
+	local close = kind == "dunk" or kind == "layup"
+	local statBonus = if close
+		then (stat(player, "Finishing") - 1) * 0.0025 + (stat(player, "Vertical") - 1) * 0.001
+		else (stat(player, "Shooting") - 1) * 0.003
+	local timingFactor = if kind == "dunk" then 1 elseif kind == "layup" then 0.6 + 0.4 * timing else 0.3 + 0.7 * timing
+	local contest = 1
+	if defender and defenderDist < B.CONTEST_RANGE then
+		local closeness = defenderDist / B.CONTEST_RANGE
+		contest = if kind == "dunk" then 0.85 + 0.15 * closeness else 0.55 + 0.45 * closeness
+	end
+	local perfectBonus = if perfect and not close then 0.1 else 0
+	local chance = math.clamp((base + statBonus) * timingFactor * contest + perfectBonus, 0.02, 0.97)
+	local make = rng:NextNumber() < chance
+
+	ball.shot = {
+		shooter = player,
+		points = points,
+		kind = kind,
+		perfect = perfect and make,
+		at = os.clock(),
+		contestedBy = if defender and defenderDist < B.CONTEST_RANGE then defender else nil,
+	}
+	ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+
+	if kind == "dunk" and make then
+		Basketball.dunkJump(player, hoop.rim)
+		detach(ball)
+		ball.part.CFrame = CFrame.new(hoop.rim + Vector3.new(0, 1.8, 0))
+		ball.lastPos = ball.part.Position
+		-- hang above the rim for the jump, then slam it through
+		ball.part.Anchored = true
+		task.delay(0.28, function()
+			if balls[ball] then
+				ball.part.Anchored = false
+				ball.lastPos = ball.part.Position
+				ball.part.AssemblyLinearVelocity = Vector3.new(0, -45, 0)
+			end
+		end)
+		return
+	end
+
+	local target = hoop.rim + Vector3.new(0, 0.05, 0)
+	if not make then
+		-- Clank it off the rim, or airball a badly timed shot.
+		local angle = rng:NextNumber(0, math.pi * 2)
+		local miss = if timing < 0.15 and not close then rng:NextNumber(2.6, 3.6) else rng:NextNumber(1.1, 1.7)
+		target += Vector3.new(math.cos(angle) * miss, 0.2, math.sin(angle) * miss)
+	end
+	local flight = if close then 0.6 else 0.7 + dist * 0.012
+	launch(ball, from, launchVelocity(from, target, flight), root.CFrame.RightVector * -8)
+end
+
+function Basketball.shootRelease(player: Player)
+	local ball = heldBy[player]
+	if not ball or not ball.shootingSince or not canAct(player) then
+		return
+	end
+	local held = os.clock() - ball.shootingSince
+	ball.shootingSince = nil
+	shoot(player, ball, held)
+end
+
+---------------------------------------------------------------------------
+-- Passing and stealing
+---------------------------------------------------------------------------
+function Basketball.pass(player: Player)
+	local ball = heldBy[player]
+	local root = rootOf(player)
+	if not ball or not root or ball.shootingSince then
+		return
+	end
+	local look = flat(root.CFrame.LookVector).Unit
+	local best, bestScore = nil, math.huge
+	for _, other in Basketball.policy.passTargets(player, ball) do
+		local r = rootOf(other)
+		if r and canAct(other) and not heldBy[other] then
+			local offset = flat(r.Position - root.Position)
+			local d = offset.Magnitude
+			if d > 2 and d < B.PASS_RANGE then
+				local facing = look:Dot(offset.Unit)
+				if facing > 0.2 then
+					local score = d * (2 - facing)
+					if score < bestScore then
+						best, bestScore = other, score
+					end
 				end
 			end
 		end
 	end
-	return data
+	local from = root.Position + Vector3.new(0, 1, 0) + look * 1.4
+	local target
+	if best then
+		local r = rootOf(best) :: BasePart
+		local d = flat(r.Position - root.Position).Magnitude
+		local t = math.clamp(d / 75, 0.2, 0.8)
+		target = r.Position + flat(r.AssemblyLinearVelocity) * t + Vector3.new(0, 0.5, 0)
+		launch(ball, from, launchVelocity(from, target, t))
+		train(player, "Passing", 3)
+	else
+		target = root.Position + look * 25 + Vector3.new(0, -1, 0)
+		launch(ball, from, launchVelocity(from, target, 0.5))
+	end
+	ball.regrab[player] = os.clock() + 0.4
 end
 
-local function publish(player: Player)
-	local data = profiles[player]
-	if not data then
+function Basketball.steal(player: Player)
+	local root = rootOf(player)
+	if not root or heldBy[player] or not canAct(player) then
 		return
 	end
-	player:SetAttribute("Cash", data.cash)
-	player:SetAttribute("XP", data.xp)
-	player:SetAttribute("Level", data.level)
-	player:SetAttribute("XPToNext", Config.xpToNext(data.level))
-	player:SetAttribute("Reputation", data.reputation)
-	player:SetAttribute("Rank", Config.reputationRank(data.reputation))
-	player:SetAttribute("Fame", data.fame)
-	player:SetAttribute("Wallpaper", data.settings.wallpaper)
-	player:SetAttribute("UIScale", data.settings.uiScale)
-	player:SetAttribute("NotificationSounds", data.settings.notificationSounds)
-	for _, stat in Config.STATS do
-		player:SetAttribute(stat, data.stats[stat])
+	local now = os.clock()
+	if (stealCooldown[player] or 0) > now then
+		return
 	end
-	player:SetAttribute("Wins", data.basketball.wins)
-	player:SetAttribute("Losses", data.basketball.losses)
-	player:SetAttribute("DataLoaded", true)
-end
-
-local function retry<T>(attempts: number, fn: () -> T): (boolean, T | string)
-	local ok, result
-	for attempt = 1, attempts do
-		ok, result = pcall(fn)
-		if ok then
-			return true, result
-		end
-		task.wait(attempt * 2)
-	end
-	return false, result
-end
-
-function PlayerData.load(player: Player)
-	local key = "player_" .. player.UserId
-	local data
-
-	if store then
-		local lockedElsewhere = false
-		for _ = 1, 5 do
-			lockedElsewhere = false
-			local ok, result = retry(3, function()
-				return (store :: DataStore):UpdateAsync(key, function(saved)
-					saved = saved or defaultProfile()
-					local lock = saved.sessionLock
-					if lock and lock.server ~= SERVER_ID and os.time() - lock.time < Config.SESSION_LOCK_SECONDS then
-						lockedElsewhere = true
-						return nil -- leave the record untouched
-					end
-					saved.sessionLock = { server = SERVER_ID, time = os.time() }
-					return saved
-				end)
-			end)
-			if not ok then
-				warn("[CityGrind] Load failed for", player.Name, result)
-				loadFailed[player] = true
-				player:Kick("City Grind could not load your save. Please rejoin in a minute.")
+	stealCooldown[player] = now + B.STEAL_COOLDOWN
+	for victim, ball in heldBy do
+		local r = rootOf(victim)
+		if victim ~= player and r and flat(r.Position - root.Position).Magnitude <= B.STEAL_RANGE then
+			if Basketball.policy.canSteal(player, victim, ball) and Basketball.policy.canHold(player, ball) then
+				local chance = 0.25 + (stat(player, "Defense") - stat(victim, "BallHandling")) * 0.004
+				if ball.shootingSince then
+					chance += 0.1 -- caught mid-shot
+				end
+				train(player, "Defense", 3)
+				if rng:NextNumber() < math.clamp(chance, 0.08, 0.6) then
+					Basketball.give(ball, player)
+					Basketball.stolen.fire(ball, player, victim)
+				else
+					train(victim, "BallHandling", 3)
+				end
 				return
 			end
-			if not lockedElsewhere then
-				data = result
-				break
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Every frame: dribble animation, pickups and scoring
+---------------------------------------------------------------------------
+local function canPickUp(player: Player, ball: Ball, now: number): boolean
+	if heldBy[player] or not canAct(player) then
+		return false
+	end
+	if (ball.regrab[player] or 0) > now then
+		return false
+	end
+	return Basketball.policy.canHold(player, ball)
+end
+
+RunService.Heartbeat:Connect(function()
+	local now = os.clock()
+	for ball in balls do
+		local holder = ball.holder
+		if holder then
+			if not holder.Parent or not canAct(holder) then
+				Basketball.drop(ball)
+			elseif ball.weld then
+				if ball.shootingSince then
+					ball.weld.C0 = CFrame.new(0, 2.5, -0.9)
+					if now - ball.shootingSince > 1.6 then
+						Basketball.shootRelease(holder) -- held far too long
+					end
+				else
+					local bounce = math.abs(math.sin(now * 8.5)) * 1.7
+					ball.weld.C0 = CFrame.new(1.1, -2.1 + bounce, -1.3)
+				end
+				if (now - ball.lastActive) > 0.5 then
+					ball.lastActive = now
+					train(holder, "BallHandling", 1)
+				end
 			end
-			task.wait(4) -- previous server is still releasing the save
+			continue
 		end
-		if lockedElsewhere then
-			loadFailed[player] = true
-			player:Kick("Your save is still open on another server. Please rejoin in a minute.")
-			return
-		end
-	else
-		data = defaultProfile()
-	end
 
-	if not player.Parent then
-		return -- left while loading
-	end
-	data.sessionLock = nil
-	profiles[player] = reconcile(data)
-	publish(player)
-end
+		local part = ball.part
+		local pos = part.Position
 
-function PlayerData.save(player: Player, releaseLock: boolean)
-	local data = profiles[player]
-	if not data or not store or loadFailed[player] then
-		return
-	end
-	local key = "player_" .. player.UserId
-	local ok, err = retry(3, function()
-		return (store :: DataStore):UpdateAsync(key, function(saved)
-			local lock = saved and saved.sessionLock
-			if lock and lock.server ~= SERVER_ID then
-				return nil -- another server took over; never overwrite its data
-			end
-			local copy = table.clone(data)
-			copy.sessionLock = if releaseLock then nil else { server = SERVER_ID, time = os.time() }
-			return copy
-		end)
-	end)
-	if ok then
-		dirty[player] = nil
-	else
-		warn("[CityGrind] Save failed for", player.Name, err)
-	end
-end
-
-function PlayerData.release(player: Player)
-	PlayerData.save(player, true)
-	profiles[player] = nil
-	dirty[player] = nil
-	loadFailed[player] = nil
-end
-
-function PlayerData.get(player: Player)
-	return profiles[player]
-end
-
-local function markChanged(player: Player)
-	dirty[player] = true
-	publish(player)
-end
-
-local function addTransaction(data, amount: number, label: string)
-	table.insert(data.transactions, 1, { t = os.time(), amount = amount, label = label })
-	while #data.transactions > Config.MAX_TRANSACTIONS do
-		table.remove(data.transactions)
-	end
-end
-
-function PlayerData.addCash(player: Player, amount: number, label: string): boolean
-	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
-		return false
-	end
-	amount = math.floor(amount)
-	data.cash = math.min(data.cash + amount, Config.MAX_CASH)
-	addTransaction(data, amount, label)
-	markChanged(player)
-	return true
-end
-
-function PlayerData.spendCash(player: Player, amount: number, label: string): boolean
-	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
-		return false
-	end
-	amount = math.floor(amount)
-	if data.cash < amount then
-		return false
-	end
-	data.cash -= amount
-	addTransaction(data, -amount, label)
-	markChanged(player)
-	return true
-end
-
-function PlayerData.addXP(player: Player, amount: number)
-	local data = profiles[player]
-	if not data or amount <= 0 then
-		return
-	end
-	data.xp += math.floor(amount)
-	while data.level < Config.MAX_LEVEL and data.xp >= Config.xpToNext(data.level) do
-		data.xp -= Config.xpToNext(data.level)
-		data.level += 1
-		PlayerData.onNotify:Fire(player, "LEVEL UP", "You reached level " .. data.level .. "!")
-	end
-	if data.level >= Config.MAX_LEVEL then
-		data.xp = 0
-	end
-	markChanged(player)
-end
-
-function PlayerData.addReputation(player: Player, amount: number)
-	local data = profiles[player]
-	if not data or amount <= 0 then
-		return
-	end
-	local before = Config.reputationRank(data.reputation)
-	data.reputation += math.floor(amount)
-	local after = Config.reputationRank(data.reputation)
-	if after ~= before then
-		PlayerData.onNotify:Fire(player, "NEW RANK", "People around the city now call you " .. after .. ".")
-	end
-	markChanged(player)
-end
-
--- Training progress toward a stat. Every STAT_XP_PER_POINT raises it by 1 (max 99).
-function PlayerData.addStatXP(player: Player, stat: string, amount: number)
-	local data = profiles[player]
-	if not data or data.stats[stat] == nil or amount <= 0 then
-		return
-	end
-	data.statXP[stat] += amount
-	while data.statXP[stat] >= Config.STAT_XP_PER_POINT and data.stats[stat] < 99 do
-		data.statXP[stat] -= Config.STAT_XP_PER_POINT
-		data.stats[stat] += 1
-		PlayerData.onNotify:Fire(player, "STAT UP", stat .. " is now " .. data.stats[stat] .. ".")
-	end
-	markChanged(player)
-end
-
--- Only whitelisted settings with validated values can be written by a client.
-local SETTING_VALIDATORS = {
-	wallpaper = function(v)
-		return type(v) == "number" and v % 1 == 0 and Config.WALLPAPERS[v] ~= nil
-	end,
-	uiScale = function(v)
-		return table.find(Config.UI_SCALES, v) ~= nil
-	end,
-	notificationSounds = function(v)
-		return type(v) == "boolean"
-	end,
-}
-
-function PlayerData.setSetting(player: Player, key: string, value: any): boolean
-	local data = profiles[player]
-	local validate = SETTING_VALIDATORS[key]
-	if not data or not validate or not validate(value) then
-		return false
-	end
-	data.settings[key] = value
-	markChanged(player)
-	return true
-end
-
-function PlayerData.recordRun(player: Player, seconds: number)
-	local data = profiles[player]
-	if not data then
-		return
-	end
-	data.runsCompleted += 1
-	if data.bestRunSeconds == 0 or seconds < data.bestRunSeconds then
-		data.bestRunSeconds = seconds
-	end
-	markChanged(player)
-end
-
--- Adds to the saved basketball career totals (only known keys, only positive).
-function PlayerData.recordBasketball(player: Player, deltas: { [string]: number })
-	local data = profiles[player]
-	if not data then
-		return
-	end
-	for key, amount in deltas do
-		if data.basketball[key] ~= nil and type(amount) == "number" and amount > 0 then
-			data.basketball[key] += math.floor(amount)
-		end
-	end
-	markChanged(player)
-end
-
--- What the phone's Profile and Bank apps are allowed to see.
-function PlayerData.publicSnapshot(player: Player)
-	local data = profiles[player]
-	if not data then
-		return nil
-	end
-	return {
-		cash = data.cash,
-		level = data.level,
-		xp = data.xp,
-		xpToNext = Config.xpToNext(data.level),
-		reputation = data.reputation,
-		rank = Config.reputationRank(data.reputation),
-		fame = data.fame,
-		stats = table.clone(data.stats),
-		runsCompleted = data.runsCompleted,
-		bestRunSeconds = data.bestRunSeconds,
-		basketball = table.clone(data.basketball),
-		transactions = table.clone(data.transactions),
-		firstJoin = data.firstJoin,
-	}
-end
-
-function PlayerData.start()
-	Players.PlayerAdded:Connect(PlayerData.load)
-	for _, player in Players:GetPlayers() do
-		task.spawn(PlayerData.load, player)
-	end
-	Players.PlayerRemoving:Connect(PlayerData.release)
-
-	task.spawn(function()
-		while true do
-			task.wait(Config.AUTOSAVE_SECONDS)
-			for player in dirty do
-				task.spawn(PlayerData.save, player, false)
+		-- Scoring: the ball's centre passes down through the rim.
+		if now > ball.scoreDebounce then
+			for _, hoop in hoops do
+				local rimY = hoop.rim.Y
+				if ball.lastPos.Y >= rimY and pos.Y < rimY then
+					local mid = (ball.lastPos + pos) / 2
+					if flat(mid - hoop.rim).Magnitude < hoop.radius - 0.35 then
+						ball.scoreDebounce = now + 1
+						local shot = ball.shot
+						if shot and now - shot.at > 4 then
+							shot = nil
+						end
+						ball.shot = nil
+						Basketball.scored.fire(ball, hoop, shot)
+						break
+					end
+				end
 			end
 		end
-	end)
+		ball.lastPos = pos
 
-	game:BindToClose(function()
-		if RunService:IsStudio() and not store then
-			return
+		-- Pickups: closest eligible player within reach.
+		if not part.Anchored then
+			local best, bestDist = nil, math.huge
+			for _, player in Players:GetPlayers() do
+				local r = rootOf(player)
+				if r then
+					local offset = pos - r.Position
+					local horizontal = flat(offset).Magnitude
+					if horizontal < B.PICKUP_RANGE and offset.Y > -4 and offset.Y < 4.5 and horizontal < bestDist then
+						if canPickUp(player, ball, now) then
+							best, bestDist = player, horizontal
+						end
+					end
+				end
+			end
+			if best then
+				Basketball.give(ball, best)
+			elseif part.AssemblyLinearVelocity.Magnitude > 2 then
+				ball.lastActive = now
+			end
 		end
-		local pending = 0
-		for _, player in Players:GetPlayers() do
-			pending += 1
-			task.spawn(function()
-				PlayerData.release(player)
-				pending -= 1
-			end)
-		end
-		local deadline = os.clock() + 25
-		while pending > 0 and os.clock() < deadline do
-			task.wait(0.25)
-		end
-	end)
-end
 
-return PlayerData
+		-- Fell out of the world.
+		if pos.Y < -30 then
+			if ball.court then
+				local center = ball.court:GetAttribute("CourtCenter")
+				Basketball.moveTo(ball, center + Vector3.new(0, 4, 0))
+			else
+				Basketball.destroy(ball)
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	local ball = heldBy[player]
+	if ball then
+		Basketball.drop(ball)
+	end
+	for b in balls do
+		b.regrab[player] = nil
+		if b.owner == player and not b.gameCourt then
+			Basketball.destroy(b)
+		end
+	end
+	stealCooldown[player] = nil
+	trainCooldown[player] = nil
+end)
+
+return Basketball
 ]=====])
 put(server, 'ModuleScript', 'CityBuilder', [=====[
 -- CITY GRIND: builds District 1, The Neighborhood.
@@ -1580,699 +1868,6 @@ CityBuilder.RUN_ROUTE = RUN_ROUTE
 
 return CityBuilder
 ]=====])
-put(server, 'ModuleScript', 'Basketball', [=====[
--- CITY GRIND: server-owned basketballs (section 70).
--- Possession, dribbling, shooting, passing, stealing, blocking and scoring all
--- happen here. The client only says "I pressed shoot / released / pass / steal";
--- the server times the release itself and decides every outcome.
-
-local Players = game:GetService("Players")
-local PhysicsService = game:GetService("PhysicsService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-
-local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
-local B = Config.Ball
-
-local Basketball = {}
-
-export type Hoop = { model: Model, rim: Vector3, radius: number, court: Model?, side: string }
-export type Shot = { shooter: Player, points: number, kind: string, perfect: boolean, at: number, contestedBy: Player? }
-export type Ball = {
-	part: BasePart,
-	force: VectorForce,
-	holder: Player?,
-	weld: Weld?,
-	lastHolder: Player?,
-	court: Model?, -- the court a free-play ball belongs to
-	gameCourt: Model?, -- set while the ball is the game ball of a court
-	owner: Player?,
-	shot: Shot?,
-	shootingSince: number?,
-	regrab: { [Player]: number },
-	lastPos: Vector3,
-	scoreDebounce: number,
-	lastActive: number,
-}
-
-local balls: { [Ball]: boolean } = {}
-local heldBy: { [Player]: Ball } = {}
-local hoops: { Hoop } = {}
-local stealCooldown: { [Player]: number } = {}
-local trainCooldown: { [Player]: { [string]: number } } = {}
-local rng = Random.new()
-
-local ballFolder = Instance.new("Folder")
-ballFolder.Name = "Basketballs"
-ballFolder.Parent = workspace
-
----------------------------------------------------------------------------
--- Collision groups: the ball never collides with characters, so it can't be
--- body-blocked into glitches or used to fling people.
----------------------------------------------------------------------------
-local BALL_GROUP, CHARACTER_GROUP = "CityBall", "CityCharacters"
-pcall(function()
-	PhysicsService:RegisterCollisionGroup(BALL_GROUP)
-end)
-pcall(function()
-	PhysicsService:RegisterCollisionGroup(CHARACTER_GROUP)
-end)
-PhysicsService:CollisionGroupSetCollidable(BALL_GROUP, CHARACTER_GROUP, false)
-
-function Basketball.tagCharacter(character: Model)
-	local function tag(d: Instance)
-		if d:IsA("BasePart") then
-			d.CollisionGroup = CHARACTER_GROUP
-		end
-	end
-	for _, d in character:GetDescendants() do
-		tag(d)
-	end
-	character.DescendantAdded:Connect(tag)
-end
-
----------------------------------------------------------------------------
--- Tiny signal so listeners get the real ball table (BindableEvents copy tables).
----------------------------------------------------------------------------
-local function signal()
-	local listeners = {}
-	return {
-		connect = function(fn)
-			table.insert(listeners, fn)
-		end,
-		fire = function(...)
-			for _, fn in listeners do
-				task.spawn(fn, ...)
-			end
-		end,
-	}
-end
-
-Basketball.scored = signal() -- (ball, hoop, shot?)
-Basketball.blocked = signal() -- (ball, blocker, shooter)
-Basketball.stolen = signal() -- (ball, stealer, victim)
-Basketball.possession = signal() -- (ball, player?)
-
--- Set by Main: send big on-screen text ("GAME WINNER!") to these players.
-Basketball.announce = function(_players: { Player }, _text: string) end
--- Set by Main: tell one client to jump at the rim for a dunk.
-Basketball.dunkJump = function(_player: Player, _rim: Vector3) end
--- Set by Main: award training progress toward a stat.
-Basketball.onTrain = function(_player: Player, _stat: string, _amount: number) end
-
--- Rules that depend on whether a game is being played. CourtGames replaces these.
-Basketball.policy = {
-	canHold = function(_player: Player, _ball: Ball): boolean
-		return true
-	end,
-	targetHoop = function(_player: Player, _ball: Ball): Hoop?
-		return nil
-	end,
-	opponents = function(_player: Player, _ball: Ball): { Player }
-		return {}
-	end,
-	passTargets = function(player: Player, _ball: Ball): { Player }
-		local list = {}
-		for _, other in Players:GetPlayers() do
-			if other ~= player then
-				table.insert(list, other)
-			end
-		end
-		return list
-	end,
-	canSteal = function(_player: Player, _victim: Player, _ball: Ball): boolean
-		return true
-	end,
-}
-
-function Basketball.registerHoop(hoop: Hoop)
-	table.insert(hoops, hoop)
-end
-
-function Basketball.heldBall(player: Player): Ball?
-	return heldBy[player]
-end
-
----------------------------------------------------------------------------
--- Helpers
----------------------------------------------------------------------------
-local function rootOf(player: Player): BasePart?
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	return if root and root:IsA("BasePart") then root else nil
-end
-
-local function humanoidOf(player: Player): Humanoid?
-	local character = player.Character
-	return character and character:FindFirstChildOfClass("Humanoid")
-end
-
-local function canAct(player: Player): boolean
-	local humanoid = humanoidOf(player)
-	return humanoid ~= nil and humanoid.Health > 0 and humanoid.SeatPart == nil and rootOf(player) ~= nil
-end
-
-local function flat(v: Vector3): Vector3
-	return Vector3.new(v.X, 0, v.Z)
-end
-
-local function stat(player: Player, name: string): number
-	return player:GetAttribute(name) or 1
-end
-
--- Small training rewards, throttled so spamming shots doesn't farm stats.
-local function train(player: Player, statName: string, amount: number)
-	local now = os.clock()
-	local cooldowns = trainCooldown[player]
-	if not cooldowns then
-		cooldowns = {}
-		trainCooldown[player] = cooldowns
-	end
-	if cooldowns[statName] and now - cooldowns[statName] < 2 then
-		return
-	end
-	cooldowns[statName] = now
-	Basketball.onTrain(player, statName, amount)
-end
-Basketball.train = train
-
-local function nearestHoop(position: Vector3): (Hoop?, number)
-	local best, bestDist = nil, math.huge
-	for _, hoop in hoops do
-		local d = flat(hoop.rim - position).Magnitude
-		if d < bestDist then
-			best, bestDist = hoop, d
-		end
-	end
-	return best, bestDist
-end
-
--- Velocity that carries the ball from `from` to `to` in `t` seconds under ball gravity.
-local function launchVelocity(from: Vector3, to: Vector3, t: number): Vector3
-	return (to - from) / t + Vector3.new(0, 0.5 * B.GRAVITY * t, 0)
-end
-
----------------------------------------------------------------------------
--- Ball lifecycle
----------------------------------------------------------------------------
-function Basketball.newBall(position: Vector3): Ball
-	local part = Instance.new("Part")
-	part.Name = "Basketball"
-	part.Shape = Enum.PartType.Ball
-	part.Size = Vector3.one * B.DIAMETER
-	part.Color = Color3.fromRGB(230, 110, 30)
-	part.Material = Enum.Material.Rubber
-	part.CustomPhysicalProperties = PhysicalProperties.new(0.35, 0.6, 0.78, 1, 1)
-	part.CollisionGroup = BALL_GROUP
-	part.CFrame = CFrame.new(position)
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	-- two thin dark discs, slightly wider than the ball, read as seams
-	for _, rot in { CFrame.Angles(0, 0, 0), CFrame.Angles(0, math.pi / 2, 0) } do
-		local seam = Instance.new("Part")
-		seam.Name = "Seam"
-		seam.Size = Vector3.new(0.05, B.DIAMETER + 0.03, B.DIAMETER + 0.03)
-		seam.Color = Color3.fromRGB(30, 20, 15)
-		seam.Material = Enum.Material.SmoothPlastic
-		seam.CanCollide = false
-		seam.CanQuery = false
-		seam.CanTouch = false
-		seam.Massless = true
-		seam.CollisionGroup = BALL_GROUP
-		seam.CFrame = part.CFrame * rot
-		local mesh = Instance.new("SpecialMesh")
-		mesh.MeshType = Enum.MeshType.Sphere
-		mesh.Parent = seam
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = part
-		weld.Part1 = seam
-		weld.Parent = seam
-		seam.Parent = part
-	end
-	local attachment = Instance.new("Attachment")
-	attachment.Parent = part
-	local force = Instance.new("VectorForce")
-	force.Attachment0 = attachment
-	force.RelativeTo = Enum.ActuatorRelativeTo.World
-	force.ApplyAtCenterOfMass = true
-	force.Parent = part
-	part.Parent = ballFolder
-	force.Force = Vector3.new(0, part:GetMass() * (workspace.Gravity - B.GRAVITY), 0)
-	pcall(part.SetNetworkOwner, part, nil)
-
-	local ball: Ball = {
-		part = part,
-		force = force,
-		regrab = {},
-		lastPos = position,
-		scoreDebounce = 0,
-		lastActive = os.clock(),
-	}
-	balls[ball] = true
-	return ball
-end
-
-local function detach(ball: Ball)
-	local holder = ball.holder
-	if ball.weld then
-		ball.weld:Destroy()
-		ball.weld = nil
-	end
-	if holder then
-		heldBy[holder] = nil
-		if holder.Parent then
-			holder:SetAttribute("HasBall", false)
-		end
-		ball.lastHolder = holder
-	end
-	ball.holder = nil
-	ball.shootingSince = nil
-	ball.part.Massless = false
-	ball.part.CanCollide = true
-	ball.force.Enabled = true
-	pcall(ball.part.SetNetworkOwner, ball.part, nil)
-end
-
-function Basketball.give(ball: Ball, player: Player)
-	local root = rootOf(player)
-	if not root then
-		return
-	end
-	if heldBy[player] and heldBy[player] ~= ball then
-		return
-	end
-	detach(ball)
-	ball.part.CanCollide = false
-	ball.part.Massless = true
-	ball.force.Enabled = false
-	ball.part.CFrame = root.CFrame * CFrame.new(1.1, -1.5, -1.3)
-	local weld = Instance.new("Weld")
-	weld.Part0 = root
-	weld.Part1 = ball.part
-	weld.C0 = CFrame.new(1.1, -1.5, -1.3)
-	weld.Parent = ball.part
-	ball.weld = weld
-	ball.holder = player
-	ball.lastHolder = player
-	ball.shot = nil
-	ball.lastActive = os.clock()
-	heldBy[player] = ball
-	player:SetAttribute("HasBall", true)
-	Basketball.possession.fire(ball, player)
-end
-
-function Basketball.drop(ball: Ball)
-	local holder = ball.holder
-	local root = holder and rootOf(holder)
-	detach(ball)
-	if root then
-		ball.part.CFrame = CFrame.new(root.Position + root.CFrame.LookVector * 2)
-	end
-	ball.part.AssemblyLinearVelocity = Vector3.zero
-	Basketball.possession.fire(ball, nil)
-end
-
-function Basketball.destroy(ball: Ball)
-	if not balls[ball] then
-		return
-	end
-	detach(ball)
-	balls[ball] = nil
-	ball.part:Destroy()
-end
-
-function Basketball.moveTo(ball: Ball, position: Vector3)
-	detach(ball)
-	ball.part.CFrame = CFrame.new(position)
-	ball.part.AssemblyLinearVelocity = Vector3.zero
-	ball.part.AssemblyAngularVelocity = Vector3.zero
-	ball.lastPos = position
-end
-
-local function launch(ball: Ball, from: Vector3, velocity: Vector3, spin: Vector3?)
-	detach(ball)
-	ball.part.CFrame = CFrame.new(from)
-	ball.part.AssemblyLinearVelocity = velocity
-	ball.part.AssemblyAngularVelocity = spin or Vector3.zero
-	ball.lastPos = from
-	ball.lastActive = os.clock()
-end
-
-function Basketball.balls(): { [Ball]: boolean }
-	return balls
-end
-
----------------------------------------------------------------------------
--- Shooting
----------------------------------------------------------------------------
-function Basketball.shootStart(player: Player)
-	local ball = heldBy[player]
-	if not ball or ball.shootingSince or not canAct(player) then
-		return
-	end
-	ball.shootingSince = os.clock()
-end
-
-local function nearestOpponent(player: Player, ball: Ball, position: Vector3): (Player?, number)
-	local best, bestDist = nil, math.huge
-	for _, other in Basketball.policy.opponents(player, ball) do
-		local r = rootOf(other)
-		if r and canAct(other) then
-			local d = flat(r.Position - position).Magnitude
-			if d < bestDist then
-				best, bestDist = other, d
-			end
-		end
-	end
-	return best, bestDist
-end
-
-local function shoot(player: Player, ball: Ball, held: number)
-	local root = rootOf(player)
-	local humanoid = humanoidOf(player)
-	if not root or not humanoid then
-		return
-	end
-	local hoop = Basketball.policy.targetHoop(player, ball)
-	local dist
-	if hoop then
-		dist = flat(hoop.rim - root.Position).Magnitude
-	else
-		hoop, dist = nearestHoop(root.Position)
-	end
-	local look = flat(root.CFrame.LookVector)
-	look = if look.Magnitude > 0.01 then look.Unit else Vector3.new(0, 0, -1)
-	local from = root.Position + Vector3.new(0, 2.6, 0) + look * 0.8
-
-	if not hoop or dist > B.MAX_SHOT_RANGE then
-		-- Nowhere to shoot: just toss it forward.
-		launch(ball, from, launchVelocity(from, from + look * 20 + Vector3.new(0, -2, 0), 0.9))
-		ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
-		return
-	end
-
-	local offBy = math.abs(held - B.PERFECT_RELEASE)
-	local timing = math.clamp(1 - offBy / B.RELEASE_WINDOW, 0, 1)
-	local perfect = offBy <= B.PERFECT_TOLERANCE
-	local moving = flat(root.AssemblyLinearVelocity).Magnitude
-	local airborne = humanoid.FloorMaterial == Enum.Material.Air
-
-	local kind
-	if dist <= B.DUNK_RANGE and (moving > 16 or airborne) then
-		kind = "dunk"
-	elseif dist <= 7 then
-		kind = "layup"
-	elseif dist <= B.THREE_POINT_RANGE then
-		kind = "mid"
-	elseif dist <= 26 then
-		kind = "three"
-	else
-		kind = "deep"
-	end
-	local points = if dist > B.THREE_POINT_RANGE + 0.3 then 3 else 2
-
-	local defender, defenderDist = nearestOpponent(player, ball, root.Position)
-
-	-- Block: a jumping defender right on the shooter can swat it.
-	if defender and defenderDist <= B.BLOCK_RANGE then
-		local defHumanoid = humanoidOf(defender)
-		if defHumanoid and defHumanoid.FloorMaterial == Enum.Material.Air then
-			local chance = 0.3 + (stat(defender, "Vertical") + stat(defender, "Defense")) * 0.002 - stat(player, "Vertical") * 0.001
-			if rng:NextNumber() < math.clamp(chance, 0.1, 0.65) then
-				local away = flat(root.Position - hoop.rim)
-				away = if away.Magnitude > 0.01 then away.Unit else -look
-				local side = Vector3.new(-away.Z, 0, away.X) * rng:NextNumber(-12, 12)
-				launch(ball, from + Vector3.new(0, 1, 0), away * 28 + side + Vector3.new(0, 18, 0))
-				ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
-				train(defender, "Defense", 6)
-				train(defender, "Vertical", 4)
-				Basketball.blocked.fire(ball, defender, player)
-				return
-			end
-		end
-	end
-
-	local base
-	if kind == "dunk" then
-		base = 0.9
-	elseif kind == "layup" then
-		base = 0.72
-	elseif kind == "mid" then
-		base = 0.52 - (dist - 7) * 0.008
-	elseif kind == "three" then
-		base = 0.36 - (dist - B.THREE_POINT_RANGE) * 0.01
-	else
-		base = math.max(0.04, 0.22 - (dist - 26) * 0.012)
-	end
-	local close = kind == "dunk" or kind == "layup"
-	local statBonus = if close
-		then (stat(player, "Finishing") - 1) * 0.0025 + (stat(player, "Vertical") - 1) * 0.001
-		else (stat(player, "Shooting") - 1) * 0.003
-	local timingFactor = if kind == "dunk" then 1 elseif kind == "layup" then 0.6 + 0.4 * timing else 0.3 + 0.7 * timing
-	local contest = 1
-	if defender and defenderDist < B.CONTEST_RANGE then
-		local closeness = defenderDist / B.CONTEST_RANGE
-		contest = if kind == "dunk" then 0.85 + 0.15 * closeness else 0.55 + 0.45 * closeness
-	end
-	local perfectBonus = if perfect and not close then 0.1 else 0
-	local chance = math.clamp((base + statBonus) * timingFactor * contest + perfectBonus, 0.02, 0.97)
-	local make = rng:NextNumber() < chance
-
-	ball.shot = {
-		shooter = player,
-		points = points,
-		kind = kind,
-		perfect = perfect and make,
-		at = os.clock(),
-		contestedBy = if defender and defenderDist < B.CONTEST_RANGE then defender else nil,
-	}
-	ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
-
-	if kind == "dunk" and make then
-		Basketball.dunkJump(player, hoop.rim)
-		detach(ball)
-		ball.part.CFrame = CFrame.new(hoop.rim + Vector3.new(0, 1.8, 0))
-		ball.lastPos = ball.part.Position
-		-- hang above the rim for the jump, then slam it through
-		ball.part.Anchored = true
-		task.delay(0.28, function()
-			if balls[ball] then
-				ball.part.Anchored = false
-				ball.lastPos = ball.part.Position
-				ball.part.AssemblyLinearVelocity = Vector3.new(0, -45, 0)
-			end
-		end)
-		return
-	end
-
-	local target = hoop.rim + Vector3.new(0, 0.05, 0)
-	if not make then
-		-- Clank it off the rim, or airball a badly timed shot.
-		local angle = rng:NextNumber(0, math.pi * 2)
-		local miss = if timing < 0.15 and not close then rng:NextNumber(2.6, 3.6) else rng:NextNumber(1.1, 1.7)
-		target += Vector3.new(math.cos(angle) * miss, 0.2, math.sin(angle) * miss)
-	end
-	local flight = if close then 0.6 else 0.7 + dist * 0.012
-	launch(ball, from, launchVelocity(from, target, flight), root.CFrame.RightVector * -8)
-end
-
-function Basketball.shootRelease(player: Player)
-	local ball = heldBy[player]
-	if not ball or not ball.shootingSince or not canAct(player) then
-		return
-	end
-	local held = os.clock() - ball.shootingSince
-	ball.shootingSince = nil
-	shoot(player, ball, held)
-end
-
----------------------------------------------------------------------------
--- Passing and stealing
----------------------------------------------------------------------------
-function Basketball.pass(player: Player)
-	local ball = heldBy[player]
-	local root = rootOf(player)
-	if not ball or not root or ball.shootingSince then
-		return
-	end
-	local look = flat(root.CFrame.LookVector).Unit
-	local best, bestScore = nil, math.huge
-	for _, other in Basketball.policy.passTargets(player, ball) do
-		local r = rootOf(other)
-		if r and canAct(other) and not heldBy[other] then
-			local offset = flat(r.Position - root.Position)
-			local d = offset.Magnitude
-			if d > 2 and d < B.PASS_RANGE then
-				local facing = look:Dot(offset.Unit)
-				if facing > 0.2 then
-					local score = d * (2 - facing)
-					if score < bestScore then
-						best, bestScore = other, score
-					end
-				end
-			end
-		end
-	end
-	local from = root.Position + Vector3.new(0, 1, 0) + look * 1.4
-	local target
-	if best then
-		local r = rootOf(best) :: BasePart
-		local d = flat(r.Position - root.Position).Magnitude
-		local t = math.clamp(d / 75, 0.2, 0.8)
-		target = r.Position + flat(r.AssemblyLinearVelocity) * t + Vector3.new(0, 0.5, 0)
-		launch(ball, from, launchVelocity(from, target, t))
-		train(player, "Passing", 3)
-	else
-		target = root.Position + look * 25 + Vector3.new(0, -1, 0)
-		launch(ball, from, launchVelocity(from, target, 0.5))
-	end
-	ball.regrab[player] = os.clock() + 0.4
-end
-
-function Basketball.steal(player: Player)
-	local root = rootOf(player)
-	if not root or heldBy[player] or not canAct(player) then
-		return
-	end
-	local now = os.clock()
-	if (stealCooldown[player] or 0) > now then
-		return
-	end
-	stealCooldown[player] = now + B.STEAL_COOLDOWN
-	for victim, ball in heldBy do
-		local r = rootOf(victim)
-		if victim ~= player and r and flat(r.Position - root.Position).Magnitude <= B.STEAL_RANGE then
-			if Basketball.policy.canSteal(player, victim, ball) and Basketball.policy.canHold(player, ball) then
-				local chance = 0.25 + (stat(player, "Defense") - stat(victim, "BallHandling")) * 0.004
-				if ball.shootingSince then
-					chance += 0.1 -- caught mid-shot
-				end
-				train(player, "Defense", 3)
-				if rng:NextNumber() < math.clamp(chance, 0.08, 0.6) then
-					Basketball.give(ball, player)
-					Basketball.stolen.fire(ball, player, victim)
-				else
-					train(victim, "BallHandling", 3)
-				end
-				return
-			end
-		end
-	end
-end
-
----------------------------------------------------------------------------
--- Every frame: dribble animation, pickups and scoring
----------------------------------------------------------------------------
-local function canPickUp(player: Player, ball: Ball, now: number): boolean
-	if heldBy[player] or not canAct(player) then
-		return false
-	end
-	if (ball.regrab[player] or 0) > now then
-		return false
-	end
-	return Basketball.policy.canHold(player, ball)
-end
-
-RunService.Heartbeat:Connect(function()
-	local now = os.clock()
-	for ball in balls do
-		local holder = ball.holder
-		if holder then
-			if not holder.Parent or not canAct(holder) then
-				Basketball.drop(ball)
-			elseif ball.weld then
-				if ball.shootingSince then
-					ball.weld.C0 = CFrame.new(0, 2.5, -0.9)
-					if now - ball.shootingSince > 1.6 then
-						Basketball.shootRelease(holder) -- held far too long
-					end
-				else
-					local bounce = math.abs(math.sin(now * 8.5)) * 1.7
-					ball.weld.C0 = CFrame.new(1.1, -2.1 + bounce, -1.3)
-				end
-				if (now - ball.lastActive) > 0.5 then
-					ball.lastActive = now
-					train(holder, "BallHandling", 1)
-				end
-			end
-			continue
-		end
-
-		local part = ball.part
-		local pos = part.Position
-
-		-- Scoring: the ball's centre passes down through the rim.
-		if now > ball.scoreDebounce then
-			for _, hoop in hoops do
-				local rimY = hoop.rim.Y
-				if ball.lastPos.Y >= rimY and pos.Y < rimY then
-					local mid = (ball.lastPos + pos) / 2
-					if flat(mid - hoop.rim).Magnitude < hoop.radius - 0.35 then
-						ball.scoreDebounce = now + 1
-						local shot = ball.shot
-						if shot and now - shot.at > 4 then
-							shot = nil
-						end
-						ball.shot = nil
-						Basketball.scored.fire(ball, hoop, shot)
-						break
-					end
-				end
-			end
-		end
-		ball.lastPos = pos
-
-		-- Pickups: closest eligible player within reach.
-		if not part.Anchored then
-			local best, bestDist = nil, math.huge
-			for _, player in Players:GetPlayers() do
-				local r = rootOf(player)
-				if r then
-					local offset = pos - r.Position
-					local horizontal = flat(offset).Magnitude
-					if horizontal < B.PICKUP_RANGE and offset.Y > -4 and offset.Y < 4.5 and horizontal < bestDist then
-						if canPickUp(player, ball, now) then
-							best, bestDist = player, horizontal
-						end
-					end
-				end
-			end
-			if best then
-				Basketball.give(ball, best)
-			elseif part.AssemblyLinearVelocity.Magnitude > 2 then
-				ball.lastActive = now
-			end
-		end
-
-		-- Fell out of the world.
-		if pos.Y < -30 then
-			if ball.court then
-				local center = ball.court:GetAttribute("CourtCenter")
-				Basketball.moveTo(ball, center + Vector3.new(0, 4, 0))
-			else
-				Basketball.destroy(ball)
-			end
-		end
-	end
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-	local ball = heldBy[player]
-	if ball then
-		Basketball.drop(ball)
-	end
-	for b in balls do
-		b.regrab[player] = nil
-		if b.owner == player and not b.gameCourt then
-			Basketball.destroy(b)
-		end
-	end
-	stealCooldown[player] = nil
-	trainCooldown[player] = nil
-end)
-
-return Basketball
-]=====])
 put(server, 'ModuleScript', 'CourtGames', [=====[
 -- CITY GRIND: pickup games on every tagged court (sections 51, 71).
 -- Stand on the HOME or AWAY pad; when both sides have the same number of
@@ -2914,6 +2509,758 @@ end
 
 return CourtGames
 ]=====])
+put(server, 'ModuleScript', 'Net', [=====[
+-- CITY GRIND: remotes, rate limits and notifications shared by every server system.
+-- Remotes live in ReplicatedStorage.CityGrind.Remotes so clients can WaitForChild them.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Net = {}
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local remotes = shared:FindFirstChild("Remotes") or Instance.new("Folder")
+remotes.Name = "Remotes"
+remotes.Parent = shared
+Net.folder = remotes
+
+-- Creates (or reuses) a RemoteEvent / RemoteFunction by name.
+function Net.remote(className: string, name: string): any
+	local r = remotes:FindFirstChild(name)
+	if r and r.ClassName ~= className then
+		r:Destroy()
+		r = nil
+	end
+	r = r or Instance.new(className)
+	r.Name = name
+	r.Parent = remotes
+	return r
+end
+
+-- Per-player cooldowns so no remote can be spammed. Returns false while cooling down.
+local lastCall: { [Player]: { [string]: number } } = {}
+function Net.allow(player: Player, key: string, cooldown: number): boolean
+	local now = os.clock()
+	local calls = lastCall[player]
+	if not calls then
+		calls = {}
+		lastCall[player] = calls
+	end
+	if calls[key] and now - calls[key] < cooldown then
+		return false
+	end
+	calls[key] = now
+	return true
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	lastCall[player] = nil
+end)
+
+local NotifyRemote = Net.remote("RemoteEvent", "Notify") -- server -> client (title, body)
+
+-- Phone notification + toast for one player.
+function Net.notify(player: Player, title: string, body: string)
+	if player.Parent then
+		NotifyRemote:FireClient(player, title, body)
+	end
+end
+
+-- Distance from a player's character to a point (math.huge with no character).
+function Net.distance(player: Player, position: Vector3): number
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return math.huge
+	end
+	return (root.Position - position).Magnitude
+end
+
+-- True when the player has a living character.
+function Net.alive(player: Player): boolean
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.Health > 0 and character:FindFirstChild("HumanoidRootPart") ~= nil
+end
+
+return Net
+]=====])
+put(server, 'ModuleScript', 'Places', [=====[
+-- CITY GRIND: doors and interiors.
+-- Interiors are built high above the city (Places.REGIONS) and connected to a
+-- building's front door with a ProximityPrompt. The player attribute "Interior"
+-- holds the interior's name while they are inside ("" outside).
+
+local Players = game:GetService("Players")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+
+local Places = {}
+
+-- Reserved space for each interior. Each region is a 240 x 240 stud square
+-- whose floor sits at the region's Y. Keep builds inside their square.
+Places.REGIONS = {
+	Gym = Vector3.new(0, 600, 0),
+	Threads = Vector3.new(300, 600, 0),
+	Barber = Vector3.new(600, 600, 0),
+	CornerMart = Vector3.new(900, 600, 0),
+	Kitchen = Vector3.new(1200, 600, 0),
+	Dealership = Vector3.new(1500, 600, 0),
+	JobCenter = Vector3.new(1800, 600, 0),
+}
+
+-- Apartment units: one per server slot, each in its own 240 x 240 square.
+function Places.apartmentSlot(slot: number): Vector3
+	return Vector3.new(0, 1200, slot * 300)
+end
+
+-- Moves a player's character, standing upright at `cf`.
+function Places.teleport(player: Player, cf: CFrame)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not character or not humanoid then
+		return
+	end
+	if humanoid.SeatPart then
+		humanoid.Sit = false
+		task.wait()
+	end
+	character:PivotTo(cf + Vector3.new(0, 3, 0))
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+
+-- The front door part of a building made by CityBuilder.building().
+function Places.buildingDoor(city: Instance, buildingName: string): BasePart?
+	local buildings = city:FindFirstChild("Buildings")
+	local model = buildings and buildings:FindFirstChild(buildingName, true)
+	local door = model and model:FindFirstChild("Door")
+	return if door and door:IsA("BasePart") then door else nil
+end
+
+export type DoorOptions = {
+	name: string, -- interior name, e.g. "Gym"
+	door: BasePart, -- the outside door the prompt goes on
+	inside: CFrame, -- where players appear inside
+	exitAt: Vector3, -- where the exit door/prompt sits inside
+	outside: CFrame?, -- where players appear when leaving (default: in front of the door)
+	actionText: string?,
+	canEnter: ((Player) -> (boolean, string?))?, -- optional gate, returns (ok, reason)
+	onEnter: ((Player) -> ())?,
+	onExit: ((Player) -> ())?,
+	parent: Instance,
+}
+
+-- Wires a two-way door. Returns the exit door part built inside.
+function Places.door(opts: DoorOptions): BasePart
+	local enterPrompt = Instance.new("ProximityPrompt")
+	enterPrompt.Name = "Enter" .. opts.name
+	enterPrompt.ActionText = opts.actionText or "Enter"
+	enterPrompt.ObjectText = opts.name
+	enterPrompt.KeyboardKeyCode = Enum.KeyCode.E
+	enterPrompt.MaxActivationDistance = 10
+	enterPrompt.RequiresLineOfSight = false
+	enterPrompt.Parent = opts.door
+
+	-- default exit spot: 6 studs out from the door's face, facing away from it
+	local outside = opts.outside
+	if not outside then
+		local door = opts.door
+		local look = door.CFrame.LookVector
+		local front = door.Position + look * 6
+		local behind = door.Position - look * 6
+		-- whichever side is further from the building's centre (door's parent model) is "out"
+		local model = door.Parent
+		local center = if model and model:IsA("Model") then model:GetPivot().Position else door.Position
+		local spot = if (front - center).Magnitude > (behind - center).Magnitude then front else behind
+		outside = CFrame.lookAt(Vector3.new(spot.X, door.Position.Y - door.Size.Y / 2, spot.Z), Vector3.new(spot.X, door.Position.Y - door.Size.Y / 2, spot.Z) + (spot - door.Position) * Vector3.new(1, 0, 1))
+	end
+
+	local exitDoor = Instance.new("Part")
+	exitDoor.Name = "ExitDoor"
+	exitDoor.Anchored = true
+	exitDoor.Size = Vector3.new(6, 9, 0.4)
+	exitDoor.CFrame = CFrame.new(opts.exitAt + Vector3.new(0, 4.5, 0))
+	exitDoor.Color = Color3.fromRGB(45, 35, 30)
+	exitDoor.Material = Enum.Material.Wood
+	exitDoor.Parent = opts.parent
+	local exitPrompt = Instance.new("ProximityPrompt")
+	exitPrompt.Name = "Exit"
+	exitPrompt.ActionText = "Leave"
+	exitPrompt.ObjectText = opts.name
+	exitPrompt.KeyboardKeyCode = Enum.KeyCode.E
+	exitPrompt.MaxActivationDistance = 10
+	exitPrompt.RequiresLineOfSight = false
+	exitPrompt.Parent = exitDoor
+
+	enterPrompt.Triggered:Connect(function(player)
+		if (player:GetAttribute("Interior") or "") ~= "" then
+			return
+		end
+		if opts.canEnter then
+			local ok, reason = opts.canEnter(player)
+			if not ok then
+				if reason then
+					Net.notify(player, opts.name:upper(), reason)
+				end
+				return
+			end
+		end
+		player:SetAttribute("Interior", opts.name)
+		Places.teleport(player, opts.inside)
+		if opts.onEnter then
+			opts.onEnter(player)
+		end
+	end)
+	exitPrompt.Triggered:Connect(function(player)
+		if player:GetAttribute("Interior") ~= opts.name then
+			return
+		end
+		Places.leave(player, outside :: CFrame)
+		if opts.onExit then
+			opts.onExit(player)
+		end
+	end)
+	return exitDoor
+end
+
+-- Puts a player back outside and clears their interior.
+function Places.leave(player: Player, outside: CFrame)
+	player:SetAttribute("Interior", "")
+	Places.teleport(player, outside)
+end
+
+-- Respawning always puts you back outside.
+local function track(player: Player)
+	player:SetAttribute("Interior", "")
+	player.CharacterAdded:Connect(function()
+		player:SetAttribute("Interior", "")
+	end)
+end
+Players.PlayerAdded:Connect(track)
+for _, player in Players:GetPlayers() do
+	track(player)
+end
+
+-- A plain box room (floor, 4 walls, ceiling with lights) centred on `origin`.
+-- Returns the model. Size is the inside dimensions.
+function Places.room(name: string, origin: Vector3, size: Vector3, opts: { floorColor: Color3?, floorMaterial: Enum.Material?, wallColor: Color3?, parent: Instance }): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	local function p(pname: string, psize: Vector3, cf: CFrame, color: Color3, material: Enum.Material)
+		local b = Instance.new("Part")
+		b.Name = pname
+		b.Anchored = true
+		b.Size = psize
+		b.CFrame = cf
+		b.Color = color
+		b.Material = material
+		b.TopSurface = Enum.SurfaceType.Smooth
+		b.BottomSurface = Enum.SurfaceType.Smooth
+		b.Parent = m
+		return b
+	end
+	local wall = opts.wallColor or Color3.fromRGB(225, 222, 215)
+	p("Floor", Vector3.new(size.X + 2, 1, size.Z + 2), CFrame.new(origin - Vector3.new(0, 0.5, 0)), opts.floorColor or Color3.fromRGB(150, 120, 90), opts.floorMaterial or Enum.Material.WoodPlanks)
+	p("Ceiling", Vector3.new(size.X + 2, 1, size.Z + 2), CFrame.new(origin + Vector3.new(0, size.Y + 0.5, 0)), Color3.fromRGB(240, 240, 240), Enum.Material.SmoothPlastic)
+	p("Wall", Vector3.new(1, size.Y, size.Z + 2), CFrame.new(origin + Vector3.new(size.X / 2 + 0.5, size.Y / 2, 0)), wall, Enum.Material.SmoothPlastic)
+	p("Wall", Vector3.new(1, size.Y, size.Z + 2), CFrame.new(origin + Vector3.new(-size.X / 2 - 0.5, size.Y / 2, 0)), wall, Enum.Material.SmoothPlastic)
+	p("Wall", Vector3.new(size.X, size.Y, 1), CFrame.new(origin + Vector3.new(0, size.Y / 2, size.Z / 2 + 0.5)), wall, Enum.Material.SmoothPlastic)
+	p("Wall", Vector3.new(size.X, size.Y, 1), CFrame.new(origin + Vector3.new(0, size.Y / 2, -size.Z / 2 - 0.5)), wall, Enum.Material.SmoothPlastic)
+	-- ceiling lights in a grid
+	local nx = math.max(1, math.floor(size.X / 24))
+	local nz = math.max(1, math.floor(size.Z / 24))
+	for i = 1, nx do
+		for j = 1, nz do
+			local x = -size.X / 2 + (i - 0.5) * size.X / nx
+			local z = -size.Z / 2 + (j - 0.5) * size.Z / nz
+			local lamp = p("CeilingLight", Vector3.new(4, 0.2, 4), CFrame.new(origin + Vector3.new(x, size.Y - 0.1, z)), Color3.fromRGB(255, 250, 235), Enum.Material.Neon)
+			lamp.CanCollide = false
+			local light = Instance.new("PointLight")
+			light.Range = 26
+			light.Brightness = 1.2
+			light.Color = Color3.fromRGB(255, 244, 225)
+			light.Parent = lamp
+		end
+	end
+	m.Parent = opts.parent
+	return m
+end
+
+return Places
+]=====])
+put(server, 'ModuleScript', 'PlayerData', [=====[
+-- CITY GRIND: server-authoritative player data.
+-- The server owns every number. Clients only ever see copies through
+-- Player attributes (read-only for them) and the GetProfile remote.
+
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+
+local PlayerData = {}
+
+local SERVER_ID = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
+
+local store: DataStore? = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(Config.DATASTORE_NAME)
+	end)
+	if ok then
+		store = result
+	else
+		warn("[CityGrind] DataStore unavailable, progress will NOT save this session:", result)
+	end
+end
+
+local profiles: { [Player]: any } = {}
+local dirty: { [Player]: boolean } = {}
+local loadFailed: { [Player]: boolean } = {}
+
+-- Fired as (player, title, body). Main wires this to the Notify remote.
+PlayerData.onNotify = Instance.new("BindableEvent")
+
+-- Feature systems (jobs, vehicles, apartments...) keep their saved data in
+-- data.sections[name], registered with PlayerData.registerSection.
+local sectionDefaults: { [string]: () -> any } = {}
+local loadedListeners: { (Player) -> () } = {}
+local publishListeners: { (Player, any) -> () } = {}
+
+local function defaultProfile()
+	local stats = {}
+	for _, stat in Config.STATS do
+		stats[stat] = 1
+	end
+	local statXP = {}
+	for _, stat in Config.STATS do
+		statXP[stat] = 0
+	end
+	return {
+		version = 1,
+		cash = Config.STARTING_CASH,
+		xp = 0,
+		level = 1,
+		reputation = 0,
+		fame = 0,
+		stats = stats,
+		statXP = statXP,
+		runsCompleted = 0,
+		bestRunSeconds = 0,
+		basketball = { games = 0, wins = 0, losses = 0, points = 0, threes = 0, dunks = 0, blocks = 0, steals = 0 },
+		transactions = {
+			{ t = os.time(), amount = Config.STARTING_CASH, label = "Welcome to the city" },
+		},
+		settings = { wallpaper = 1, uiScale = 1, notificationSounds = true },
+		firstJoin = os.time(),
+		sections = {},
+	}
+end
+
+-- Copies every key missing from `target` out of `template`, recursing into
+-- dictionaries. Arrays are treated as values (a saved list is never padded).
+local function deepFill(target: any, template: any)
+	for key, value in template do
+		if target[key] == nil then
+			target[key] = value
+		elseif type(value) == "table" and type(target[key]) == "table" and #value == 0 and next(value) ~= nil then
+			deepFill(target[key], value)
+		end
+	end
+end
+
+-- Fill in any fields added after a player's data was first saved.
+local function reconcile(data: any)
+	local template = defaultProfile()
+	for key, value in template do
+		if data[key] == nil then
+			data[key] = value
+		elseif type(value) == "table" and type(data[key]) == "table" and key ~= "transactions" then
+			for subKey, subValue in value do
+				if data[key][subKey] == nil then
+					data[key][subKey] = subValue
+				end
+			end
+		end
+	end
+	for name, makeDefault in sectionDefaults do
+		local default = makeDefault()
+		if type(data.sections[name]) ~= "table" then
+			data.sections[name] = default
+		else
+			deepFill(data.sections[name], default)
+		end
+	end
+	return data
+end
+
+local function publish(player: Player)
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	player:SetAttribute("Cash", data.cash)
+	player:SetAttribute("XP", data.xp)
+	player:SetAttribute("Level", data.level)
+	player:SetAttribute("XPToNext", Config.xpToNext(data.level))
+	player:SetAttribute("Reputation", data.reputation)
+	player:SetAttribute("Rank", Config.reputationRank(data.reputation))
+	player:SetAttribute("Fame", data.fame)
+	player:SetAttribute("Wallpaper", data.settings.wallpaper)
+	player:SetAttribute("UIScale", data.settings.uiScale)
+	player:SetAttribute("NotificationSounds", data.settings.notificationSounds)
+	for _, stat in Config.STATS do
+		player:SetAttribute(stat, data.stats[stat])
+	end
+	player:SetAttribute("Wins", data.basketball.wins)
+	player:SetAttribute("Losses", data.basketball.losses)
+	for _, fn in publishListeners do
+		local ok, err = pcall(fn, player, data)
+		if not ok then
+			warn("[CityGrind] publish listener failed:", err)
+		end
+	end
+	player:SetAttribute("DataLoaded", true)
+end
+
+local function retry<T>(attempts: number, fn: () -> T): (boolean, T | string)
+	local ok, result
+	for attempt = 1, attempts do
+		ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		task.wait(attempt * 2)
+	end
+	return false, result
+end
+
+function PlayerData.load(player: Player)
+	local key = "player_" .. player.UserId
+	local data
+
+	if store then
+		local lockedElsewhere = false
+		for _ = 1, 5 do
+			lockedElsewhere = false
+			local ok, result = retry(3, function()
+				return (store :: DataStore):UpdateAsync(key, function(saved)
+					saved = saved or defaultProfile()
+					local lock = saved.sessionLock
+					if lock and lock.server ~= SERVER_ID and os.time() - lock.time < Config.SESSION_LOCK_SECONDS then
+						lockedElsewhere = true
+						return nil -- leave the record untouched
+					end
+					saved.sessionLock = { server = SERVER_ID, time = os.time() }
+					return saved
+				end)
+			end)
+			if not ok then
+				warn("[CityGrind] Load failed for", player.Name, result)
+				loadFailed[player] = true
+				player:Kick("City Grind could not load your save. Please rejoin in a minute.")
+				return
+			end
+			if not lockedElsewhere then
+				data = result
+				break
+			end
+			task.wait(4) -- previous server is still releasing the save
+		end
+		if lockedElsewhere then
+			loadFailed[player] = true
+			player:Kick("Your save is still open on another server. Please rejoin in a minute.")
+			return
+		end
+	else
+		data = defaultProfile()
+	end
+
+	if not player.Parent then
+		return -- left while loading
+	end
+	data.sessionLock = nil
+	profiles[player] = reconcile(data)
+	publish(player)
+	for _, fn in loadedListeners do
+		task.spawn(fn, player)
+	end
+end
+
+function PlayerData.save(player: Player, releaseLock: boolean)
+	local data = profiles[player]
+	if not data or not store or loadFailed[player] then
+		return
+	end
+	local key = "player_" .. player.UserId
+	local ok, err = retry(3, function()
+		return (store :: DataStore):UpdateAsync(key, function(saved)
+			local lock = saved and saved.sessionLock
+			if lock and lock.server ~= SERVER_ID then
+				return nil -- another server took over; never overwrite its data
+			end
+			local copy = table.clone(data)
+			copy.sessionLock = if releaseLock then nil else { server = SERVER_ID, time = os.time() }
+			return copy
+		end)
+	end)
+	if ok then
+		dirty[player] = nil
+	else
+		warn("[CityGrind] Save failed for", player.Name, err)
+	end
+end
+
+function PlayerData.release(player: Player)
+	PlayerData.save(player, true)
+	profiles[player] = nil
+	dirty[player] = nil
+	loadFailed[player] = nil
+end
+
+function PlayerData.get(player: Player)
+	return profiles[player]
+end
+
+local function markChanged(player: Player)
+	dirty[player] = true
+	publish(player)
+end
+
+-- Registers a saved section. Call at require time, before PlayerData.start().
+-- `makeDefault` returns a fresh table; new keys added later are filled into old saves.
+function PlayerData.registerSection(name: string, makeDefault: () -> any)
+	sectionDefaults[name] = makeDefault
+end
+
+-- The live saved table for a section (nil until the player's data has loaded).
+-- Mutate it, then call PlayerData.markChanged(player) so it saves and republishes.
+function PlayerData.section(player: Player, name: string): any
+	local data = profiles[player]
+	return data and data.sections[name]
+end
+
+-- Marks the player's data dirty (saved on the next autosave) and republishes attributes.
+function PlayerData.markChanged(player: Player)
+	if profiles[player] then
+		markChanged(player)
+	end
+end
+
+-- fn(player) runs once each time a player's data finishes loading.
+function PlayerData.onLoaded(fn: (Player) -> ())
+	table.insert(loadedListeners, fn)
+	for player in profiles do
+		task.spawn(fn, player)
+	end
+end
+
+-- fn(player, data) runs whenever the player's attributes are republished,
+-- so a feature can mirror its own saved values into Player attributes.
+function PlayerData.onPublish(fn: (Player, any) -> ())
+	table.insert(publishListeners, fn)
+end
+
+function PlayerData.isLoaded(player: Player): boolean
+	return profiles[player] ~= nil
+end
+
+local function addTransaction(data, amount: number, label: string)
+	table.insert(data.transactions, 1, { t = os.time(), amount = amount, label = label })
+	while #data.transactions > Config.MAX_TRANSACTIONS do
+		table.remove(data.transactions)
+	end
+end
+
+function PlayerData.addCash(player: Player, amount: number, label: string): boolean
+	local data = profiles[player]
+	if not data or amount <= 0 or amount ~= amount then
+		return false
+	end
+	amount = math.floor(amount)
+	data.cash = math.min(data.cash + amount, Config.MAX_CASH)
+	addTransaction(data, amount, label)
+	markChanged(player)
+	return true
+end
+
+function PlayerData.spendCash(player: Player, amount: number, label: string): boolean
+	local data = profiles[player]
+	if not data or amount <= 0 or amount ~= amount then
+		return false
+	end
+	amount = math.floor(amount)
+	if data.cash < amount then
+		return false
+	end
+	data.cash -= amount
+	addTransaction(data, -amount, label)
+	markChanged(player)
+	return true
+end
+
+function PlayerData.addXP(player: Player, amount: number)
+	local data = profiles[player]
+	if not data or amount <= 0 then
+		return
+	end
+	data.xp += math.floor(amount)
+	while data.level < Config.MAX_LEVEL and data.xp >= Config.xpToNext(data.level) do
+		data.xp -= Config.xpToNext(data.level)
+		data.level += 1
+		PlayerData.onNotify:Fire(player, "LEVEL UP", "You reached level " .. data.level .. "!")
+	end
+	if data.level >= Config.MAX_LEVEL then
+		data.xp = 0
+	end
+	markChanged(player)
+end
+
+function PlayerData.addReputation(player: Player, amount: number)
+	local data = profiles[player]
+	if not data or amount <= 0 then
+		return
+	end
+	local before = Config.reputationRank(data.reputation)
+	data.reputation += math.floor(amount)
+	local after = Config.reputationRank(data.reputation)
+	if after ~= before then
+		PlayerData.onNotify:Fire(player, "NEW RANK", "People around the city now call you " .. after .. ".")
+	end
+	markChanged(player)
+end
+
+-- Training progress toward a stat. Every STAT_XP_PER_POINT raises it by 1 (max 99).
+function PlayerData.addStatXP(player: Player, stat: string, amount: number)
+	local data = profiles[player]
+	if not data or data.stats[stat] == nil or amount <= 0 then
+		return
+	end
+	data.statXP[stat] += amount
+	while data.statXP[stat] >= Config.STAT_XP_PER_POINT and data.stats[stat] < 99 do
+		data.statXP[stat] -= Config.STAT_XP_PER_POINT
+		data.stats[stat] += 1
+		PlayerData.onNotify:Fire(player, "STAT UP", stat .. " is now " .. data.stats[stat] .. ".")
+	end
+	markChanged(player)
+end
+
+-- Only whitelisted settings with validated values can be written by a client.
+local SETTING_VALIDATORS = {
+	wallpaper = function(v)
+		return type(v) == "number" and v % 1 == 0 and Config.WALLPAPERS[v] ~= nil
+	end,
+	uiScale = function(v)
+		return table.find(Config.UI_SCALES, v) ~= nil
+	end,
+	notificationSounds = function(v)
+		return type(v) == "boolean"
+	end,
+}
+
+function PlayerData.setSetting(player: Player, key: string, value: any): boolean
+	local data = profiles[player]
+	local validate = SETTING_VALIDATORS[key]
+	if not data or not validate or not validate(value) then
+		return false
+	end
+	data.settings[key] = value
+	markChanged(player)
+	return true
+end
+
+function PlayerData.recordRun(player: Player, seconds: number)
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	data.runsCompleted += 1
+	if data.bestRunSeconds == 0 or seconds < data.bestRunSeconds then
+		data.bestRunSeconds = seconds
+	end
+	markChanged(player)
+end
+
+-- Adds to the saved basketball career totals (only known keys, only positive).
+function PlayerData.recordBasketball(player: Player, deltas: { [string]: number })
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	for key, amount in deltas do
+		if data.basketball[key] ~= nil and type(amount) == "number" and amount > 0 then
+			data.basketball[key] += math.floor(amount)
+		end
+	end
+	markChanged(player)
+end
+
+-- What the phone's Profile and Bank apps are allowed to see.
+function PlayerData.publicSnapshot(player: Player)
+	local data = profiles[player]
+	if not data then
+		return nil
+	end
+	return {
+		cash = data.cash,
+		level = data.level,
+		xp = data.xp,
+		xpToNext = Config.xpToNext(data.level),
+		reputation = data.reputation,
+		rank = Config.reputationRank(data.reputation),
+		fame = data.fame,
+		stats = table.clone(data.stats),
+		runsCompleted = data.runsCompleted,
+		bestRunSeconds = data.bestRunSeconds,
+		basketball = table.clone(data.basketball),
+		transactions = table.clone(data.transactions),
+		firstJoin = data.firstJoin,
+	}
+end
+
+function PlayerData.start()
+	Players.PlayerAdded:Connect(PlayerData.load)
+	for _, player in Players:GetPlayers() do
+		task.spawn(PlayerData.load, player)
+	end
+	Players.PlayerRemoving:Connect(PlayerData.release)
+
+	task.spawn(function()
+		while true do
+			task.wait(Config.AUTOSAVE_SECONDS)
+			for player in dirty do
+				task.spawn(PlayerData.save, player, false)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		if RunService:IsStudio() and not store then
+			return
+		end
+		local pending = 0
+		for _, player in Players:GetPlayers() do
+			pending += 1
+			task.spawn(function()
+				PlayerData.release(player)
+				pending -= 1
+			end)
+		end
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
+			task.wait(0.25)
+		end
+	end)
+end
+
+return PlayerData
+]=====])
 local client = put(SPS, 'LocalScript', 'CityGrindClient', [=====[
 -- CITY GRIND: client entry point (StarterPlayerScripts.CityGrindClient).
 
@@ -2928,6 +3275,21 @@ local player = Players.LocalPlayer
 
 Movement.start()
 HUD.start()
+
+-- Phase 3 life systems. They start before the phone so their apps
+-- (Phone.addApp) land on the home screen.
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+	local module = script:FindFirstChild(name)
+	if module then
+		local ok, err = pcall(function()
+			require(module).start()
+		end)
+		if not ok then
+			warn("[CityGrind] " .. name .. " failed to start:", err)
+		end
+	end
+end
+
 Phone.start()
 Basketball.start()
 
@@ -2937,335 +3299,345 @@ if not player:GetAttribute("DataLoaded") then
 end
 HUD.push("WELCOME TO THE NEIGHBORHOOD", "Press P for your phone. Run the route by your apartment to earn cash.")
 ]=====])
-put(client, 'ModuleScript', 'UI', [=====[
--- CITY GRIND: tiny helpers for building UI in code.
+put(client, 'ModuleScript', 'Basketball', [=====[
+-- CITY GRIND: basketball controls and on-screen feedback.
+-- With the ball: hold Click / R2 / Shoot to raise the shot meter and let go in
+-- the green zone; Q / X / Pass passes. Without it: F / X / Steal near a ball handler.
+-- The server decides whether anything goes in; this only sends button presses.
 
-local UI = {}
-
-UI.FONT = Enum.Font.GothamMedium
-UI.FONT_BOLD = Enum.Font.GothamBold
-UI.FONT_BLACK = Enum.Font.GothamBlack
-
-UI.colors = {
-	panel = Color3.fromRGB(18, 18, 24),
-	panelLight = Color3.fromRGB(34, 34, 44),
-	text = Color3.fromRGB(240, 240, 245),
-	subtext = Color3.fromRGB(160, 160, 175),
-	cash = Color3.fromRGB(110, 230, 120),
-	xp = Color3.fromRGB(90, 170, 255),
-	stamina = Color3.fromRGB(255, 200, 60),
-	danger = Color3.fromRGB(255, 90, 90),
-	accent = Color3.fromRGB(255, 120, 60),
-}
-
--- UI.new("Frame", { Size = ..., Parent = ... }, { children })
-function UI.new(className: string, props: { [string]: any }?, children: { Instance }?): any
-	local inst = Instance.new(className)
-	if inst:IsA("GuiObject") then
-		inst.BorderSizePixel = 0
-	end
-	local parent
-	for key, value in props or {} do
-		if key == "Parent" then
-			parent = value
-		else
-			(inst :: any)[key] = value
-		end
-	end
-	for _, child in children or {} do
-		child.Parent = inst
-	end
-	if parent then
-		inst.Parent = parent
-	end
-	return inst
-end
-
-function UI.corner(radius: number): UICorner
-	return UI.new("UICorner", { CornerRadius = UDim.new(0, radius) })
-end
-
-function UI.padding(px: number): UIPadding
-	return UI.new("UIPadding", {
-		PaddingTop = UDim.new(0, px),
-		PaddingBottom = UDim.new(0, px),
-		PaddingLeft = UDim.new(0, px),
-		PaddingRight = UDim.new(0, px),
-	})
-end
-
-function UI.stroke(color: Color3, thickness: number, transparency: number?): UIStroke
-	return UI.new("UIStroke", {
-		Color = color,
-		Thickness = thickness,
-		Transparency = transparency or 0,
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-	})
-end
-
-function UI.label(props: { [string]: any }, children: { Instance }?): TextLabel
-	local defaults = {
-		BackgroundTransparency = 1,
-		Font = UI.FONT,
-		TextColor3 = UI.colors.text,
-		TextSize = 16,
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}
-	for k, v in props do
-		defaults[k] = v
-	end
-	return UI.new("TextLabel", defaults, children)
-end
-
-function UI.button(props: { [string]: any }, children: { Instance }?): TextButton
-	local defaults = {
-		BackgroundColor3 = UI.colors.panelLight,
-		Font = UI.FONT_BOLD,
-		TextColor3 = UI.colors.text,
-		TextSize = 16,
-		AutoButtonColor = true,
-	}
-	for k, v in props do
-		defaults[k] = v
-	end
-	local b = UI.new("TextButton", defaults, children)
-	UI.corner(10).Parent = b
-	return b
-end
-
--- A horizontal progress bar. Returns the outer frame and a setter.
-function UI.bar(props: { [string]: any }, fillColor: Color3): (Frame, (number) -> ())
-	local outer = UI.new("Frame", props)
-	if not props.BackgroundColor3 then
-		outer.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-	end
-	UI.corner(6).Parent = outer
-	local fill = UI.new("Frame", {
-		Name = "Fill",
-		BackgroundColor3 = fillColor,
-		Size = UDim2.fromScale(0, 1),
-		Parent = outer,
-	}, { UI.corner(6) })
-	return outer, function(fraction: number)
-		fill.Size = UDim2.fromScale(math.clamp(fraction, 0, 1), 1)
-	end
-end
-
-function UI.formatCash(n: number): string
-	local s = tostring(math.floor(math.abs(n)))
-	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-	if formatted:sub(1, 1) == "," then
-		formatted = formatted:sub(2)
-	end
-	return (if n < 0 then "-$" else "$") .. formatted
-end
-
-function UI.formatClock(clockTime: number): string
-	local hours = math.floor(clockTime)
-	local minutes = math.floor((clockTime - hours) * 60)
-	local suffix = if hours >= 12 then "PM" else "AM"
-	local h12 = hours % 12
-	if h12 == 0 then
-		h12 = 12
-	end
-	return string.format("%d:%02d %s", h12, minutes, suffix)
-end
-
-function UI.timeAgo(timestamp: number): string
-	local diff = math.max(0, os.time() - timestamp)
-	if diff < 60 then
-		return "just now"
-	elseif diff < 3600 then
-		return math.floor(diff / 60) .. "m ago"
-	elseif diff < 86400 then
-		return math.floor(diff / 3600) .. "h ago"
-	end
-	return math.floor(diff / 86400) .. "d ago"
-end
-
-return UI
-]=====])
-put(client, 'ModuleScript', 'Movement', [=====[
--- CITY GRIND: sprint, stamina, crouch and slide (section 12).
--- PC: Shift sprint, C crouch (C while sprinting = slide).
--- Mobile: on-screen Sprint (toggle) and Crouch buttons. Controller: L3 sprint, R3 crouch.
-
+local CollectionService = game:GetService("CollectionService")
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 
-local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
-local remotes = ReplicatedStorage.CityGrind:WaitForChild("Remotes")
+local UI = require(script.Parent:WaitForChild("UI"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local remotes = shared:WaitForChild("Remotes")
+local BallAction = remotes:WaitForChild("BallAction")
+local BallFx = remotes:WaitForChild("BallFx")
 
 local player = Players.LocalPlayer
+local colors = UI.colors
+local B = Config.Ball
 
-local Movement = {}
+local Basketball = {}
 
-local stamina = 100
-local exhausted = false
-local wantSprint = false
-local crouching = false
-local slidingUntil = 0
-local humanoid: Humanoid? = nil
-local lastJumpState = false
+local gui: ScreenGui
+local meter: Frame
+local meterFill: Frame
+local meterLabel: TextLabel
+local callout: TextLabel
+local scoreboard: Frame
+local scoreText: TextLabel
+local subText: TextLabel
 
-local function statValue(name: string): number
-	return player:GetAttribute(name) or 1
+local charging = false
+local chargeStart = 0
+local METER_FULL = B.PERFECT_RELEASE * 2 -- the green zone sits in the middle
+
+---------------------------------------------------------------------------
+-- Shot meter
+---------------------------------------------------------------------------
+local function buildMeter()
+	meter = UI.new("Frame", {
+		Name = "ShotMeter",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.2,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -64),
+		Size = UDim2.fromOffset(240, 18),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(9), UI.stroke(Color3.new(1, 1, 1), 1.5, 0.4) })
+	local zoneWidth = B.PERFECT_TOLERANCE * 2 / METER_FULL
+	local goodWidth = B.RELEASE_WINDOW * 0.6 / METER_FULL
+	UI.new("Frame", {
+		BackgroundColor3 = Color3.fromRGB(80, 160, 80),
+		BackgroundTransparency = 0.4,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromScale(goodWidth * 2, 1),
+		Parent = meter,
+	})
+	UI.new("Frame", {
+		BackgroundColor3 = Color3.fromRGB(90, 255, 120),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromScale(zoneWidth, 1),
+		ZIndex = 2,
+		Parent = meter,
+	})
+	meterFill = UI.new("Frame", {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.new(0, 4, 1, 8),
+		ZIndex = 3,
+		Parent = meter,
+	}, { UI.corner(2) })
+	meterLabel = UI.label({
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 16,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextStrokeTransparency = 0.4,
+		Position = UDim2.fromOffset(0, -24),
+		Size = UDim2.new(1, 0, 0, 20),
+		Parent = meter,
+	})
 end
 
-function Movement.maxStamina(): number
-	return Config.maxStamina(statValue("Stamina"))
-end
-
-function Movement.getStamina(): (number, number, boolean)
-	return stamina, Movement.maxStamina(), exhausted
-end
-
-function Movement.isSprinting(): boolean
-	return humanoid ~= nil and humanoid.WalkSpeed >= Config.SPRINT_SPEED - 0.1
-end
-
-local function setCameraOffset(y: number)
-	if humanoid then
-		TweenService:Create(humanoid, TweenInfo.new(0.18), { CameraOffset = Vector3.new(0, y, 0) }):Play()
+local function releaseFeedback(held: number)
+	local off = math.abs(held - B.PERFECT_RELEASE)
+	if off <= B.PERFECT_TOLERANCE then
+		meterLabel.Text = "PERFECT"
+		meterLabel.TextColor3 = Color3.fromRGB(90, 255, 120)
+	elseif off <= B.RELEASE_WINDOW * 0.6 then
+		meterLabel.Text = if held < B.PERFECT_RELEASE then "SLIGHTLY EARLY" else "SLIGHTLY LATE"
+		meterLabel.TextColor3 = colors.stamina
+	else
+		meterLabel.Text = if held < B.PERFECT_RELEASE then "EARLY" else "LATE"
+		meterLabel.TextColor3 = colors.danger
 	end
-end
-
-local function setCrouch(on: boolean)
-	if crouching == on then
-		return
-	end
-	crouching = on
-	setCameraOffset(if on then -1.6 else 0)
-end
-
-local function trySlide(): boolean
-	if not humanoid or os.clock() < slidingUntil then
-		return false
-	end
-	if humanoid.MoveDirection.Magnitude < 0.1 or humanoid.FloorMaterial == Enum.Material.Air then
-		return false
-	end
-	if stamina < Config.SLIDE_COST then
-		return false
-	end
-	stamina -= Config.SLIDE_COST
-	slidingUntil = os.clock() + Config.SLIDE_SECONDS
-	setCameraOffset(-2)
-	task.delay(Config.SLIDE_SECONDS, function()
-		setCameraOffset(if crouching then -1.6 else 0)
-	end)
-	return true
-end
-
-local function onSprint(_, state: Enum.UserInputState, input: InputObject)
-	if input.UserInputType == Enum.UserInputType.Touch then
-		if state == Enum.UserInputState.Begin then
-			wantSprint = not wantSprint -- toggle on mobile
+	task.delay(0.9, function()
+		if not charging then
+			meter.Visible = false
+			meterLabel.Text = ""
 		end
-	elseif state == Enum.UserInputState.Begin then
-		wantSprint = true
-	elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
-		wantSprint = false
-	end
-	return Enum.ContextActionResult.Pass
+	end)
 end
 
-local function onCrouch(_, state: Enum.UserInputState)
-	if state ~= Enum.UserInputState.Begin then
-		return Enum.ContextActionResult.Pass
-	end
-	if Movement.isSprinting() and trySlide() then
-		return Enum.ContextActionResult.Sink
-	end
-	setCrouch(not crouching)
-	if crouching then
-		wantSprint = false
+---------------------------------------------------------------------------
+-- Actions
+---------------------------------------------------------------------------
+local function onShoot(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		charging = true
+		chargeStart = os.clock()
+		meter.Visible = true
+		meterLabel.Text = ""
+		BallAction:FireServer("ShootStart")
+	elseif (state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel) and charging then
+		charging = false
+		releaseFeedback(os.clock() - chargeStart)
+		BallAction:FireServer("ShootRelease")
 	end
 	return Enum.ContextActionResult.Sink
 end
 
-local function bindCharacter(character: Model)
-	humanoid = character:WaitForChild("Humanoid") :: Humanoid
-	crouching = false
-	slidingUntil = 0
-	stamina = Movement.maxStamina()
-	exhausted = false
-	local h = humanoid :: Humanoid
-	h.WalkSpeed = Config.WALK_SPEED
-	h.StateChanged:Connect(function(_, new)
-		if new == Enum.HumanoidStateType.Jumping and not lastJumpState then
-			stamina = math.max(0, stamina - 4)
-		end
-		lastJumpState = new == Enum.HumanoidStateType.Jumping
-	end)
-end
-
-function Movement.start()
-	ContextActionService:BindAction("CitySprint", onSprint, true, Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.ButtonL3)
-	ContextActionService:SetTitle("CitySprint", "Sprint")
-	ContextActionService:SetPosition("CitySprint", UDim2.new(1, -170, 1, -150))
-	ContextActionService:BindAction("CityCrouch", onCrouch, true, Enum.KeyCode.C, Enum.KeyCode.ButtonR3)
-	ContextActionService:SetTitle("CityCrouch", "Crouch")
-	ContextActionService:SetPosition("CityCrouch", UDim2.new(1, -230, 1, -95))
-
-	remotes:WaitForChild("StaminaRefill").OnClientEvent:Connect(function()
-		stamina = Movement.maxStamina()
-		exhausted = false
-	end)
-
-	if player.Character then
-		task.spawn(bindCharacter, player.Character)
+local function onPass(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		BallAction:FireServer("Pass")
 	end
-	player.CharacterAdded:Connect(bindCharacter)
+	return Enum.ContextActionResult.Sink
+end
 
-	RunService.Heartbeat:Connect(function(dt)
-		local h = humanoid
-		if not h or h.Health <= 0 then
-			return
-		end
-		local maxS = Movement.maxStamina()
-		local moving = h.MoveDirection.Magnitude > 0.1
-		local sliding = os.clock() < slidingUntil
-		local canSprint = wantSprint and moving and not crouching and not exhausted and not UserInputService:GetFocusedTextBox()
+local function onSteal(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		BallAction:FireServer("Steal")
+	end
+	return Enum.ContextActionResult.Sink
+end
 
-		local speed
-		if sliding then
-			speed = Config.SLIDE_SPEED
-		elseif canSprint then
-			speed = Config.SPRINT_SPEED
-			-- Better Speed stat makes sprinting cheaper (movement efficiency).
-			local efficiency = 1 - (statValue("Speed") - 1) / 200
-			stamina -= Config.SPRINT_DRAIN_PER_SEC * efficiency * dt
-			if stamina <= 0 then
-				stamina = 0
-				exhausted = true
-			end
-		elseif crouching then
-			speed = Config.CROUCH_SPEED
-		else
-			speed = Config.WALK_SPEED
+local stealBound = false
+local function refreshBindings()
+	if player:GetAttribute("HasBall") then
+		ContextActionService:BindAction("CityShoot", onShoot, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
+		ContextActionService:SetTitle("CityShoot", "Shoot")
+		ContextActionService:SetPosition("CityShoot", UDim2.new(1, -95, 1, -95))
+		ContextActionService:BindAction("CityPass", onPass, true, Enum.KeyCode.Q, Enum.KeyCode.ButtonX)
+		ContextActionService:SetTitle("CityPass", "Pass")
+		ContextActionService:SetPosition("CityPass", UDim2.new(1, -170, 1, -60))
+	else
+		ContextActionService:UnbindAction("CityShoot")
+		ContextActionService:UnbindAction("CityPass")
+		if charging then
+			charging = false
+			meter.Visible = false
 		end
+	end
+end
 
-		if not canSprint and not sliding then
-			local regen = Config.staminaRegen(statValue("Stamina"))
-			if not moving then
-				regen *= 1.5
-			end
-			stamina = math.min(maxS, stamina + regen * dt)
-			if exhausted and stamina >= Config.MIN_SPRINT_STAMINA * 2 then
-				exhausted = false
+-- The steal button only appears near someone dribbling.
+local function updateStealBinding()
+	local want = false
+	if not player:GetAttribute("HasBall") then
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if root then
+			for _, other in Players:GetPlayers() do
+				if other ~= player and other:GetAttribute("HasBall") then
+					local r = other.Character and other.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+					if r and (r.Position - root.Position).Magnitude < 14 then
+						want = true
+						break
+					end
+				end
 			end
 		end
-		stamina = math.min(stamina, maxS)
-		h.WalkSpeed = speed
+	end
+	if want and not stealBound then
+		ContextActionService:BindAction("CitySteal", onSteal, true, Enum.KeyCode.F, Enum.KeyCode.ButtonX)
+		ContextActionService:SetTitle("CitySteal", "Steal")
+		ContextActionService:SetPosition("CitySteal", UDim2.new(1, -170, 1, -60))
+		stealBound = true
+	elseif not want and stealBound then
+		ContextActionService:UnbindAction("CitySteal")
+		stealBound = false
+	end
+end
+
+---------------------------------------------------------------------------
+-- Callouts and scoreboard
+---------------------------------------------------------------------------
+local function showCallout(text: string)
+	callout.Text = text
+	callout.TextTransparency = 0
+	callout.TextStrokeTransparency = 0.2
+	local scale = callout:FindFirstChildOfClass("UIScale") :: UIScale
+	scale.Scale = 0.6
+	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+	local token = os.clock()
+	callout:SetAttribute("Token", token)
+	task.delay(1.6, function()
+		if callout:GetAttribute("Token") == token then
+			TweenService:Create(callout, TweenInfo.new(0.4), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+		end
 	end)
 end
 
-return Movement
+local function buildScoreboard()
+	scoreboard = UI.new("Frame", {
+		Name = "Scoreboard",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.15,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 12),
+		Size = UDim2.fromOffset(260, 56),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(12), UI.padding(6) })
+	scoreText = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = scoreboard })
+	subText = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = scoreboard })
+end
+
+local function nearestActiveCourt(): Model?
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root then
+		return nil
+	end
+	local best, bestDist = nil, 90
+	for _, court in CollectionService:GetTagged("Court") do
+		local state = court:GetAttribute("State")
+		local center = court:GetAttribute("CourtCenter")
+		if center and (state == "Playing" or state == "Countdown" or state == "Ended") then
+			local d = (center - root.Position).Magnitude
+			local mine = player:GetAttribute("InGame") == court:GetAttribute("DisplayName")
+			if mine then
+				return court
+			elseif d < bestDist then
+				best, bestDist = court, d
+			end
+		end
+	end
+	return best
+end
+
+local function updateScoreboard()
+	local court = nearestActiveCourt()
+	scoreboard.Visible = court ~= nil
+	if not court then
+		return
+	end
+	local state = court:GetAttribute("State")
+	local home, away = court:GetAttribute("HomeScore") or 0, court:GetAttribute("AwayScore") or 0
+	scoreText.Text = string.format("HOME  %d  –  %d  AWAY", home, away)
+	if state == "Countdown" then
+		subText.Text = string.format("%s starts in %d", court:GetAttribute("Mode") or "", court:GetAttribute("Countdown") or 0)
+	elseif state == "Ended" then
+		subText.Text = "Final"
+	elseif court:GetAttribute("Overtime") then
+		subText.Text = "Next bucket wins"
+	else
+		local t = court:GetAttribute("TimeLeft") or 0
+		local team = player:GetAttribute("Team")
+		subText.Text = string.format("%d:%02d%s", t // 60, t % 60, if team then "   ·   You: " .. string.upper(team) else "")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Dunk: the server says jump, the client (which owns its character) jumps.
+---------------------------------------------------------------------------
+local function dunkJump(rim: Vector3)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid then
+		return
+	end
+	local toRim = Vector3.new(rim.X - root.Position.X, 0, rim.Z - root.Position.Z)
+	local stopShort = if toRim.Magnitude > 1.5 then toRim - toRim.Unit * 1.2 else Vector3.zero
+	local rise = math.max(4, rim.Y - root.Position.Y - 1)
+	local up = math.sqrt(2 * workspace.Gravity * rise)
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	root.AssemblyLinearVelocity = stopShort / (up / workspace.Gravity) + Vector3.new(0, up, 0)
+end
+
+function Basketball.start()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindBasketball",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 3,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildMeter()
+	buildScoreboard()
+	callout = UI.label({
+		Name = "Callout",
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 54,
+		TextColor3 = Color3.fromRGB(255, 210, 60),
+		TextStrokeColor3 = Color3.fromRGB(60, 20, 0),
+		TextStrokeTransparency = 1,
+		TextTransparency = 1,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.32),
+		Size = UDim2.new(1, 0, 0, 70),
+		Parent = gui,
+	}, { UI.new("UIScale", {}) })
+
+	player:GetAttributeChangedSignal("HasBall"):Connect(refreshBindings)
+	refreshBindings()
+
+	BallFx.OnClientEvent:Connect(function(kind: string, arg: any)
+		if kind == "Callout" and type(arg) == "string" then
+			showCallout(arg)
+		elseif kind == "Dunk" and typeof(arg) == "Vector3" then
+			dunkJump(arg)
+		end
+	end)
+
+	local accumulator = 0
+	RunService.Heartbeat:Connect(function(dt)
+		if charging then
+			local t = (os.clock() - chargeStart) / METER_FULL
+			meterFill.Position = UDim2.fromScale(math.clamp(t, 0, 1), 0.5)
+		end
+		accumulator += dt
+		if accumulator >= 0.25 then
+			accumulator = 0
+			updateStealBinding()
+			updateScoreboard()
+		end
+	end)
+end
+
+return Basketball
 ]=====])
 put(client, 'ModuleScript', 'HUD', [=====[
 -- CITY GRIND: on-screen HUD. Cash, level/XP, reputation rank, stamina,
@@ -3529,6 +3901,188 @@ function HUD.start()
 end
 
 return HUD
+]=====])
+put(client, 'ModuleScript', 'Movement', [=====[
+-- CITY GRIND: sprint, stamina, crouch and slide (section 12).
+-- PC: Shift sprint, C crouch (C while sprinting = slide).
+-- Mobile: on-screen Sprint (toggle) and Crouch buttons. Controller: L3 sprint, R3 crouch.
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local remotes = ReplicatedStorage.CityGrind:WaitForChild("Remotes")
+
+local player = Players.LocalPlayer
+
+local Movement = {}
+
+local stamina = 100
+local exhausted = false
+local wantSprint = false
+local crouching = false
+local slidingUntil = 0
+local humanoid: Humanoid? = nil
+local lastJumpState = false
+
+local function statValue(name: string): number
+	return player:GetAttribute(name) or 1
+end
+
+function Movement.maxStamina(): number
+	return Config.maxStamina(statValue("Stamina"))
+end
+
+function Movement.getStamina(): (number, number, boolean)
+	return stamina, Movement.maxStamina(), exhausted
+end
+
+function Movement.isSprinting(): boolean
+	return humanoid ~= nil and humanoid.WalkSpeed >= Config.SPRINT_SPEED - 0.1
+end
+
+local function setCameraOffset(y: number)
+	if humanoid then
+		TweenService:Create(humanoid, TweenInfo.new(0.18), { CameraOffset = Vector3.new(0, y, 0) }):Play()
+	end
+end
+
+local function setCrouch(on: boolean)
+	if crouching == on then
+		return
+	end
+	crouching = on
+	setCameraOffset(if on then -1.6 else 0)
+end
+
+local function trySlide(): boolean
+	if not humanoid or os.clock() < slidingUntil then
+		return false
+	end
+	if humanoid.MoveDirection.Magnitude < 0.1 or humanoid.FloorMaterial == Enum.Material.Air then
+		return false
+	end
+	if stamina < Config.SLIDE_COST then
+		return false
+	end
+	stamina -= Config.SLIDE_COST
+	slidingUntil = os.clock() + Config.SLIDE_SECONDS
+	setCameraOffset(-2)
+	task.delay(Config.SLIDE_SECONDS, function()
+		setCameraOffset(if crouching then -1.6 else 0)
+	end)
+	return true
+end
+
+local function onSprint(_, state: Enum.UserInputState, input: InputObject)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		if state == Enum.UserInputState.Begin then
+			wantSprint = not wantSprint -- toggle on mobile
+		end
+	elseif state == Enum.UserInputState.Begin then
+		wantSprint = true
+	elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+		wantSprint = false
+	end
+	return Enum.ContextActionResult.Pass
+end
+
+local function onCrouch(_, state: Enum.UserInputState)
+	if state ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	if Movement.isSprinting() and trySlide() then
+		return Enum.ContextActionResult.Sink
+	end
+	setCrouch(not crouching)
+	if crouching then
+		wantSprint = false
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function bindCharacter(character: Model)
+	humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	crouching = false
+	slidingUntil = 0
+	stamina = Movement.maxStamina()
+	exhausted = false
+	local h = humanoid :: Humanoid
+	h.WalkSpeed = Config.WALK_SPEED
+	h.StateChanged:Connect(function(_, new)
+		if new == Enum.HumanoidStateType.Jumping and not lastJumpState then
+			stamina = math.max(0, stamina - 4)
+		end
+		lastJumpState = new == Enum.HumanoidStateType.Jumping
+	end)
+end
+
+function Movement.start()
+	ContextActionService:BindAction("CitySprint", onSprint, true, Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.ButtonL3)
+	ContextActionService:SetTitle("CitySprint", "Sprint")
+	ContextActionService:SetPosition("CitySprint", UDim2.new(1, -170, 1, -150))
+	ContextActionService:BindAction("CityCrouch", onCrouch, true, Enum.KeyCode.C, Enum.KeyCode.ButtonR3)
+	ContextActionService:SetTitle("CityCrouch", "Crouch")
+	ContextActionService:SetPosition("CityCrouch", UDim2.new(1, -230, 1, -95))
+
+	remotes:WaitForChild("StaminaRefill").OnClientEvent:Connect(function()
+		stamina = Movement.maxStamina()
+		exhausted = false
+	end)
+
+	if player.Character then
+		task.spawn(bindCharacter, player.Character)
+	end
+	player.CharacterAdded:Connect(bindCharacter)
+
+	RunService.Heartbeat:Connect(function(dt)
+		local h = humanoid
+		if not h or h.Health <= 0 then
+			return
+		end
+		local maxS = Movement.maxStamina()
+		local moving = h.MoveDirection.Magnitude > 0.1
+		local sliding = os.clock() < slidingUntil
+		local canSprint = wantSprint and moving and not crouching and not exhausted and not UserInputService:GetFocusedTextBox()
+
+		local speed
+		if sliding then
+			speed = Config.SLIDE_SPEED
+		elseif canSprint then
+			speed = Config.SPRINT_SPEED
+			-- Better Speed stat makes sprinting cheaper (movement efficiency).
+			local efficiency = 1 - (statValue("Speed") - 1) / 200
+			stamina -= Config.SPRINT_DRAIN_PER_SEC * efficiency * dt
+			if stamina <= 0 then
+				stamina = 0
+				exhausted = true
+			end
+		elseif crouching then
+			speed = Config.CROUCH_SPEED
+		else
+			speed = Config.WALK_SPEED
+		end
+
+		if not canSprint and not sliding then
+			local regen = Config.staminaRegen(statValue("Stamina"))
+			if not moving then
+				regen *= 1.5
+			end
+			stamina = math.min(maxS, stamina + regen * dt)
+			if exhausted and stamina >= Config.MIN_SPRINT_STAMINA * 2 then
+				exhausted = false
+			end
+		end
+		stamina = math.min(stamina, maxS)
+		h.WalkSpeed = speed
+	end)
+end
+
+return Movement
 ]=====])
 put(client, 'ModuleScript', 'Phone', [=====[
 -- CITY GRIND: the phone (sections 15, 16). P / DPad-Up / on-screen button.
@@ -4125,6 +4679,10 @@ local APPS = {
 	{ id = "Settings", label = "Settings", icon = "⚙️", color = Color3.fromRGB(55, 55, 68) },
 }
 
+-- Apps added by other client systems (Jobs, Garage...) through Phone.addApp.
+type ExtraApp = { id: string, label: string, icon: string, color: Color3, build: (content: ScrollingFrame, frame: Frame) -> (() -> ())? }
+local extraApps: { ExtraApp } = {}
+
 local function buildHome()
 	local home = UI.new("Frame", { Name = "Home", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = screen })
 	pages.Home = { frame = home }
@@ -4135,7 +4693,12 @@ local function buildHome()
 	local grid = UI.new("Frame", { Name = "Apps", BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 170), Size = UDim2.new(1, -28, 1, -210), Parent = home }, {
 		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(60, 80), CellPadding = UDim2.fromOffset(6, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
-	for i, app in APPS do
+	local allApps = table.clone(APPS)
+	for _, app in extraApps do
+		-- extra apps go before Settings so Settings stays last
+		table.insert(allApps, #allApps, app)
+	end
+	for i, app in allApps do
 		local cell = UI.new("Frame", { Name = app.id, BackgroundTransparency = 1, LayoutOrder = i, Parent = grid })
 		local icon = UI.new("TextButton", {
 			Name = "Icon",
@@ -4235,6 +4798,43 @@ function Phone.setOpen(open: boolean)
 	remotes.PhoneState:FireServer(open)
 end
 
+-- Registers a phone app. Call before Phone.start().
+-- build(content, frame) fills the page once; it may return an `open` function
+-- that runs every time the app is opened (use it to refresh live data).
+function Phone.addApp(app: { id: string, label: string, icon: string, color: Color3 }, build: (content: ScrollingFrame, frame: Frame) -> (() -> ())?)
+	table.insert(extraApps, { id = app.id, label = app.label, icon = app.icon, color = app.color, build = build })
+end
+
+-- Helpers for app pages.
+Phone.card = card -- (parent, height, layoutOrder) -> rounded Frame
+Phone.clear = clear -- removes everything but layouts/padding
+Phone.setGPS = function(name: string, target: Vector3)
+	setGPS(name, target)
+end
+Phone.clearGPS = function()
+	clearGPS()
+end
+Phone.width = PHONE_W - 2 * SCREEN_INSET
+
+function Phone.showPage(name: string)
+	showPage(name)
+end
+
+function Phone.isOpen(): boolean
+	return isOpen
+end
+
+function Phone.currentPage(): string
+	return currentPage
+end
+
+-- Re-runs an app's open function if it is on screen right now.
+function Phone.refresh(id: string)
+	if isOpen and currentPage == id then
+		showPage(id)
+	end
+end
+
 function Phone.toggle()
 	Phone.setOpen(not isOpen)
 end
@@ -4278,6 +4878,15 @@ function Phone.start()
 	buildMap()
 	buildAlerts()
 	buildSettings()
+	for _, app in extraApps do
+		local frame, content = appPage(app.id, app.label)
+		local ok, open = pcall(app.build, content, frame)
+		if ok then
+			pages[app.id].open = open
+		else
+			warn("[CityGrind] phone app " .. app.id .. " failed:", open)
+		end
+	end
 	showPage("Home")
 
 	-- Home indicator: tap to go home, tap again on Home to put the phone away.
@@ -4330,344 +4939,152 @@ end
 
 return Phone
 ]=====])
-put(client, 'ModuleScript', 'Basketball', [=====[
--- CITY GRIND: basketball controls and on-screen feedback.
--- With the ball: hold Click / R2 / Shoot to raise the shot meter and let go in
--- the green zone; Q / X / Pass passes. Without it: F / X / Steal near a ball handler.
--- The server decides whether anything goes in; this only sends button presses.
+put(client, 'ModuleScript', 'UI', [=====[
+-- CITY GRIND: tiny helpers for building UI in code.
 
-local CollectionService = game:GetService("CollectionService")
-local ContextActionService = game:GetService("ContextActionService")
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
+local UI = {}
 
-local UI = require(script.Parent:WaitForChild("UI"))
-local shared = ReplicatedStorage:WaitForChild("CityGrind")
-local Config = require(shared:WaitForChild("Config"))
-local remotes = shared:WaitForChild("Remotes")
-local BallAction = remotes:WaitForChild("BallAction")
-local BallFx = remotes:WaitForChild("BallFx")
+UI.FONT = Enum.Font.GothamMedium
+UI.FONT_BOLD = Enum.Font.GothamBold
+UI.FONT_BLACK = Enum.Font.GothamBlack
 
-local player = Players.LocalPlayer
-local colors = UI.colors
-local B = Config.Ball
+UI.colors = {
+	panel = Color3.fromRGB(18, 18, 24),
+	panelLight = Color3.fromRGB(34, 34, 44),
+	text = Color3.fromRGB(240, 240, 245),
+	subtext = Color3.fromRGB(160, 160, 175),
+	cash = Color3.fromRGB(110, 230, 120),
+	xp = Color3.fromRGB(90, 170, 255),
+	stamina = Color3.fromRGB(255, 200, 60),
+	danger = Color3.fromRGB(255, 90, 90),
+	accent = Color3.fromRGB(255, 120, 60),
+}
 
-local Basketball = {}
+-- UI.new("Frame", { Size = ..., Parent = ... }, { children })
+function UI.new(className: string, props: { [string]: any }?, children: { Instance }?): any
+	local inst = Instance.new(className)
+	if inst:IsA("GuiObject") then
+		inst.BorderSizePixel = 0
+	end
+	local parent
+	for key, value in props or {} do
+		if key == "Parent" then
+			parent = value
+		else
+			(inst :: any)[key] = value
+		end
+	end
+	for _, child in children or {} do
+		child.Parent = inst
+	end
+	if parent then
+		inst.Parent = parent
+	end
+	return inst
+end
 
-local gui: ScreenGui
-local meter: Frame
-local meterFill: Frame
-local meterLabel: TextLabel
-local callout: TextLabel
-local scoreboard: Frame
-local scoreText: TextLabel
-local subText: TextLabel
+function UI.corner(radius: number): UICorner
+	return UI.new("UICorner", { CornerRadius = UDim.new(0, radius) })
+end
 
-local charging = false
-local chargeStart = 0
-local METER_FULL = B.PERFECT_RELEASE * 2 -- the green zone sits in the middle
-
----------------------------------------------------------------------------
--- Shot meter
----------------------------------------------------------------------------
-local function buildMeter()
-	meter = UI.new("Frame", {
-		Name = "ShotMeter",
-		BackgroundColor3 = colors.panel,
-		BackgroundTransparency = 0.2,
-		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -64),
-		Size = UDim2.fromOffset(240, 18),
-		Visible = false,
-		Parent = gui,
-	}, { UI.corner(9), UI.stroke(Color3.new(1, 1, 1), 1.5, 0.4) })
-	local zoneWidth = B.PERFECT_TOLERANCE * 2 / METER_FULL
-	local goodWidth = B.RELEASE_WINDOW * 0.6 / METER_FULL
-	UI.new("Frame", {
-		BackgroundColor3 = Color3.fromRGB(80, 160, 80),
-		BackgroundTransparency = 0.4,
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.fromScale(0.5, 0),
-		Size = UDim2.fromScale(goodWidth * 2, 1),
-		Parent = meter,
+function UI.padding(px: number): UIPadding
+	return UI.new("UIPadding", {
+		PaddingTop = UDim.new(0, px),
+		PaddingBottom = UDim.new(0, px),
+		PaddingLeft = UDim.new(0, px),
+		PaddingRight = UDim.new(0, px),
 	})
-	UI.new("Frame", {
-		BackgroundColor3 = Color3.fromRGB(90, 255, 120),
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.fromScale(0.5, 0),
-		Size = UDim2.fromScale(zoneWidth, 1),
-		ZIndex = 2,
-		Parent = meter,
+end
+
+function UI.stroke(color: Color3, thickness: number, transparency: number?): UIStroke
+	return UI.new("UIStroke", {
+		Color = color,
+		Thickness = thickness,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 	})
-	meterFill = UI.new("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0, 0.5),
-		Size = UDim2.new(0, 4, 1, 8),
-		ZIndex = 3,
-		Parent = meter,
-	}, { UI.corner(2) })
-	meterLabel = UI.label({
-		Text = "",
-		Font = UI.FONT_BLACK,
+end
+
+function UI.label(props: { [string]: any }, children: { Instance }?): TextLabel
+	local defaults = {
+		BackgroundTransparency = 1,
+		Font = UI.FONT,
+		TextColor3 = UI.colors.text,
 		TextSize = 16,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		TextStrokeTransparency = 0.4,
-		Position = UDim2.fromOffset(0, -24),
-		Size = UDim2.new(1, 0, 0, 20),
-		Parent = meter,
-	})
-end
-
-local function releaseFeedback(held: number)
-	local off = math.abs(held - B.PERFECT_RELEASE)
-	if off <= B.PERFECT_TOLERANCE then
-		meterLabel.Text = "PERFECT"
-		meterLabel.TextColor3 = Color3.fromRGB(90, 255, 120)
-	elseif off <= B.RELEASE_WINDOW * 0.6 then
-		meterLabel.Text = if held < B.PERFECT_RELEASE then "SLIGHTLY EARLY" else "SLIGHTLY LATE"
-		meterLabel.TextColor3 = colors.stamina
-	else
-		meterLabel.Text = if held < B.PERFECT_RELEASE then "EARLY" else "LATE"
-		meterLabel.TextColor3 = colors.danger
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}
+	for k, v in props do
+		defaults[k] = v
 	end
-	task.delay(0.9, function()
-		if not charging then
-			meter.Visible = false
-			meterLabel.Text = ""
-		end
-	end)
+	return UI.new("TextLabel", defaults, children)
 end
 
----------------------------------------------------------------------------
--- Actions
----------------------------------------------------------------------------
-local function onShoot(_, state: Enum.UserInputState)
-	if state == Enum.UserInputState.Begin then
-		charging = true
-		chargeStart = os.clock()
-		meter.Visible = true
-		meterLabel.Text = ""
-		BallAction:FireServer("ShootStart")
-	elseif (state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel) and charging then
-		charging = false
-		releaseFeedback(os.clock() - chargeStart)
-		BallAction:FireServer("ShootRelease")
+function UI.button(props: { [string]: any }, children: { Instance }?): TextButton
+	local defaults = {
+		BackgroundColor3 = UI.colors.panelLight,
+		Font = UI.FONT_BOLD,
+		TextColor3 = UI.colors.text,
+		TextSize = 16,
+		AutoButtonColor = true,
+	}
+	for k, v in props do
+		defaults[k] = v
 	end
-	return Enum.ContextActionResult.Sink
+	local b = UI.new("TextButton", defaults, children)
+	UI.corner(10).Parent = b
+	return b
 end
 
-local function onPass(_, state: Enum.UserInputState)
-	if state == Enum.UserInputState.Begin then
-		BallAction:FireServer("Pass")
+-- A horizontal progress bar. Returns the outer frame and a setter.
+function UI.bar(props: { [string]: any }, fillColor: Color3): (Frame, (number) -> ())
+	local outer = UI.new("Frame", props)
+	if not props.BackgroundColor3 then
+		outer.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 	end
-	return Enum.ContextActionResult.Sink
-end
-
-local function onSteal(_, state: Enum.UserInputState)
-	if state == Enum.UserInputState.Begin then
-		BallAction:FireServer("Steal")
-	end
-	return Enum.ContextActionResult.Sink
-end
-
-local stealBound = false
-local function refreshBindings()
-	if player:GetAttribute("HasBall") then
-		ContextActionService:BindAction("CityShoot", onShoot, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
-		ContextActionService:SetTitle("CityShoot", "Shoot")
-		ContextActionService:SetPosition("CityShoot", UDim2.new(1, -95, 1, -95))
-		ContextActionService:BindAction("CityPass", onPass, true, Enum.KeyCode.Q, Enum.KeyCode.ButtonX)
-		ContextActionService:SetTitle("CityPass", "Pass")
-		ContextActionService:SetPosition("CityPass", UDim2.new(1, -170, 1, -60))
-	else
-		ContextActionService:UnbindAction("CityShoot")
-		ContextActionService:UnbindAction("CityPass")
-		if charging then
-			charging = false
-			meter.Visible = false
-		end
+	UI.corner(6).Parent = outer
+	local fill = UI.new("Frame", {
+		Name = "Fill",
+		BackgroundColor3 = fillColor,
+		Size = UDim2.fromScale(0, 1),
+		Parent = outer,
+	}, { UI.corner(6) })
+	return outer, function(fraction: number)
+		fill.Size = UDim2.fromScale(math.clamp(fraction, 0, 1), 1)
 	end
 end
 
--- The steal button only appears near someone dribbling.
-local function updateStealBinding()
-	local want = false
-	if not player:GetAttribute("HasBall") then
-		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-		if root then
-			for _, other in Players:GetPlayers() do
-				if other ~= player and other:GetAttribute("HasBall") then
-					local r = other.Character and other.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-					if r and (r.Position - root.Position).Magnitude < 14 then
-						want = true
-						break
-					end
-				end
-			end
-		end
+function UI.formatCash(n: number): string
+	local s = tostring(math.floor(math.abs(n)))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
 	end
-	if want and not stealBound then
-		ContextActionService:BindAction("CitySteal", onSteal, true, Enum.KeyCode.F, Enum.KeyCode.ButtonX)
-		ContextActionService:SetTitle("CitySteal", "Steal")
-		ContextActionService:SetPosition("CitySteal", UDim2.new(1, -170, 1, -60))
-		stealBound = true
-	elseif not want and stealBound then
-		ContextActionService:UnbindAction("CitySteal")
-		stealBound = false
-	end
+	return (if n < 0 then "-$" else "$") .. formatted
 end
 
----------------------------------------------------------------------------
--- Callouts and scoreboard
----------------------------------------------------------------------------
-local function showCallout(text: string)
-	callout.Text = text
-	callout.TextTransparency = 0
-	callout.TextStrokeTransparency = 0.2
-	local scale = callout:FindFirstChildOfClass("UIScale") :: UIScale
-	scale.Scale = 0.6
-	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
-	local token = os.clock()
-	callout:SetAttribute("Token", token)
-	task.delay(1.6, function()
-		if callout:GetAttribute("Token") == token then
-			TweenService:Create(callout, TweenInfo.new(0.4), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
-		end
-	end)
-end
-
-local function buildScoreboard()
-	scoreboard = UI.new("Frame", {
-		Name = "Scoreboard",
-		BackgroundColor3 = colors.panel,
-		BackgroundTransparency = 0.15,
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 12),
-		Size = UDim2.fromOffset(260, 56),
-		Visible = false,
-		Parent = gui,
-	}, { UI.corner(12), UI.padding(6) })
-	scoreText = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = scoreboard })
-	subText = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = scoreboard })
-end
-
-local function nearestActiveCourt(): Model?
-	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not root then
-		return nil
+function UI.formatClock(clockTime: number): string
+	local hours = math.floor(clockTime)
+	local minutes = math.floor((clockTime - hours) * 60)
+	local suffix = if hours >= 12 then "PM" else "AM"
+	local h12 = hours % 12
+	if h12 == 0 then
+		h12 = 12
 	end
-	local best, bestDist = nil, 90
-	for _, court in CollectionService:GetTagged("Court") do
-		local state = court:GetAttribute("State")
-		local center = court:GetAttribute("CourtCenter")
-		if center and (state == "Playing" or state == "Countdown" or state == "Ended") then
-			local d = (center - root.Position).Magnitude
-			local mine = player:GetAttribute("InGame") == court:GetAttribute("DisplayName")
-			if mine then
-				return court
-			elseif d < bestDist then
-				best, bestDist = court, d
-			end
-		end
-	end
-	return best
+	return string.format("%d:%02d %s", h12, minutes, suffix)
 end
 
-local function updateScoreboard()
-	local court = nearestActiveCourt()
-	scoreboard.Visible = court ~= nil
-	if not court then
-		return
+function UI.timeAgo(timestamp: number): string
+	local diff = math.max(0, os.time() - timestamp)
+	if diff < 60 then
+		return "just now"
+	elseif diff < 3600 then
+		return math.floor(diff / 60) .. "m ago"
+	elseif diff < 86400 then
+		return math.floor(diff / 3600) .. "h ago"
 	end
-	local state = court:GetAttribute("State")
-	local home, away = court:GetAttribute("HomeScore") or 0, court:GetAttribute("AwayScore") or 0
-	scoreText.Text = string.format("HOME  %d  –  %d  AWAY", home, away)
-	if state == "Countdown" then
-		subText.Text = string.format("%s starts in %d", court:GetAttribute("Mode") or "", court:GetAttribute("Countdown") or 0)
-	elseif state == "Ended" then
-		subText.Text = "Final"
-	elseif court:GetAttribute("Overtime") then
-		subText.Text = "Next bucket wins"
-	else
-		local t = court:GetAttribute("TimeLeft") or 0
-		local team = player:GetAttribute("Team")
-		subText.Text = string.format("%d:%02d%s", t // 60, t % 60, if team then "   ·   You: " .. string.upper(team) else "")
-	end
+	return math.floor(diff / 86400) .. "d ago"
 end
 
----------------------------------------------------------------------------
--- Dunk: the server says jump, the client (which owns its character) jumps.
----------------------------------------------------------------------------
-local function dunkJump(rim: Vector3)
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not root or not humanoid then
-		return
-	end
-	local toRim = Vector3.new(rim.X - root.Position.X, 0, rim.Z - root.Position.Z)
-	local stopShort = if toRim.Magnitude > 1.5 then toRim - toRim.Unit * 1.2 else Vector3.zero
-	local rise = math.max(4, rim.Y - root.Position.Y - 1)
-	local up = math.sqrt(2 * workspace.Gravity * rise)
-	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-	root.AssemblyLinearVelocity = stopShort / (up / workspace.Gravity) + Vector3.new(0, up, 0)
-end
-
-function Basketball.start()
-	gui = UI.new("ScreenGui", {
-		Name = "CityGrindBasketball",
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		DisplayOrder = 3,
-		Parent = player:WaitForChild("PlayerGui"),
-	})
-	buildMeter()
-	buildScoreboard()
-	callout = UI.label({
-		Name = "Callout",
-		Text = "",
-		Font = UI.FONT_BLACK,
-		TextSize = 54,
-		TextColor3 = Color3.fromRGB(255, 210, 60),
-		TextStrokeColor3 = Color3.fromRGB(60, 20, 0),
-		TextStrokeTransparency = 1,
-		TextTransparency = 1,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.32),
-		Size = UDim2.new(1, 0, 0, 70),
-		Parent = gui,
-	}, { UI.new("UIScale", {}) })
-
-	player:GetAttributeChangedSignal("HasBall"):Connect(refreshBindings)
-	refreshBindings()
-
-	BallFx.OnClientEvent:Connect(function(kind: string, arg: any)
-		if kind == "Callout" and type(arg) == "string" then
-			showCallout(arg)
-		elseif kind == "Dunk" and typeof(arg) == "Vector3" then
-			dunkJump(arg)
-		end
-	end)
-
-	local accumulator = 0
-	RunService.Heartbeat:Connect(function(dt)
-		if charging then
-			local t = (os.clock() - chargeStart) / METER_FULL
-			meterFill.Position = UDim2.fromScale(math.clamp(t, 0, 1), 0.5)
-		end
-		accumulator += dt
-		if accumulator >= 0.25 then
-			accumulator = 0
-			updateStealBinding()
-			updateScoreboard()
-		end
-	end)
-end
-
-return Basketball
+return UI
 ]=====])
 print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')

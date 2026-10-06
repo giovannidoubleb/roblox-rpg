@@ -10,24 +10,26 @@ def read(rel):
     with open(os.path.join(SRC, rel), encoding="utf-8") as f:
         return f.read()
 
+def modules(folder, skip):
+    """Every .luau module in src/<folder>, sorted, except the entry script."""
+    names = sorted(f for f in os.listdir(os.path.join(SRC, folder)) if f.endswith(".luau") and f != skip)
+    return [(n[:-5], f"{folder}/{n}") for n in names]
+
+SHARED = modules("shared", None)
+SERVER = modules("server", "Main.server.luau")
+CLIENT = modules("client", "Client.client.luau")
+
 # (service, [path inside service], className, name, source file, children)
 TREE = [
     ("ReplicatedStorage", [("Folder", "CityGrind", None, [
-        ("ModuleScript", "Config", "shared/Config.luau", []),
+        ("ModuleScript", n, f, []) for n, f in SHARED
     ])]),
     ("ServerScriptService", [("Script", "CityGrindServer", "server/Main.server.luau", [
-        ("ModuleScript", "PlayerData", "server/PlayerData.luau", []),
-        ("ModuleScript", "CityBuilder", "server/CityBuilder.luau", []),
-        ("ModuleScript", "Basketball", "server/Basketball.luau", []),
-        ("ModuleScript", "CourtGames", "server/CourtGames.luau", []),
+        ("ModuleScript", n, f, []) for n, f in SERVER
     ])]),
     ("StarterPlayer", [("StarterPlayerScripts", "StarterPlayerScripts", None, [
         ("LocalScript", "CityGrindClient", "client/Client.client.luau", [
-            ("ModuleScript", "UI", "client/UI.luau", []),
-            ("ModuleScript", "Movement", "client/Movement.luau", []),
-            ("ModuleScript", "HUD", "client/HUD.luau", []),
-            ("ModuleScript", "Phone", "client/Phone.luau", []),
-            ("ModuleScript", "Basketball", "client/Basketball.luau", []),
+            ("ModuleScript", n, f, []) for n, f in CLIENT
         ]),
     ])]),
 ]
@@ -67,7 +69,7 @@ def build_rbxlx():
 
 def build_installer():
     lines = [
-        "-- CITY GRIND Phase 1 installer. Paste all of this into Studio's Command Bar",
+        "-- CITY GRIND installer. Paste all of this into Studio's Command Bar",
         "-- (View > Command Bar) and press Enter. Re-running it updates the scripts in place.",
         "local function put(parent, className, name, source)",
         "\tlocal existing = parent:FindFirstChild(name)",
@@ -89,17 +91,34 @@ def build_installer():
         assert "]=====]" not in body
         return "[=====[\n" + body + "]=====]"
     lines.append("local folder = put(RS, 'Folder', 'CityGrind', nil)")
-    lines.append(f"put(folder, 'ModuleScript', 'Config', {lit('shared/Config.luau')})")
+    for n, f in SHARED:
+        lines.append(f"put(folder, 'ModuleScript', '{n}', {lit(f)})")
     lines.append(f"local server = put(SSS, 'Script', 'CityGrindServer', {lit('server/Main.server.luau')})")
-    lines.append(f"put(server, 'ModuleScript', 'PlayerData', {lit('server/PlayerData.luau')})")
-    for n in ["CityBuilder", "Basketball", "CourtGames"]:
-        lines.append(f"put(server, 'ModuleScript', '{n}', {lit('server/' + n + '.luau')})")
+    for n, f in SERVER:
+        lines.append(f"put(server, 'ModuleScript', '{n}', {lit(f)})")
     lines.append(f"local client = put(SPS, 'LocalScript', 'CityGrindClient', {lit('client/Client.client.luau')})")
-    for n, f in [("UI", "client/UI.luau"), ("Movement", "client/Movement.luau"), ("HUD", "client/HUD.luau"), ("Phone", "client/Phone.luau"), ("Basketball", "client/Basketball.luau")]:
+    for n, f in CLIENT:
         lines.append(f"put(client, 'ModuleScript', '{n}', {lit(f)})")
     lines.append("print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')")
     return "\n".join(lines) + "\n"
 
+def build_project():
+    import json
+    def mods(lst):
+        return {n: {"$path": "src/" + f} for n, f in lst}
+    tree = {
+        "$className": "DataModel",
+        "ReplicatedStorage": {"CityGrind": dict({"$className": "Folder"}, **mods(SHARED))},
+        "ServerScriptService": {"CityGrindServer": dict({"$path": "src/server/Main.server.luau"}, **mods(SERVER))},
+        "StarterPlayer": {
+            "$properties": {"EnableMouseLockOption": False},
+            "StarterPlayerScripts": {"CityGrindClient": dict({"$path": "src/client/Client.client.luau"}, **mods(CLIENT))},
+        },
+    }
+    return json.dumps({"name": "city-grind", "tree": tree}, indent=2) + "\n"
+
+with open(os.path.join(ROOT, "default.project.json"), "w", encoding="utf-8") as f:
+    f.write(build_project())
 os.makedirs(DIST, exist_ok=True)
 with open(os.path.join(DIST, "CityGrind.rbxlx"), "w", encoding="utf-8") as f:
     f.write(build_rbxlx())

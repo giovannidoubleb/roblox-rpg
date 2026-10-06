@@ -592,6 +592,10 @@ local APPS = {
 	{ id = "Settings", label = "Settings", icon = "⚙️", color = Color3.fromRGB(55, 55, 68) },
 }
 
+-- Apps added by other client systems (Jobs, Garage...) through Phone.addApp.
+type ExtraApp = { id: string, label: string, icon: string, color: Color3, build: (content: ScrollingFrame, frame: Frame) -> (() -> ())? }
+local extraApps: { ExtraApp } = {}
+
 local function buildHome()
 	local home = UI.new("Frame", { Name = "Home", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = screen })
 	pages.Home = { frame = home }
@@ -602,7 +606,12 @@ local function buildHome()
 	local grid = UI.new("Frame", { Name = "Apps", BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 170), Size = UDim2.new(1, -28, 1, -210), Parent = home }, {
 		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(60, 80), CellPadding = UDim2.fromOffset(6, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
-	for i, app in APPS do
+	local allApps = table.clone(APPS)
+	for _, app in extraApps do
+		-- extra apps go before Settings so Settings stays last
+		table.insert(allApps, #allApps, app)
+	end
+	for i, app in allApps do
 		local cell = UI.new("Frame", { Name = app.id, BackgroundTransparency = 1, LayoutOrder = i, Parent = grid })
 		local icon = UI.new("TextButton", {
 			Name = "Icon",
@@ -702,6 +711,43 @@ function Phone.setOpen(open: boolean)
 	remotes.PhoneState:FireServer(open)
 end
 
+-- Registers a phone app. Call before Phone.start().
+-- build(content, frame) fills the page once; it may return an `open` function
+-- that runs every time the app is opened (use it to refresh live data).
+function Phone.addApp(app: { id: string, label: string, icon: string, color: Color3 }, build: (content: ScrollingFrame, frame: Frame) -> (() -> ())?)
+	table.insert(extraApps, { id = app.id, label = app.label, icon = app.icon, color = app.color, build = build })
+end
+
+-- Helpers for app pages.
+Phone.card = card -- (parent, height, layoutOrder) -> rounded Frame
+Phone.clear = clear -- removes everything but layouts/padding
+Phone.setGPS = function(name: string, target: Vector3)
+	setGPS(name, target)
+end
+Phone.clearGPS = function()
+	clearGPS()
+end
+Phone.width = PHONE_W - 2 * SCREEN_INSET
+
+function Phone.showPage(name: string)
+	showPage(name)
+end
+
+function Phone.isOpen(): boolean
+	return isOpen
+end
+
+function Phone.currentPage(): string
+	return currentPage
+end
+
+-- Re-runs an app's open function if it is on screen right now.
+function Phone.refresh(id: string)
+	if isOpen and currentPage == id then
+		showPage(id)
+	end
+end
+
 function Phone.toggle()
 	Phone.setOpen(not isOpen)
 end
@@ -745,6 +791,15 @@ function Phone.start()
 	buildMap()
 	buildAlerts()
 	buildSettings()
+	for _, app in extraApps do
+		local frame, content = appPage(app.id, app.label)
+		local ok, open = pcall(app.build, content, frame)
+		if ok then
+			pages[app.id].open = open
+		else
+			warn("[CityGrind] phone app " .. app.id .. " failed:", open)
+		end
+	end
 	showPage("Home")
 
 	-- Home indicator: tap to go home, tap again on Home to put the phone away.

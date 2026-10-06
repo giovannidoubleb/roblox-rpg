@@ -33,6 +33,12 @@ local loadFailed: { [Player]: boolean } = {}
 -- Fired as (player, title, body). Main wires this to the Notify remote.
 PlayerData.onNotify = Instance.new("BindableEvent")
 
+-- Feature systems (jobs, vehicles, apartments...) keep their saved data in
+-- data.sections[name], registered with PlayerData.registerSection.
+local sectionDefaults: { [string]: () -> any } = {}
+local loadedListeners: { (Player) -> () } = {}
+local publishListeners: { (Player, any) -> () } = {}
+
 local function defaultProfile()
 	local stats = {}
 	for _, stat in Config.STATS do
@@ -59,7 +65,20 @@ local function defaultProfile()
 		},
 		settings = { wallpaper = 1, uiScale = 1, notificationSounds = true },
 		firstJoin = os.time(),
+		sections = {},
 	}
+end
+
+-- Copies every key missing from `target` out of `template`, recursing into
+-- dictionaries. Arrays are treated as values (a saved list is never padded).
+local function deepFill(target: any, template: any)
+	for key, value in template do
+		if target[key] == nil then
+			target[key] = value
+		elseif type(value) == "table" and type(target[key]) == "table" and #value == 0 and next(value) ~= nil then
+			deepFill(target[key], value)
+		end
+	end
 end
 
 -- Fill in any fields added after a player's data was first saved.
@@ -74,6 +93,14 @@ local function reconcile(data: any)
 					data[key][subKey] = subValue
 				end
 			end
+		end
+	end
+	for name, makeDefault in sectionDefaults do
+		local default = makeDefault()
+		if type(data.sections[name]) ~= "table" then
+			data.sections[name] = default
+		else
+			deepFill(data.sections[name], default)
 		end
 	end
 	return data
@@ -99,6 +126,12 @@ local function publish(player: Player)
 	end
 	player:SetAttribute("Wins", data.basketball.wins)
 	player:SetAttribute("Losses", data.basketball.losses)
+	for _, fn in publishListeners do
+		local ok, err = pcall(fn, player, data)
+		if not ok then
+			warn("[CityGrind] publish listener failed:", err)
+		end
+	end
 	player:SetAttribute("DataLoaded", true)
 end
 
@@ -161,6 +194,9 @@ function PlayerData.load(player: Player)
 	data.sessionLock = nil
 	profiles[player] = reconcile(data)
 	publish(player)
+	for _, fn in loadedListeners do
+		task.spawn(fn, player)
+	end
 end
 
 function PlayerData.save(player: Player, releaseLock: boolean)
@@ -201,6 +237,44 @@ end
 local function markChanged(player: Player)
 	dirty[player] = true
 	publish(player)
+end
+
+-- Registers a saved section. Call at require time, before PlayerData.start().
+-- `makeDefault` returns a fresh table; new keys added later are filled into old saves.
+function PlayerData.registerSection(name: string, makeDefault: () -> any)
+	sectionDefaults[name] = makeDefault
+end
+
+-- The live saved table for a section (nil until the player's data has loaded).
+-- Mutate it, then call PlayerData.markChanged(player) so it saves and republishes.
+function PlayerData.section(player: Player, name: string): any
+	local data = profiles[player]
+	return data and data.sections[name]
+end
+
+-- Marks the player's data dirty (saved on the next autosave) and republishes attributes.
+function PlayerData.markChanged(player: Player)
+	if profiles[player] then
+		markChanged(player)
+	end
+end
+
+-- fn(player) runs once each time a player's data finishes loading.
+function PlayerData.onLoaded(fn: (Player) -> ())
+	table.insert(loadedListeners, fn)
+	for player in profiles do
+		task.spawn(fn, player)
+	end
+end
+
+-- fn(player, data) runs whenever the player's attributes are republished,
+-- so a feature can mirror its own saved values into Player attributes.
+function PlayerData.onPublish(fn: (Player, any) -> ())
+	table.insert(publishListeners, fn)
+end
+
+function PlayerData.isLoaded(player: Player): boolean
+	return profiles[player] ~= nil
 end
 
 local function addTransaction(data, amount: number, label: string)

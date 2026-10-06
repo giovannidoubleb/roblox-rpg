@@ -16,16 +16,9 @@ local CourtGames = require(script:WaitForChild("CourtGames"))
 ---------------------------------------------------------------------------
 -- Remotes
 ---------------------------------------------------------------------------
-local remotes = shared:FindFirstChild("Remotes") or Instance.new("Folder")
-remotes.Name = "Remotes"
-remotes.Parent = shared
-
-local function remote(className: string, name: string): any
-	local r = remotes:FindFirstChild(name) or Instance.new(className)
-	r.Name = name
-	r.Parent = remotes
-	return r
-end
+local Net = require(script:WaitForChild("Net"))
+local remote = Net.remote
+local allow = Net.allow
 
 local Notify = remote("RemoteEvent", "Notify") -- server -> client (title, body)
 local StaminaRefill = remote("RemoteEvent", "StaminaRefill") -- server -> client
@@ -34,22 +27,6 @@ local GetProfile = remote("RemoteFunction", "GetProfile") -- client -> server
 local SetSetting = remote("RemoteFunction", "SetSetting") -- client -> server (key, value)
 local BallAction = remote("RemoteEvent", "BallAction") -- client -> server (action)
 local BallFx = remote("RemoteEvent", "BallFx") -- server -> client (kind, ...)
-
--- Simple per-player cooldowns so no remote can be spammed.
-local lastCall: { [Player]: { [string]: number } } = {}
-local function allow(player: Player, key: string, cooldown: number): boolean
-	local now = os.clock()
-	local calls = lastCall[player]
-	if not calls then
-		calls = {}
-		lastCall[player] = calls
-	end
-	if calls[key] and now - calls[key] < cooldown then
-		return false
-	end
-	calls[key] = now
-	return true
-end
 
 PlayerData.onNotify.Event:Connect(function(player: Player, title: string, body: string)
 	Notify:FireClient(player, title, body)
@@ -297,6 +274,21 @@ end)
 CourtGames.start()
 
 ---------------------------------------------------------------------------
+-- Phase 3 life systems. Each one builds its own places and remotes.
+---------------------------------------------------------------------------
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+	local module = script:FindFirstChild(name)
+	if module then
+		local ok, err = pcall(function()
+			require(module).start(city.city)
+		end)
+		if not ok then
+			warn("[CityGrind] " .. name .. " failed to start:", err)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
 -- Player lifecycle
 ---------------------------------------------------------------------------
 -- Shift is Sprint, so turn off Roblox's Shift-to-lock-mouse toggle.
@@ -323,7 +315,6 @@ end
 Players.PlayerRemoving:Connect(function(player)
 	runs[player] = nil
 	runCooldownUntil[player] = nil
-	lastCall[player] = nil
 end)
 
 PlayerData.start()
