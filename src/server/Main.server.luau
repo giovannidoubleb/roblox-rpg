@@ -274,9 +274,9 @@ end)
 CourtGames.start()
 
 ---------------------------------------------------------------------------
--- Phase 3 life systems. Each one builds its own places and remotes.
+-- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
