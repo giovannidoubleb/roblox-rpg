@@ -151,6 +151,10 @@ function Movement.start()
 			speed = Config.SPRINT_SPEED
 			-- Better Speed stat makes sprinting cheaper (movement efficiency).
 			local efficiency = 1 - (statValue("Speed") - 1) / 200
+			-- Sports drinks (Corner Mart) halve sprint drain for a while.
+			if os.time() < (player:GetAttribute("StaminaBoostUntil") or 0) then
+				efficiency *= 0.5
+			end
 			stamina -= Config.SPRINT_DRAIN_PER_SEC * efficiency * dt
 			if stamina <= 0 then
 				stamina = 0
