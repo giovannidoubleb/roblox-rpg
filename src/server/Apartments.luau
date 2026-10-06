@@ -191,15 +191,32 @@ function Apartments.setGuestAllowed(owner: Player, userId: number, allowed: bool
 	end
 end
 
+local evictGuests: (unit: Unit) -> () -- Phase 4 (guests), defined below sendOutside
+
 local function setInside(player: Player, unit: Unit?)
+	local was = inside[player]
 	inside[player] = unit
 	player:SetAttribute("HomeUnit", if unit then unit.owner.UserId else 0)
+	-- Phase 4: when the owner leaves their own unit (exit door, respawn, another
+	-- interior), any guests are sent outside with them.
+	if was and was ~= unit and was.owner == player then
+		evictGuests(was :: Unit)
+	end
 end
 
 local function sendOutside(player: Player)
 	setInside(player, nil)
 	if player:GetAttribute("Interior") == INTERIOR then
 		Places.leave(player, Cfg.OUTSIDE)
+	end
+end
+
+-- Phase 4: sends everyone but the owner out of a unit.
+evictGuests = function(unit: Unit)
+	for player, u in inside do
+		if u == unit and player ~= unit.owner then
+			sendOutside(player)
+		end
 	end
 end
 
@@ -756,6 +773,31 @@ local function onEnteredHome(player: Player, unit: Unit)
 		Event:FireClient(player, "Welcome", Cfg.TIER_BY_ID[unit.tierId].name)
 		Net.notify(player, "WELCOME HOME", "This " .. Cfg.TIER_BY_ID[unit.tierId].name .. " is yours. Tap FURNITURE to decorate.")
 	end
+end
+
+-- Phase 4 (Messages "apartment" invite): teleports an allowed guest into the
+-- owner's currently built unit. Guests leave like owners do: the unit's
+-- ExitDoor sends out anyone inside it, rebuildUnit carries allowed guests
+-- along, and the owner leaving the unit (setInside) or the server
+-- (destroyUnit) sends guests outside.
+function Apartments.visit(guest: Player, owner: Player): (boolean, string?)
+	if guest == owner then
+		return false, "That's your own place."
+	end
+	local unit = units[owner]
+	if not owner.Parent or not unit or not unit.model or not unit.model.Parent or inside[owner] ~= unit then
+		return false, owner.DisplayName .. " isn't home right now. They need to be inside their place at Maple Court."
+	end
+	if not Apartments.canEnterUnit(guest, unit) then
+		return false, "You're not on " .. owner.DisplayName .. "'s guest list."
+	end
+	if not Net.alive(guest) then
+		return false, "You can't travel right now."
+	end
+	guest:SetAttribute("Interior", INTERIOR)
+	setInside(guest, unit)
+	task.spawn(Places.teleport, guest, spawnCFrame(unit))
+	return true, nil
 end
 
 ---------------------------------------------------------------------------
