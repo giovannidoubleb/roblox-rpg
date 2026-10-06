@@ -1860,6 +1860,10 @@ end
 -- Start
 ---------------------------------------------------------------------------
 function Jobs.start(city: Instance)
+	local old = city:FindFirstChild("Jobs")
+	if old then
+		old:Destroy() -- a reused City model may carry a stale copy
+	end
 	root = Instance.new("Folder")
 	root.Name = "Jobs"
 	root.Parent = city

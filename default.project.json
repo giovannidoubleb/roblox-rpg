@@ -55,6 +55,9 @@
         "PlayerData": {
           "$path": "src/server/PlayerData.luau"
         },
+        "Shops": {
+          "$path": "src/server/Shops.luau"
+        },
         "Vehicles": {
           "$path": "src/server/Vehicles.luau"
         }
@@ -87,6 +90,9 @@
           },
           "Phone": {
             "$path": "src/client/Phone.luau"
+          },
+          "Shops": {
+            "$path": "src/client/Shops.luau"
           },
           "UI": {
             "$path": "src/client/UI.luau"

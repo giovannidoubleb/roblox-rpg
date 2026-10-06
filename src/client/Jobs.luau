@@ -193,6 +193,13 @@ local function applyVisibility(inst: Instance)
 		elseif owner ~= nil then
 			inst.Enabled = owner == player.UserId
 		end
+	elseif inst:IsA("BillboardGui") or inst:IsA("Light") then
+		-- may replicate after its (hidden) part
+		local parent = inst.Parent
+		local owner = parent and parent:GetAttribute("JobOwner")
+		if owner ~= nil and owner ~= player.UserId then
+			(inst :: any).Enabled = false
+		end
 	elseif inst:IsA("BasePart") then
 		local owner = inst:GetAttribute("JobOwner")
 		if owner ~= nil and owner ~= player.UserId then
@@ -472,6 +479,7 @@ local function onState(kind: any, data: any)
 		local def = JOBS[data.job]
 		setWaypoint(data.target, data.targetName, def.color)
 		highlight.Adornee = if typeof(data.adornee) == "Instance" then data.adornee else nil
+		highlight.Enabled = highlight.Adornee ~= nil
 		highlight.FillColor = def.color
 		setGhost(data.ghost, def.color)
 		refreshPanel()
@@ -480,6 +488,7 @@ local function onState(kind: any, data: any)
 		state = nil
 		clearWaypoint()
 		highlight.Adornee = nil
+		highlight.Enabled = false
 		setGhost(nil, colors.accent)
 		refreshPanel()
 		showSummary(data)
@@ -500,7 +509,10 @@ function Jobs.start()
 			FillTransparency = 0.35,
 			OutlineColor = Color3.new(1, 1, 1),
 			DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-			Parent = gui,
+			Enabled = false,
+			-- Highlights render reliably only inside Workspace; with no Adornee a
+			-- highlight affects its parent, so keep it disabled until it has one.
+			Parent = UI.new("Folder", { Name = "CityGrindJobFX", Parent = Workspace }),
 		})
 
 		local remotes = shared:WaitForChild("Remotes")
@@ -540,7 +552,13 @@ function Jobs.start()
 				local root = character and character:FindFirstChild("HumanoidRootPart")
 				if root and root:IsA("BasePart") then
 					if wp.a0.Parent ~= root then
-						wp.a0.Parent = root
+						-- the old attachment dies with a previous character: make a new one
+						if not pcall(function()
+							wp.a0.Parent = root
+						end) then
+							wp.a0 = UI.new("Attachment", { Position = Vector3.new(0, -2.5, 0), Parent = root })
+							wp.beam.Attachment0 = wp.a0
+						end
 					end
 					local p = wp.marker.Position
 					local dist = Vector3.new(root.Position.X - p.X, 0, root.Position.Z - p.Z).Magnitude

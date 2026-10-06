@@ -171,6 +171,13 @@ function Movement.start()
 			if not moving then
 				regen *= 1.5
 			end
+			local now = os.time()
+			if (player:GetAttribute("StaminaBoostUntil") or 0) > now then
+				regen *= 2 -- Hydrated / Energized (Corner Mart drinks)
+			end
+			if (player:GetAttribute("WellFedUntil") or 0) > now then
+				regen *= 1.25 -- Well Fed (meals)
+			end
 			stamina = math.min(maxS, stamina + regen * dt)
 			if exhausted and stamina >= Config.MIN_SPRINT_STAMINA * 2 then
 				exhausted = false
