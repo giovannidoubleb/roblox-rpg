@@ -8,6 +8,15 @@
         "ApartmentsConfig": {
           "$path": "src/shared/ApartmentsConfig.luau"
         },
+        "BankConfig": {
+          "$path": "src/shared/BankConfig.luau"
+        },
+        "CallsConfig": {
+          "$path": "src/shared/CallsConfig.luau"
+        },
+        "CityTokConfig": {
+          "$path": "src/shared/CityTokConfig.luau"
+        },
         "Config": {
           "$path": "src/shared/Config.luau"
         },
@@ -17,14 +26,29 @@
         "EmotesConfig": {
           "$path": "src/shared/EmotesConfig.luau"
         },
+        "EventsConfig": {
+          "$path": "src/shared/EventsConfig.luau"
+        },
         "GymConfig": {
           "$path": "src/shared/GymConfig.luau"
         },
         "JobsConfig": {
           "$path": "src/shared/JobsConfig.luau"
         },
+        "MediaConfig": {
+          "$path": "src/shared/MediaConfig.luau"
+        },
         "MessagesConfig": {
           "$path": "src/shared/MessagesConfig.luau"
+        },
+        "MusicConfig": {
+          "$path": "src/shared/MusicConfig.luau"
+        },
+        "Replay": {
+          "$path": "src/shared/Replay.luau"
+        },
+        "SceneSnapshot": {
+          "$path": "src/shared/SceneSnapshot.luau"
         },
         "ShopsConfig": {
           "$path": "src/shared/ShopsConfig.luau"
@@ -43,11 +67,23 @@
         "Apartments": {
           "$path": "src/server/Apartments.luau"
         },
+        "Bank": {
+          "$path": "src/server/Bank.luau"
+        },
         "Basketball": {
           "$path": "src/server/Basketball.luau"
         },
+        "Calls": {
+          "$path": "src/server/Calls.luau"
+        },
         "CityBuilder": {
           "$path": "src/server/CityBuilder.luau"
+        },
+        "CityGram": {
+          "$path": "src/server/CityGram.luau"
+        },
+        "CityTok": {
+          "$path": "src/server/CityTok.luau"
         },
         "CourtGames": {
           "$path": "src/server/CourtGames.luau"
@@ -58,11 +94,17 @@
         "Emotes": {
           "$path": "src/server/Emotes.luau"
         },
+        "Events": {
+          "$path": "src/server/Events.luau"
+        },
         "Gym": {
           "$path": "src/server/Gym.luau"
         },
         "Jobs": {
           "$path": "src/server/Jobs.luau"
+        },
+        "Media": {
+          "$path": "src/server/Media.luau"
         },
         "Messages": {
           "$path": "src/server/Messages.luau"
@@ -100,14 +142,29 @@
           "Apartments": {
             "$path": "src/client/Apartments.luau"
           },
+          "Bank": {
+            "$path": "src/client/Bank.luau"
+          },
           "Basketball": {
             "$path": "src/client/Basketball.luau"
+          },
+          "Calls": {
+            "$path": "src/client/Calls.luau"
+          },
+          "CityGram": {
+            "$path": "src/client/CityGram.luau"
+          },
+          "CityTok": {
+            "$path": "src/client/CityTok.luau"
           },
           "Crews": {
             "$path": "src/client/Crews.luau"
           },
           "Emotes": {
             "$path": "src/client/Emotes.luau"
+          },
+          "Events": {
+            "$path": "src/client/Events.luau"
           },
           "Gym": {
             "$path": "src/client/Gym.luau"
@@ -118,11 +175,17 @@
           "Jobs": {
             "$path": "src/client/Jobs.luau"
           },
+          "Media": {
+            "$path": "src/client/Media.luau"
+          },
           "Messages": {
             "$path": "src/client/Messages.luau"
           },
           "Movement": {
             "$path": "src/client/Movement.luau"
+          },
+          "Music": {
+            "$path": "src/client/Music.luau"
           },
           "Party": {
             "$path": "src/client/Party.luau"
