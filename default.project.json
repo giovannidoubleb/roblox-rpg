@@ -11,14 +11,26 @@
         "Config": {
           "$path": "src/shared/Config.luau"
         },
+        "CrewsConfig": {
+          "$path": "src/shared/CrewsConfig.luau"
+        },
+        "EmotesConfig": {
+          "$path": "src/shared/EmotesConfig.luau"
+        },
         "GymConfig": {
           "$path": "src/shared/GymConfig.luau"
         },
         "JobsConfig": {
           "$path": "src/shared/JobsConfig.luau"
         },
+        "MessagesConfig": {
+          "$path": "src/shared/MessagesConfig.luau"
+        },
         "ShopsConfig": {
           "$path": "src/shared/ShopsConfig.luau"
+        },
+        "SocialConfig": {
+          "$path": "src/shared/SocialConfig.luau"
         },
         "VehiclesConfig": {
           "$path": "src/shared/VehiclesConfig.luau"
@@ -40,14 +52,26 @@
         "CourtGames": {
           "$path": "src/server/CourtGames.luau"
         },
+        "Crews": {
+          "$path": "src/server/Crews.luau"
+        },
+        "Emotes": {
+          "$path": "src/server/Emotes.luau"
+        },
         "Gym": {
           "$path": "src/server/Gym.luau"
         },
         "Jobs": {
           "$path": "src/server/Jobs.luau"
         },
+        "Messages": {
+          "$path": "src/server/Messages.luau"
+        },
         "Net": {
           "$path": "src/server/Net.luau"
+        },
+        "Party": {
+          "$path": "src/server/Party.luau"
         },
         "Places": {
           "$path": "src/server/Places.luau"
@@ -57,6 +81,9 @@
         },
         "Shops": {
           "$path": "src/server/Shops.luau"
+        },
+        "Social": {
+          "$path": "src/server/Social.luau"
         },
         "Vehicles": {
           "$path": "src/server/Vehicles.luau"
@@ -76,6 +103,12 @@
           "Basketball": {
             "$path": "src/client/Basketball.luau"
           },
+          "Crews": {
+            "$path": "src/client/Crews.luau"
+          },
+          "Emotes": {
+            "$path": "src/client/Emotes.luau"
+          },
           "Gym": {
             "$path": "src/client/Gym.luau"
           },
@@ -85,14 +118,23 @@
           "Jobs": {
             "$path": "src/client/Jobs.luau"
           },
+          "Messages": {
+            "$path": "src/client/Messages.luau"
+          },
           "Movement": {
             "$path": "src/client/Movement.luau"
+          },
+          "Party": {
+            "$path": "src/client/Party.luau"
           },
           "Phone": {
             "$path": "src/client/Phone.luau"
           },
           "Shops": {
             "$path": "src/client/Shops.luau"
+          },
+          "Social": {
+            "$path": "src/client/Social.luau"
           },
           "UI": {
             "$path": "src/client/UI.luau"

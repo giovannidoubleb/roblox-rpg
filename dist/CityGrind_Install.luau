@@ -959,6 +959,426 @@ Config.Game = {
 
 return Config
 ]=====])
+put(folder, 'ModuleScript', 'CrewsConfig', [=====[
+-- CITY GRIND: crew tuning (sections 60, 61, 62), shared by server and client.
+
+local CrewsConfig = {}
+
+CrewsConfig.FEE = 2500
+CrewsConfig.MIN_LEVEL = 5
+CrewsConfig.MAX_MEMBERS = 30
+CrewsConfig.NAME_MIN, CrewsConfig.NAME_MAX = 3, 20
+CrewsConfig.TAG_MIN, CrewsConfig.TAG_MAX = 2, 4
+CrewsConfig.ANNOUNCE_MAX = 200
+CrewsConfig.INVITE_DAYS = 3
+
+CrewsConfig.ROLES = { "Leader", "Officer", "Member" }
+CrewsConfig.ROLE_RANK = { Leader = 3, Officer = 2, Member = 1 }
+
+CrewsConfig.COLORS = {
+	{ name = "Fire", color = Color3.fromRGB(255, 90, 60) },
+	{ name = "Sunset", color = Color3.fromRGB(255, 150, 50) },
+	{ name = "Gold", color = Color3.fromRGB(255, 205, 60) },
+	{ name = "Lime", color = Color3.fromRGB(140, 230, 80) },
+	{ name = "Mint", color = Color3.fromRGB(70, 220, 170) },
+	{ name = "Sky", color = Color3.fromRGB(80, 180, 255) },
+	{ name = "Royal", color = Color3.fromRGB(90, 110, 255) },
+	{ name = "Violet", color = Color3.fromRGB(170, 100, 255) },
+	{ name = "Pink", color = Color3.fromRGB(255, 100, 190) },
+	{ name = "Snow", color = Color3.fromRGB(235, 235, 245) },
+}
+
+CrewsConfig.LOGOS = { "👑", "🔥", "⚡", "💎", "🏀", "🦁", "🐍", "💀", "⭐", "🌙", "🎯", "🦅" }
+
+-- Crew rep needed to reach each crew level (index = level).
+CrewsConfig.LEVELS = { 0, 500, 1500, 3500, 7000, 12000, 20000, 32000, 50000, 75000 }
+
+function CrewsConfig.levelFor(rep: number): (number, number, number?)
+	local level = 1
+	for i, need in CrewsConfig.LEVELS do
+		if rep >= need then
+			level = i
+		end
+	end
+	return level, CrewsConfig.LEVELS[level], CrewsConfig.LEVELS[level + 1]
+end
+
+-- Weekly crew goals, tracked from members' attribute increases on the server.
+CrewsConfig.MISSIONS = {
+	{ id = "wins25", stat = "Wins", goal = 25, reward = 1500, title = "Win 25 basketball games" },
+	{ id = "rep5k", stat = "Reputation", goal = 5000, reward = 1200, title = "Earn 5,000 reputation" },
+	{ id = "levels12", stat = "Level", goal = 12, reward = 1200, title = "Level up 12 times" },
+	{ id = "wins50", stat = "Wins", goal = 50, reward = 3000, title = "Win 50 basketball games" },
+}
+CrewsConfig.MISSION_STATS = { "Wins", "Reputation", "Level" }
+
+local WEEK = 7 * 86400
+local WEEK_OFFSET = 3 * 86400 -- weeks roll over Monday 00:00 UTC
+
+function CrewsConfig.weekIndex(now: number): number
+	return math.floor((now + WEEK_OFFSET) / WEEK)
+end
+
+function CrewsConfig.weekEnds(now: number): number
+	return (CrewsConfig.weekIndex(now) + 1) * WEEK - WEEK_OFFSET
+end
+
+function CrewsConfig.missionFor(crewId: string, week: number)
+	local hash = 0
+	for i = 1, #crewId do
+		hash = (hash * 31 + string.byte(crewId, i)) % 1000003
+	end
+	return CrewsConfig.MISSIONS[(hash + week) % #CrewsConfig.MISSIONS + 1]
+end
+
+return CrewsConfig
+]=====])
+put(folder, 'ModuleScript', 'EmotesConfig', [=====[
+-- CITY GRIND: emote definitions (sections 31, 95), shared by server and client.
+-- Every emote is procedural: a list of keyframes, each one an offset applied to
+-- the R15 joint's rest C0 (rest = the joint's rig attachment). Joints not named
+-- in a frame tween back to rest. The server plays them so everyone sees them.
+--
+-- Sign conventions (same as the gym): +X on a shoulder/hip swings the limb
+-- forward, +X on an elbow folds the forearm forward, -X on a knee bends it,
+-- -X on Waist leans forward, +X on Neck looks up. Right arm out to the side is
+-- +Z, left is -Z; an elbow turned the same way as its shoulder keeps folding
+-- in that direction. "Root" moves the whole body (a CFrame offset).
+
+local EmotesConfig = {}
+
+local function A(x: number, y: number?, z: number?): CFrame
+	return CFrame.Angles(math.rad(x), math.rad(y or 0), math.rad(z or 0))
+end
+local function D(y: number): CFrame
+	return CFrame.new(0, y, 0)
+end
+
+export type Frame = { t: number, joints: { [string]: CFrame }, style: Enum.EasingStyle? }
+export type Emote = {
+	id: string,
+	name: string,
+	icon: string,
+	category: string, -- "Social" | "Dance" | "Hoops" | "Paired"
+	loop: boolean, -- loops until the player moves or jumps
+	frames: { Frame },
+	intro: { Frame }?, -- played once before the looping frames
+	sit: boolean?, -- drops the body to the ground (Root offset worked out from HipHeight)
+	paired: boolean?, -- needs a partner (both must accept)
+	gap: number?, -- paired: distance between the two players (studs)
+	sideShift: number?, -- paired: each player steps this far to their own left so right hands meet
+}
+
+EmotesConfig.SLOTS = 8
+EmotesConfig.COOLDOWN = 0.6
+EmotesConfig.PAIR_RANGE = 12 -- studs between players to request a paired emote
+EmotesConfig.PAIR_REQUEST_SECONDS = 15
+EmotesConfig.DEFAULT_SLOTS = { "Wave", "Dance", "Sit", "Flex", "Celebrate", "Laugh", "HighFive", "FistBump" }
+
+EmotesConfig.LIST = {
+	{
+		id = "Wave",
+		name = "Wave",
+		icon = "👋",
+		category = "Social",
+		loop = false,
+		frames = {
+			{ t = 0.25, joints = { RightShoulder = A(0, 0, 145), RightElbow = A(0, 0, 15), Neck = A(0, -10, 0) } },
+			{ t = 0.22, joints = { RightShoulder = A(0, 0, 120), RightElbow = A(0, 0, 35), Neck = A(0, -10, 0) } },
+			{ t = 0.22, joints = { RightShoulder = A(0, 0, 160), RightElbow = A(0, 0, 0), Neck = A(0, -10, 0) } },
+			{ t = 0.22, joints = { RightShoulder = A(0, 0, 120), RightElbow = A(0, 0, 35), Neck = A(0, -10, 0) } },
+			{ t = 0.22, joints = { RightShoulder = A(0, 0, 160), RightElbow = A(0, 0, 0), Neck = A(0, -10, 0) } },
+			{ t = 0.22, joints = { RightShoulder = A(0, 0, 130), RightElbow = A(0, 0, 25), Neck = A(0, -10, 0) } },
+		},
+	},
+	{
+		id = "Dance",
+		name = "Two-Step",
+		icon = "🕺",
+		category = "Dance",
+		loop = true,
+		frames = {
+			{
+				t = 0.32,
+				joints = {
+					Root = D(-0.2), Waist = A(0, 14, 0), Neck = A(0, -10, 0),
+					LeftShoulder = A(35, 0, -15), RightShoulder = A(-20, 0, 15), LeftElbow = A(75), RightElbow = A(60),
+					LeftHip = A(25), LeftKnee = A(-35), RightKnee = A(-10),
+				},
+			},
+			{
+				t = 0.32,
+				joints = {
+					Root = D(-0.2), Waist = A(0, -14, 0), Neck = A(0, 10, 0),
+					LeftShoulder = A(-20, 0, -15), RightShoulder = A(35, 0, 15), LeftElbow = A(60), RightElbow = A(75),
+					RightHip = A(25), RightKnee = A(-35), LeftKnee = A(-10),
+				},
+			},
+		},
+	},
+	{
+		id = "Bounce",
+		name = "Bounce",
+		icon = "🎶",
+		category = "Dance",
+		loop = true,
+		frames = {
+			{
+				t = 0.26,
+				joints = {
+					Root = D(-0.4), Neck = A(-12),
+					LeftHip = A(18), RightHip = A(18), LeftKnee = A(-30), RightKnee = A(-30), LeftAnkle = A(12), RightAnkle = A(12),
+					LeftShoulder = A(0, 0, -150), RightShoulder = A(0, 0, 150), LeftElbow = A(0, 0, -30), RightElbow = A(0, 0, 30),
+				},
+			},
+			{
+				t = 0.26,
+				joints = {
+					Root = D(0), Neck = A(10),
+					LeftShoulder = A(0, 0, -115), RightShoulder = A(0, 0, 115), LeftElbow = A(0, 0, -60), RightElbow = A(0, 0, 60),
+				},
+			},
+		},
+	},
+	{
+		id = "Robot",
+		name = "Robot",
+		icon = "🤖",
+		category = "Dance",
+		loop = true,
+		frames = {
+			{
+				t = 0.3,
+				style = Enum.EasingStyle.Linear,
+				joints = {
+					Waist = A(0, 25, 0), Neck = A(0, -25, 0),
+					RightShoulder = A(90), RightElbow = A(90), LeftShoulder = A(0, 0, -15), LeftElbow = A(90),
+				},
+			},
+			{
+				t = 0.3,
+				style = Enum.EasingStyle.Linear,
+				joints = {
+					Waist = A(0, -25, 0), Neck = A(0, 25, 0),
+					LeftShoulder = A(90), LeftElbow = A(90), RightShoulder = A(0, 0, 15), RightElbow = A(90),
+				},
+			},
+			{
+				t = 0.3,
+				style = Enum.EasingStyle.Linear,
+				joints = {
+					Neck = A(12), LeftShoulder = A(90), RightShoulder = A(90), LeftElbow = A(0), RightElbow = A(0),
+					LeftKnee = A(-20), RightKnee = A(-20), Root = D(-0.25),
+				},
+			},
+		},
+	},
+	{
+		id = "Sit",
+		name = "Sit",
+		icon = "🧘",
+		category = "Social",
+		loop = true,
+		sit = true,
+		frames = {
+			{
+				t = 0.45,
+				joints = {
+					Waist = A(12), Neck = A(-6),
+					LeftHip = A(80), RightHip = A(80), LeftKnee = A(-45), RightKnee = A(-45), LeftAnkle = A(20), RightAnkle = A(20),
+					LeftShoulder = A(-30, 0, -12), RightShoulder = A(-30, 0, 12), LeftElbow = A(10), RightElbow = A(10),
+				},
+			},
+		},
+	},
+	{
+		id = "Flex",
+		name = "Flex",
+		icon = "💪",
+		category = "Social",
+		loop = false,
+		frames = {
+			{ t = 0.3, joints = { LeftShoulder = A(0, 0, -90), RightShoulder = A(0, 0, 90), LeftElbow = A(0, 0, -100), RightElbow = A(0, 0, 100), Neck = A(8) } },
+			{ t = 0.25, joints = { LeftShoulder = A(0, 0, -80), RightShoulder = A(0, 0, 80), LeftElbow = A(0, 0, -125), RightElbow = A(0, 0, 125), Waist = A(-6), Neck = A(8) } },
+			{ t = 0.25, joints = { LeftShoulder = A(0, 0, -90), RightShoulder = A(0, 0, 90), LeftElbow = A(0, 0, -100), RightElbow = A(0, 0, 100), Neck = A(8) } },
+			{ t = 0.25, joints = { LeftShoulder = A(0, 0, -80), RightShoulder = A(0, 0, 80), LeftElbow = A(0, 0, -125), RightElbow = A(0, 0, 125), Waist = A(-6), Neck = A(8) } },
+			{ t = 0.5, joints = { LeftShoulder = A(0, 0, -90), RightShoulder = A(0, 0, 90), LeftElbow = A(0, 0, -110), RightElbow = A(0, 0, 110), Neck = A(10) } },
+		},
+	},
+	{
+		id = "Point",
+		name = "Point",
+		icon = "👉",
+		category = "Social",
+		loop = false,
+		frames = {
+			{ t = 0.22, joints = { RightShoulder = A(92, 0, 4), RightElbow = A(4), Neck = A(2) } },
+			{ t = 1.2, joints = { RightShoulder = A(90, 0, 4), RightElbow = A(2), Neck = A(2) } },
+		},
+	},
+	{
+		id = "Laugh",
+		name = "Laugh",
+		icon = "😂",
+		category = "Social",
+		loop = false,
+		frames = {
+			{ t = 0.2, joints = { Waist = A(-12), Neck = A(18), LeftShoulder = A(25, 0, -5), RightShoulder = A(25, 0, 5), LeftElbow = A(85), RightElbow = A(85) } },
+			{ t = 0.14, joints = { Waist = A(-18), Neck = A(6), LeftShoulder = A(30, 0, -5), RightShoulder = A(30, 0, 5), LeftElbow = A(90), RightElbow = A(90) } },
+			{ t = 0.14, joints = { Waist = A(-10), Neck = A(20), LeftShoulder = A(25, 0, -5), RightShoulder = A(25, 0, 5), LeftElbow = A(85), RightElbow = A(85) } },
+			{ t = 0.14, joints = { Waist = A(-18), Neck = A(6), LeftShoulder = A(30, 0, -5), RightShoulder = A(30, 0, 5), LeftElbow = A(90), RightElbow = A(90) } },
+			{ t = 0.14, joints = { Waist = A(-10), Neck = A(20), LeftShoulder = A(25, 0, -5), RightShoulder = A(25, 0, 5), LeftElbow = A(85), RightElbow = A(85) } },
+			{ t = 0.14, joints = { Waist = A(-20), Neck = A(4), LeftShoulder = A(30, 0, -5), RightShoulder = A(30, 0, 5), LeftElbow = A(90), RightElbow = A(90) } },
+			{ t = 0.3, joints = { Waist = A(-6), Neck = A(14), LeftShoulder = A(20, 0, -5), RightShoulder = A(20, 0, 5), LeftElbow = A(80), RightElbow = A(80) } },
+		},
+	},
+	{
+		id = "Celebrate",
+		name = "Celebrate",
+		icon = "🎉",
+		category = "Social",
+		loop = false,
+		frames = {
+			{ t = 0.2, joints = { Root = D(-0.4), LeftKnee = A(-30), RightKnee = A(-30), LeftHip = A(18), RightHip = A(18), LeftShoulder = A(20, 0, -20), RightShoulder = A(20, 0, 20), LeftElbow = A(70), RightElbow = A(70) } },
+			{ t = 0.2, joints = { Root = D(0.5), Neck = A(20), LeftShoulder = A(0, 0, -160), RightShoulder = A(0, 0, 160), LeftAnkle = A(-25), RightAnkle = A(-25) } },
+			{ t = 0.2, joints = { Root = D(-0.3), LeftKnee = A(-25), RightKnee = A(-25), LeftHip = A(15), RightHip = A(15), LeftShoulder = A(0, 0, -140), RightShoulder = A(0, 0, 140), LeftElbow = A(0, 0, -40), RightElbow = A(0, 0, 40) } },
+			{ t = 0.2, joints = { Root = D(0.5), Neck = A(20), LeftShoulder = A(0, 0, -165), RightShoulder = A(0, 0, 165), LeftAnkle = A(-25), RightAnkle = A(-25) } },
+			{ t = 0.5, joints = { Neck = A(15), LeftShoulder = A(0, 0, -150), RightShoulder = A(0, 0, 150) } },
+		},
+	},
+	{
+		id = "Shimmy",
+		name = "Shoulder Shimmy",
+		icon = "🔥",
+		category = "Hoops",
+		loop = true,
+		frames = {
+			{ t = 0.12, joints = { Waist = A(-4, 7, 0), LeftShoulder = A(18, 0, -12), RightShoulder = A(-14, 0, 12), LeftElbow = A(60), RightElbow = A(60), LeftKnee = A(-15), RightKnee = A(-15), Root = D(-0.15) } },
+			{ t = 0.12, joints = { Waist = A(-4, -7, 0), LeftShoulder = A(-14, 0, -12), RightShoulder = A(18, 0, 12), LeftElbow = A(60), RightElbow = A(60), LeftKnee = A(-15), RightKnee = A(-15), Root = D(-0.15) } },
+		},
+	},
+	{
+		id = "LilBro",
+		name = "Lil Bro",
+		icon = "🤏",
+		category = "Hoops",
+		loop = false,
+		frames = {
+			{ t = 0.25, joints = { Root = D(-0.45), Waist = A(-14), Neck = A(-12), LeftKnee = A(-35), RightKnee = A(-35), LeftHip = A(22), RightHip = A(22), RightShoulder = A(35, 0, 25), RightElbow = A(15), LeftShoulder = A(0, 0, -10) } },
+			{ t = 0.18, joints = { Root = D(-0.45), Waist = A(-14), Neck = A(-12), LeftKnee = A(-35), RightKnee = A(-35), LeftHip = A(22), RightHip = A(22), RightShoulder = A(18, 0, 25), RightElbow = A(10), LeftShoulder = A(0, 0, -10) } },
+			{ t = 0.18, joints = { Root = D(-0.45), Waist = A(-14), Neck = A(-12), LeftKnee = A(-35), RightKnee = A(-35), LeftHip = A(22), RightHip = A(22), RightShoulder = A(35, 0, 25), RightElbow = A(15), LeftShoulder = A(0, 0, -10) } },
+			{ t = 0.18, joints = { Root = D(-0.45), Waist = A(-14), Neck = A(-12), LeftKnee = A(-35), RightKnee = A(-35), LeftHip = A(22), RightHip = A(22), RightShoulder = A(18, 0, 25), RightElbow = A(10), LeftShoulder = A(0, 0, -10) } },
+			{ t = 0.5, joints = { Root = D(-0.45), Waist = A(-10), Neck = A(10), LeftKnee = A(-35), RightKnee = A(-35), LeftHip = A(22), RightHip = A(22), RightShoulder = A(30, 0, 25), RightElbow = A(12), LeftShoulder = A(0, 0, -10) } },
+		},
+	},
+	{
+		id = "ColdBlooded",
+		name = "Cold Blooded",
+		icon = "🧊",
+		category = "Hoops",
+		loop = false,
+		frames = {
+			{ t = 0.3, joints = { Neck = A(-5, -15, 0), RightShoulder = A(55, 0, 10), RightElbow = A(70), LeftShoulder = A(55, 0, 25), LeftElbow = A(80) } },
+			{ t = 0.16, joints = { Neck = A(-5, -15, 0), RightShoulder = A(55, 0, 10), RightElbow = A(70), LeftShoulder = A(55, 0, 25), LeftElbow = A(95) } },
+			{ t = 0.16, joints = { Neck = A(-5, -15, 0), RightShoulder = A(55, 0, 10), RightElbow = A(70), LeftShoulder = A(55, 0, 25), LeftElbow = A(78) } },
+			{ t = 0.16, joints = { Neck = A(-5, -15, 0), RightShoulder = A(55, 0, 10), RightElbow = A(70), LeftShoulder = A(55, 0, 25), LeftElbow = A(95) } },
+			{ t = 0.6, joints = { Neck = A(6, 0, 0), RightShoulder = A(55, 0, 10), RightElbow = A(70), LeftShoulder = A(55, 0, 25), LeftElbow = A(80) } },
+		},
+	},
+	{
+		id = "RaiseRoof",
+		name = "Raise the Roof",
+		icon = "🙌",
+		category = "Hoops",
+		loop = true,
+		frames = {
+			{ t = 0.28, joints = { Root = D(-0.25), LeftKnee = A(-20), RightKnee = A(-20), LeftHip = A(12), RightHip = A(12), LeftShoulder = A(0, 0, -100), RightShoulder = A(0, 0, 100), LeftElbow = A(0, 0, -80), RightElbow = A(0, 0, 80), Neck = A(10) } },
+			{ t = 0.28, joints = { Root = D(0), LeftShoulder = A(0, 0, -150), RightShoulder = A(0, 0, 150), LeftElbow = A(0, 0, -40), RightElbow = A(0, 0, 40), Neck = A(18) } },
+		},
+	},
+	-- Paired emotes: both players face each other and play the same frames.
+	{
+		id = "HighFive",
+		name = "High Five",
+		icon = "🖐️",
+		category = "Paired",
+		loop = false,
+		paired = true,
+		gap = 3.2,
+		sideShift = 0.55,
+		frames = {
+			{ t = 0.35, joints = { RightShoulder = A(150, 0, 12), RightElbow = A(35), Neck = A(8) } },
+			{ t = 0.14, joints = { RightShoulder = A(125, 0, 6), RightElbow = A(0), Neck = A(8) } },
+			{ t = 0.45, joints = { RightShoulder = A(120, 0, 6), RightElbow = A(5), Neck = A(4) } },
+		},
+	},
+	{
+		id = "FistBump",
+		name = "Fist Bump",
+		icon = "👊",
+		category = "Paired",
+		loop = false,
+		paired = true,
+		gap = 3.4,
+		sideShift = 0.6,
+		frames = {
+			{ t = 0.3, joints = { RightShoulder = A(65, 0, 6), RightElbow = A(75), Neck = A(-4) } },
+			{ t = 0.16, joints = { RightShoulder = A(85, 0, 2), RightElbow = A(8), Waist = A(-6), Neck = A(-4) } },
+			{ t = 0.5, joints = { RightShoulder = A(82, 0, 2), RightElbow = A(12), Waist = A(-4), Neck = A(2) } },
+		},
+	},
+	{
+		id = "Handshake",
+		name = "Handshake",
+		icon = "🤝",
+		category = "Paired",
+		loop = false,
+		paired = true,
+		gap = 2.9,
+		sideShift = 0.6,
+		frames = {
+			{ t = 0.35, joints = { RightShoulder = A(45, 0, 6), RightElbow = A(35), Neck = A(-4) } },
+			{ t = 0.18, joints = { RightShoulder = A(55, 0, 6), RightElbow = A(30), Neck = A(-4) } },
+			{ t = 0.18, joints = { RightShoulder = A(38, 0, 6), RightElbow = A(38), Neck = A(-4) } },
+			{ t = 0.18, joints = { RightShoulder = A(55, 0, 6), RightElbow = A(30), Neck = A(-4) } },
+			{ t = 0.18, joints = { RightShoulder = A(38, 0, 6), RightElbow = A(38), Neck = A(-4) } },
+			{ t = 0.3, joints = { RightShoulder = A(45, 0, 6), RightElbow = A(35), Neck = A(2) } },
+		},
+	},
+} :: { Emote }
+
+EmotesConfig.BY_ID = {} :: { [string]: Emote }
+for _, emote in EmotesConfig.LIST do
+	EmotesConfig.BY_ID[emote.id] = emote
+end
+
+-- "high five", "High Five", "HighFive", "highfive" all resolve to the same emote.
+local function normalize(text: string): string
+	return (string.lower(text):gsub("[^%w]", ""))
+end
+
+local LOOKUP: { [string]: Emote } = {}
+for _, emote in EmotesConfig.LIST do
+	LOOKUP[normalize(emote.id)] = emote
+	LOOKUP[normalize(emote.name)] = emote
+end
+LOOKUP.dance1 = EmotesConfig.BY_ID.Dance
+LOOKUP.twostep = EmotesConfig.BY_ID.Dance
+LOOKUP.dance2 = EmotesConfig.BY_ID.Bounce
+LOOKUP.dance3 = EmotesConfig.BY_ID.Robot
+LOOKUP.cheer = EmotesConfig.BY_ID.Celebrate
+LOOKUP.hi = EmotesConfig.BY_ID.Wave
+LOOKUP.hello = EmotesConfig.BY_ID.Wave
+
+function EmotesConfig.find(name: any): Emote?
+	if type(name) ~= "string" or #name > 40 then
+		return nil
+	end
+	return LOOKUP[normalize(name)]
+end
+
+return EmotesConfig
+]=====])
 put(folder, 'ModuleScript', 'GymConfig', [=====[
 -- CITY GRIND: Iron Box Gym tuning (sections 56, 69, 110, 120).
 -- Shared by the server (which judges every rep) and the client (which draws
@@ -1334,6 +1754,65 @@ JobsConfig.START_NAMES = {
 JobsConfig.JOB_CENTER = Vector3.new(-40, 0, -48)
 
 return JobsConfig
+]=====])
+put(folder, 'ModuleScript', 'MessagesConfig', [=====[
+-- CITY GRIND: Messages tuning (spec sections 17, 18, 36, 48, 109).
+-- Shared by the server (which enforces every limit) and the client (which
+-- mirrors them so the UI never offers something the server would reject).
+
+local MessagesConfig = {}
+
+-- Text limits and rate limits (server-enforced; the client only mirrors them).
+MessagesConfig.MAX_LENGTH = 200 -- characters per message
+MessagesConfig.MIN_GAP = 0.75 -- seconds between two messages
+MessagesConfig.MAX_PER_MINUTE = 30
+
+-- History kept per conversation / group.
+MessagesConfig.DM_HISTORY = 30
+MessagesConfig.GROUP_HISTORY = 50
+MessagesConfig.MAX_CONVERSATIONS = 25 -- DMs + system threads per player (oldest dropped)
+MessagesConfig.MAILBOX_MAX = 60 -- pending offline items per player
+
+-- Invites (sections 17, 48).
+MessagesConfig.INVITE_SECONDS = 10 * 60
+
+-- Groups (section 18).
+MessagesConfig.GROUP_MAX_MEMBERS = 20
+MessagesConfig.MAX_GROUPS = 10 -- groups one player can be in
+MessagesConfig.GROUP_NAME_MAX = 30
+MessagesConfig.GROUP_ICONS = { "💬", "🏀", "🔥", "😎", "🎮", "💪", "🎉", "🏙️", "🚗", "💰", "⭐", "👑" }
+MessagesConfig.GROUP_COLORS = {
+	Color3.fromRGB(255, 120, 60),
+	Color3.fromRGB(90, 170, 255),
+	Color3.fromRGB(110, 220, 120),
+	Color3.fromRGB(200, 100, 255),
+	Color3.fromRGB(255, 80, 120),
+	Color3.fromRGB(255, 200, 60),
+	Color3.fromRGB(60, 210, 200),
+	Color3.fromRGB(150, 150, 165),
+}
+
+-- Emoji quick-picker (they're inserted into the text box; the server filters the whole message).
+MessagesConfig.EMOJI = { "😂", "🔥", "💯", "🏀", "😎", "👍", "🙏", "😭", "❤️", "👀", "💪", "🎉", "😤", "🤝", "💰", "🚗", "🏠", "😴" }
+
+-- Invite card look per kind (labels are fixed game text, never player text).
+MessagesConfig.INVITE_STYLE = {
+	basketball = { icon = "🏀", title = "Let's run some hoops", color = Color3.fromRGB(255, 140, 50) },
+	apartment = { icon = "🏠", title = "Come through to my place", color = Color3.fromRGB(110, 220, 120) },
+	crew = { icon = "🛡️", title = "Join my crew", color = Color3.fromRGB(200, 100, 255) },
+	party = { icon = "🎉", title = "Join my party", color = Color3.fromRGB(90, 170, 255) },
+	event = { icon = "📍", title = "You're invited", color = Color3.fromRGB(255, 200, 60) },
+}
+
+-- Coach Ray (section 109): first-join welcome texts.
+MessagesConfig.COACH_RAY = "Coach Ray"
+MessagesConfig.COACH_RAY_LINES = {
+	"You new around here?",
+	"Then it's time to make yourself known. Hit the court by the subway, earn some cash at the Job Center, and holler at me if you need anything.",
+}
+MessagesConfig.SYSTEM_ICONS = { ["Coach Ray"] = "🧢" }
+
+return MessagesConfig
 ]=====])
 put(folder, 'ModuleScript', 'ShopsConfig', [=====[
 -- CITY GRIND: shop catalog and the procedural outfit builder
@@ -2618,6 +3097,156 @@ end
 
 return ShopsConfig
 ]=====])
+put(folder, 'ModuleScript', 'SocialConfig', [=====[
+-- CITY GRIND: social tuning shared by server and client (spec 21, 28, 29, 44-47, 96, 97).
+-- Lives in ReplicatedStorage.CityGrind.SocialConfig.
+
+local SocialConfig = {}
+
+SocialConfig.DATASTORE_NAME = "CityGrind_Social_v1" -- offline friend-request inboxes
+SocialConfig.TOPIC = "CityGrindSocial" -- MessagingService topic for live cross-server delivery
+
+SocialConfig.MAX_FRIENDS = 200
+SocialConfig.MAX_INCOMING = 100
+SocialConfig.MAX_BLOCKED = 300
+SocialConfig.REQUESTS_PER_MINUTE = 10
+SocialConfig.INTERACT_RANGE = 10 -- studs: interaction prompt over other players
+SocialConfig.EMOTE_RANGE = 12 -- studs: two-person emotes (server check)
+SocialConfig.EMOTE_REQUEST_SECONDS = 15
+SocialConfig.BIO_MAX = 120
+
+-- Privacy (spec 44). Each kind is checked against the RECEIVER's setting.
+SocialConfig.PRIVACY_KINDS = {
+	{ id = "message", label = "Messages" },
+	{ id = "invite", label = "Invites" },
+	{ id = "call", label = "Calls" },
+	{ id = "visit", label = "Home visits" },
+	{ id = "follow", label = "Follows" },
+	{ id = "interact", label = "Interactions" },
+}
+SocialConfig.PRIVACY_VALUES = { "Everyone", "Friends", "Crew", "Nobody" }
+SocialConfig.PROFILE_VISIBILITY = { "Public", "Friends Only", "Private" }
+SocialConfig.DEFAULT_PRIVACY = {
+	message = "Everyone",
+	invite = "Everyone",
+	call = "Friends",
+	visit = "Friends",
+	follow = "Everyone",
+	interact = "Everyone",
+	profile = "Public",
+	showStatus = true, -- others see your status / activity
+	shareLocation = true, -- friends in your server can GPS to you
+}
+
+-- Player status (spec 47). "Auto" derives it from what you're doing.
+SocialConfig.STATUSES = {
+	{ id = "Auto", label = "Auto", icon = "✨" },
+	{ id = "None", label = "No status", icon = "" },
+	{ id = "At Gym", label = "At Gym", icon = "🏋️" },
+	{ id = "Playing Basketball", label = "Playing Basketball", icon = "🏀" },
+	{ id = "Working", label = "Working", icon = "💼" },
+	{ id = "Driving", label = "Driving", icon = "🚗" },
+	{ id = "Busy", label = "Busy", icon = "⏳" },
+	{ id = "Do Not Disturb", label = "Do Not Disturb", icon = "⛔" },
+	{ id = "Hanging Out", label = "Hanging Out", icon = "😎" },
+}
+SocialConfig.STATUS_ICONS = {}
+for _, s in SocialConfig.STATUSES do
+	SocialConfig.STATUS_ICONS[s.id] = s.icon
+end
+SocialConfig.STATUS_ICONS.Online = "🟢"
+
+-- Nametag / profile colour per reputation rank (names match Config.REPUTATION_RANKS).
+SocialConfig.RANK_COLORS = {
+	Nobody = Color3.fromRGB(200, 200, 210),
+	Known = Color3.fromRGB(120, 220, 140),
+	Respected = Color3.fromRGB(90, 170, 255),
+	["Local Star"] = Color3.fromRGB(190, 120, 255),
+	["City Famous"] = Color3.fromRGB(255, 160, 60),
+	Celebrity = Color3.fromRGB(255, 90, 140),
+	Legend = Color3.fromRGB(255, 215, 70),
+}
+
+-- Profile customization (spec 97).
+SocialConfig.BANNERS = {
+	Color3.fromRGB(255, 120, 60),
+	Color3.fromRGB(90, 110, 240),
+	Color3.fromRGB(40, 160, 90),
+	Color3.fromRGB(230, 70, 80),
+	Color3.fromRGB(150, 70, 220),
+	Color3.fromRGB(30, 170, 200),
+	Color3.fromRGB(240, 190, 40),
+	Color3.fromRGB(45, 45, 58),
+}
+
+SocialConfig.FAVORITES = { "None", "Basketball", "Gym", "Driving", "Working", "Shopping", "Hanging Out", "Exploring" }
+
+SocialConfig.FEATURED = {
+	{ id = "Level", label = "Level" },
+	{ id = "Reputation", label = "Reputation" },
+	{ id = "Fame", label = "Fame" },
+	{ id = "Wins", label = "Hoop Wins" },
+	{ id = "Points", label = "Career Points" },
+	{ id = "Threes", label = "3PT Made" },
+	{ id = "Dunks", label = "Dunks" },
+	{ id = "Strength", label = "Strength" },
+	{ id = "Speed", label = "Speed" },
+	{ id = "Shooting", label = "Shooting" },
+	{ id = "Vertical", label = "Vertical" },
+}
+SocialConfig.FEATURED_BY_ID = {}
+for _, f in SocialConfig.FEATURED do
+	SocialConfig.FEATURED_BY_ID[f.id] = f
+end
+
+-- Titles (spec 97) unlock from level, reputation and basketball career.
+-- stat: "level" | "rep" | "wins" | "points"
+SocialConfig.TITLES = {
+	{ id = "Newcomer", stat = "level", min = 1 },
+	{ id = "Grinder", stat = "level", min = 5 },
+	{ id = "Hustler", stat = "level", min = 10 },
+	{ id = "Veteran", stat = "level", min = 25 },
+	{ id = "City Elite", stat = "level", min = 50 },
+	{ id = "Living Legend", stat = "level", min = 100 },
+	{ id = "Known Face", stat = "rep", min = 100 },
+	{ id = "Respected", stat = "rep", min = 500 },
+	{ id = "Local Star", stat = "rep", min = 1000 },
+	{ id = "City Famous", stat = "rep", min = 2500 },
+	{ id = "Celebrity", stat = "rep", min = 5000 },
+	{ id = "Legend", stat = "rep", min = 10000 },
+	{ id = "Hooper", stat = "wins", min = 5 },
+	{ id = "Court King", stat = "wins", min = 50 },
+	{ id = "Bucket Getter", stat = "points", min = 250 },
+}
+
+local STAT_LABEL = { level = "Reach level", rep = "Reach reputation", wins = "Win games:", points = "Score points:" }
+
+function SocialConfig.titleRequirement(title): string
+	return (STAT_LABEL[title.stat] or "") .. " " .. title.min
+end
+
+-- Title ids unlocked for these numbers.
+function SocialConfig.unlockedTitles(level: number, rep: number, wins: number, points: number): { string }
+	local values = { level = level, rep = rep, wins = wins, points = points }
+	local list = {}
+	for _, t in SocialConfig.TITLES do
+		if (values[t.stat] or 0) >= t.min then
+			table.insert(list, t.id)
+		end
+	end
+	return list
+end
+
+-- Two-person emotes need the other player to accept (spec 21, 96).
+SocialConfig.EMOTES = {
+	Wave = { label = "WAVE", solo = true },
+	HighFive = { label = "HIGH FIVE" },
+	FistBump = { label = "FIST BUMP" },
+	Handshake = { label = "HANDSHAKE" },
+}
+
+return SocialConfig
+]=====])
 put(folder, 'ModuleScript', 'VehiclesConfig', [=====[
 -- CITY GRIND: vehicle catalog, paint/mod options and the shared arcade physics.
 -- Lives in ReplicatedStorage.CityGrind.VehiclesConfig. The server builds the
@@ -3354,9 +3983,9 @@ end)
 CourtGames.start()
 
 ---------------------------------------------------------------------------
--- Phase 3 life systems. Each one builds its own places and remotes.
+-- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -3613,15 +4242,32 @@ function Apartments.setGuestAllowed(owner: Player, userId: number, allowed: bool
 	end
 end
 
+local evictGuests: (unit: Unit) -> () -- Phase 4 (guests), defined below sendOutside
+
 local function setInside(player: Player, unit: Unit?)
+	local was = inside[player]
 	inside[player] = unit
 	player:SetAttribute("HomeUnit", if unit then unit.owner.UserId else 0)
+	-- Phase 4: when the owner leaves their own unit (exit door, respawn, another
+	-- interior), any guests are sent outside with them.
+	if was and was ~= unit and was.owner == player then
+		evictGuests(was :: Unit)
+	end
 end
 
 local function sendOutside(player: Player)
 	setInside(player, nil)
 	if player:GetAttribute("Interior") == INTERIOR then
 		Places.leave(player, Cfg.OUTSIDE)
+	end
+end
+
+-- Phase 4: sends everyone but the owner out of a unit.
+evictGuests = function(unit: Unit)
+	for player, u in inside do
+		if u == unit and player ~= unit.owner then
+			sendOutside(player)
+		end
 	end
 end
 
@@ -4178,6 +4824,31 @@ local function onEnteredHome(player: Player, unit: Unit)
 		Event:FireClient(player, "Welcome", Cfg.TIER_BY_ID[unit.tierId].name)
 		Net.notify(player, "WELCOME HOME", "This " .. Cfg.TIER_BY_ID[unit.tierId].name .. " is yours. Tap FURNITURE to decorate.")
 	end
+end
+
+-- Phase 4 (Messages "apartment" invite): teleports an allowed guest into the
+-- owner's currently built unit. Guests leave like owners do: the unit's
+-- ExitDoor sends out anyone inside it, rebuildUnit carries allowed guests
+-- along, and the owner leaving the unit (setInside) or the server
+-- (destroyUnit) sends guests outside.
+function Apartments.visit(guest: Player, owner: Player): (boolean, string?)
+	if guest == owner then
+		return false, "That's your own place."
+	end
+	local unit = units[owner]
+	if not owner.Parent or not unit or not unit.model or not unit.model.Parent or inside[owner] ~= unit then
+		return false, owner.DisplayName .. " isn't home right now. They need to be inside their place at Maple Court."
+	end
+	if not Apartments.canEnterUnit(guest, unit) then
+		return false, "You're not on " .. owner.DisplayName .. "'s guest list."
+	end
+	if not Net.alive(guest) then
+		return false, "You can't travel right now."
+	end
+	guest:SetAttribute("Interior", INTERIOR)
+	setInside(guest, unit)
+	task.spawn(Places.teleport, guest, spawnCFrame(unit))
+	return true, nil
 end
 
 ---------------------------------------------------------------------------
@@ -6622,6 +7293,2060 @@ function CourtGames.gameOf(player: Player): string?
 end
 
 return CourtGames
+]=====])
+put(server, 'ModuleScript', 'Crews', [=====[
+-- CITY GRIND: crews (sections 60, 61, 62). Server side.
+-- A crew is a persistent group with a name, tag, colour and logo. It lives in
+-- its own DataStore record (so it exists while members are offline or on other
+-- servers); every write re-reads the record with UpdateAsync. MessagingService
+-- tells other servers to reload a crew after a change. Without DataStore access
+-- (Studio) crews work in memory for the current server.
+--
+-- Crew rep grows from members' activity: every point of Reputation a member
+-- earns is added to crew rep. Crew level comes from crew rep. Each week the crew
+-- has a mission tracked from members' Wins / Reputation / Level increases.
+--
+-- Remotes:  CrewRequest (RemoteFunction): (action, args) -> { ok, message }
+--           CrewGet     (RemoteFunction): () -> snapshot for the Crew phone app
+--           CrewEvent   (RemoteEvent, server -> client): ("changed") ("invite", {crewId, name, tag, by})
+-- Player attributes: CrewId, CrewName, CrewTag, CrewColor (Color3), CrewRole, CrewLogo, CrewLevel ("" / nil when crewless)
+-- Saved section "crew" = { crewId = "", invites = { {crewId, name, tag, by, at} } }
+-- DataStores: CityGrind_Crews_v1 (key "crew_<id>"), CityGrind_CrewNames_v1 (lower name -> id),
+--             OrderedDataStore CityGrind_CrewRep_v1 (crew id -> rep)
+
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+local MessagingService = game:GetService("MessagingService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local CrewsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("CrewsConfig"))
+
+local Crews = {}
+
+local SERVER_ID = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
+local TOPIC = "CityGrindCrews"
+local FLUSH_SECONDS = 45
+local LEADERBOARD_SECONDS = 90
+local ONLINE_STALE = 6 * 3600
+
+local CrewRequest = Net.remote("RemoteFunction", "CrewRequest")
+local CrewGet = Net.remote("RemoteFunction", "CrewGet")
+local CrewEvent = Net.remote("RemoteEvent", "CrewEvent")
+
+PlayerData.registerSection("crew", function()
+	return { crewId = "", invites = {} }
+end)
+
+---------------------------------------------------------------------------
+-- Storage
+---------------------------------------------------------------------------
+local store: DataStore? = nil
+local nameStore: DataStore? = nil
+local rankStore: OrderedDataStore? = nil
+pcall(function()
+	store = DataStoreService:GetDataStore("CityGrind_Crews_v1")
+	nameStore = DataStoreService:GetDataStore("CityGrind_CrewNames_v1")
+	rankStore = DataStoreService:GetOrderedDataStore("CityGrind_CrewRep_v1")
+end)
+
+local storeOk = false -- set by the probe in start(); false = in-memory crews for this server
+local probeDone = false
+
+local cache: { [string]: any } = {} -- crew id -> latest record we've seen (authoritative in memory mode)
+local memoryNames: { [string]: string } = {}
+local crewIdOf: { [Player]: string } = {} -- online members in this server
+local pending: { [string]: { rep: number, stats: { [string]: number } } } = {}
+local lastStats: { [Player]: { [string]: number } } = {}
+local busy: { [Player]: boolean } = {}
+local leaderboardCache: { at: number, list: { any } }? = nil
+
+local function retry<T>(attempts: number, fn: () -> T): (boolean, any)
+	local ok, result
+	for attempt = 1, attempts do
+		ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		if attempt < attempts then
+			task.wait(attempt)
+		end
+	end
+	return false, result
+end
+
+local function deepCopy(t: any): any
+	if type(t) ~= "table" then
+		return t
+	end
+	local c = {}
+	for k, v in t do
+		c[k] = deepCopy(v)
+	end
+	return c
+end
+
+local function waitProbe()
+	local deadline = os.clock() + 15
+	while not probeDone and os.clock() < deadline do
+		task.wait(0.2)
+	end
+end
+
+-- Reads a crew. `fresh` forces a DataStore read (otherwise the cache is fine).
+local function readCrew(id: string, fresh: boolean?): any
+	if not storeOk or not store then
+		return cache[id]
+	end
+	if not fresh and cache[id] then
+		return cache[id]
+	end
+	local ok, rec = retry(3, function()
+		return (store :: DataStore):GetAsync("crew_" .. id)
+	end)
+	if ok then
+		if rec then
+			cache[id] = rec -- the stored copy is the truth
+		else
+			cache[id] = nil
+		end
+		return rec
+	end
+	return cache[id]
+end
+
+-- Atomically edits a crew: `mutate(rec)` runs on the freshest copy and returns
+-- (true) to save or (false, why) to abort. It must not yield.
+local function editCrew(id: string, mutate: (any) -> (boolean, string?)): (boolean, string?, any)
+	local why: string? = nil
+	if storeOk and store then
+		local result = nil
+		local ok, err = retry(3, function()
+			return (store :: DataStore):UpdateAsync("crew_" .. id, function(saved)
+				why = nil
+				if type(saved) ~= "table" or saved.disbanded then
+					why = "That crew doesn't exist anymore."
+					return nil
+				end
+				local fine, reason = mutate(saved)
+				if not fine then
+					why = reason or "Couldn't do that."
+					return nil
+				end
+				saved.version = (saved.version or 0) + 1
+				result = saved
+				return saved
+			end)
+		end)
+		if not ok then
+			warn("[CityGrind] Crew save failed:", err)
+			return false, "The crew service is busy. Try again in a moment."
+		end
+		if why or not result then
+			return false, why or "Couldn't do that."
+		end
+		cache[id] = result
+		return true, nil, result
+	end
+	local rec = cache[id]
+	if not rec or rec.disbanded then
+		return false, "That crew doesn't exist anymore."
+	end
+	local copy = deepCopy(rec)
+	local fine, reason = mutate(copy)
+	if not fine then
+		return false, reason or "Couldn't do that."
+	end
+	copy.version = (copy.version or 0) + 1
+	cache[id] = copy
+	return true, nil, copy
+end
+
+local function setRank(rec: any)
+	if not storeOk or not rankStore or rec.disbanded then
+		return
+	end
+	task.spawn(function()
+		pcall(function()
+			(rankStore :: OrderedDataStore):SetAsync(rec.id, math.floor(rec.rep or 0))
+		end)
+	end)
+end
+
+local function publishChange(id: string, note: { title: string, body: string }?)
+	if not storeOk then
+		return
+	end
+	task.spawn(function()
+		pcall(function()
+			MessagingService:PublishAsync(TOPIC, { id = id, server = SERVER_ID, title = note and note.title, body = note and note.body })
+		end)
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function lazy(name: string): any
+	local module = script.Parent:FindFirstChild(name)
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function uidKey(userId: number): string
+	return tostring(userId)
+end
+
+local function memberCount(rec: any): number
+	local n = 0
+	for _ in rec.members do
+		n += 1
+	end
+	return n
+end
+
+local function roleOf(rec: any, userId: number): string?
+	local m = rec and rec.members and rec.members[uidKey(userId)]
+	return m and m.role
+end
+
+local function rank(role: string?): number
+	return role and CrewsConfig.ROLE_RANK[role] or 0
+end
+
+local function colorOf(rec: any): Color3
+	local entry = CrewsConfig.COLORS[rec.color] or CrewsConfig.COLORS[1]
+	return entry.color
+end
+
+local function currentMission(rec: any, now: number)
+	local week = CrewsConfig.weekIndex(now)
+	local m = rec.mission
+	if type(m) ~= "table" or m.week ~= week then
+		local def = CrewsConfig.missionFor(rec.id, week)
+		return { week = week, id = def.id, progress = 0, done = false }, true
+	end
+	return m, false
+end
+
+local function missionDef(id: string)
+	for _, def in CrewsConfig.MISSIONS do
+		if def.id == id then
+			return def
+		end
+	end
+	return CrewsConfig.MISSIONS[1]
+end
+
+local function pruneInvites(rec: any)
+	local now = os.time()
+	rec.invites = rec.invites or {}
+	for k, inv in rec.invites do
+		if type(inv) ~= "table" or now - (inv.at or 0) > CrewsConfig.INVITE_DAYS * 86400 then
+			rec.invites[k] = nil
+		end
+	end
+end
+
+-- Filters text written by a player for display to everyone. nil = rejected / failed.
+local function filterBroadcast(text: string, userId: number): string?
+	local ok, result = pcall(function()
+		local filtered = TextService:FilterStringAsync(text, userId, Enum.TextFilterContext.PublicChat)
+		return filtered:GetNonChatStringForBroadcastAsync()
+	end)
+	if ok and type(result) == "string" then
+		return result
+	end
+	return nil
+end
+
+local function cleanSpaces(text: string): string
+	return (text:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
+---------------------------------------------------------------------------
+-- Membership on this server
+---------------------------------------------------------------------------
+local function setAttributes(player: Player, rec: any?)
+	if not player.Parent then
+		return
+	end
+	if rec then
+		local level = CrewsConfig.levelFor(rec.rep or 0)
+		player:SetAttribute("CrewId", rec.id)
+		player:SetAttribute("CrewName", rec.name)
+		player:SetAttribute("CrewTag", rec.tag)
+		player:SetAttribute("CrewColor", colorOf(rec))
+		player:SetAttribute("CrewRole", roleOf(rec, player.UserId) or "Member")
+		player:SetAttribute("CrewLogo", CrewsConfig.LOGOS[rec.logo] or CrewsConfig.LOGOS[1])
+		player:SetAttribute("CrewLevel", level)
+	else
+		player:SetAttribute("CrewId", "")
+		player:SetAttribute("CrewName", "")
+		player:SetAttribute("CrewTag", "")
+		player:SetAttribute("CrewColor", nil)
+		player:SetAttribute("CrewRole", "")
+		player:SetAttribute("CrewLogo", "")
+		player:SetAttribute("CrewLevel", 0)
+	end
+end
+
+local function changed(player: Player)
+	if player.Parent then
+		CrewEvent:FireClient(player, "changed")
+	end
+end
+
+local function attach(player: Player, rec: any)
+	crewIdOf[player] = rec.id
+	local section = PlayerData.section(player, "crew")
+	if section and section.crewId ~= rec.id then
+		section.crewId = rec.id
+		PlayerData.markChanged(player)
+	end
+	setAttributes(player, rec)
+	changed(player)
+end
+
+local function detach(player: Player, message: string?)
+	crewIdOf[player] = nil
+	local section = PlayerData.section(player, "crew")
+	if section and section.crewId ~= "" then
+		section.crewId = ""
+		PlayerData.markChanged(player)
+	end
+	setAttributes(player, nil)
+	changed(player)
+	if message then
+		Net.notify(player, "CREW", message)
+	end
+end
+
+-- Re-applies a crew record to everyone on this server who belongs to it.
+local function refreshMembers(id: string)
+	local rec = cache[id]
+	for player, crewId in crewIdOf do
+		if crewId == id then
+			if not rec or rec.disbanded then
+				detach(player, "Your crew was disbanded.")
+			elseif not rec.members[uidKey(player.UserId)] then
+				detach(player, "You're no longer in " .. rec.name .. ".")
+			else
+				setAttributes(player, rec)
+				changed(player)
+			end
+		end
+	end
+end
+
+local function notifyCrew(id: string, title: string, body: string, except: Player?)
+	for player, crewId in crewIdOf do
+		if crewId == id and player ~= except then
+			Net.notify(player, title, body)
+		end
+	end
+end
+
+-- After any successful edit: update players here and tell other servers.
+local function afterEdit(rec: any, note: { title: string, body: string }?, except: Player?)
+	refreshMembers(rec.id)
+	if note then
+		notifyCrew(rec.id, note.title, note.body, except)
+	end
+	publishChange(rec.id, note)
+end
+
+---------------------------------------------------------------------------
+-- Rep, wins and missions
+---------------------------------------------------------------------------
+local function addPending(id: string, rep: number, stat: string?, amount: number?)
+	local p = pending[id]
+	if not p then
+		p = { rep = 0, stats = {} }
+		pending[id] = p
+	end
+	p.rep += rep
+	if stat and amount then
+		p.stats[stat] = (p.stats[stat] or 0) + amount
+	end
+end
+
+-- Public: adds crew rep on behalf of a member (saved with the next flush).
+function Crews.addCrewRep(player: Player, amount: number)
+	local id = crewIdOf[player]
+	if id and type(amount) == "number" and amount > 0 and amount == amount then
+		addPending(id, math.floor(amount), nil, nil)
+	end
+end
+
+local function flushCrew(id: string)
+	local p = pending[id]
+	pending[id] = nil
+	-- online members' current wins for the crew stats
+	local wins: { [string]: number } = {}
+	local names: { [string]: string } = {}
+	for player, crewId in crewIdOf do
+		if crewId == id then
+			wins[uidKey(player.UserId)] = player:GetAttribute("Wins") or 0
+			names[uidKey(player.UserId)] = player.DisplayName
+		end
+	end
+	if not p then
+		-- nothing earned: only save if someone's win count moved
+		local cached = cache[id]
+		local moved = false
+		for key, w in wins do
+			local m = cached and cached.members[key]
+			if m and m.wins ~= w then
+				moved = true
+			end
+		end
+		if not moved then
+			return
+		end
+	end
+	local completed = nil
+	local ok, _, rec = editCrew(id, function(r)
+		completed = nil
+		if p then
+			r.rep = (r.rep or 0) + p.rep
+			local mission, _ = currentMission(r, os.time())
+			r.mission = mission
+			local def = missionDef(mission.id)
+			local gained = p.stats[def.stat]
+			if gained and not mission.done then
+				mission.progress = math.min(def.goal, mission.progress + gained)
+				if mission.progress >= def.goal then
+					mission.done = true
+					r.rep += def.reward
+					completed = def
+				end
+			end
+		end
+		for key, w in wins do
+			local m = r.members[key]
+			if m then
+				m.wins = w
+				m.name = names[key] or m.name
+			end
+		end
+		return true
+	end)
+	if ok and rec then
+		setRank(rec)
+		local note = nil
+		if completed then
+			note = { title = "CREW MISSION COMPLETE", body = completed.title .. " - +" .. completed.reward .. " crew rep!" }
+		end
+		afterEdit(rec, note)
+	elseif p then
+		-- keep the progress for the next attempt (unless the crew is gone)
+		if cache[id] and not cache[id].disbanded then
+			addPending(id, p.rep, nil, nil)
+			for stat, n in p.stats do
+				addPending(id, 0, stat, n)
+			end
+		end
+	end
+end
+
+local function flushAll()
+	local ids = {}
+	for id in pending do
+		ids[id] = true
+	end
+	for _, id in crewIdOf do
+		ids[id] = true
+	end
+	for id in ids do
+		flushCrew(id)
+	end
+end
+
+local function watchStats(player: Player)
+	lastStats[player] = {}
+	local watched = { Reputation = true }
+	for _, stat in CrewsConfig.MISSION_STATS do
+		watched[stat] = true
+	end
+	for stat in watched do
+		player:GetAttributeChangedSignal(stat):Connect(function()
+			local value = player:GetAttribute(stat)
+			local last = lastStats[player]
+			if not last or type(value) ~= "number" then
+				return
+			end
+			local before = last[stat]
+			last[stat] = value
+			if before == nil or not player:GetAttribute("DataLoaded") then
+				return -- first value after loading isn't progress
+			end
+			local delta = value - before
+			local id = crewIdOf[player]
+			if delta > 0 and id then
+				addPending(id, if stat == "Reputation" then delta else 0, stat, delta)
+			end
+		end)
+		local v = player:GetAttribute(stat)
+		if type(v) == "number" then
+			lastStats[player][stat] = v
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Snapshot for the phone app
+---------------------------------------------------------------------------
+local function getLeaderboard(): { any }
+	if leaderboardCache and os.clock() - leaderboardCache.at < LEADERBOARD_SECONDS then
+		return leaderboardCache.list
+	end
+	local list = {}
+	local function row(rec: any, rep: number)
+		local level = CrewsConfig.levelFor(rep)
+		table.insert(list, {
+			id = rec.id,
+			name = rec.name,
+			tag = rec.tag,
+			logo = CrewsConfig.LOGOS[rec.logo] or CrewsConfig.LOGOS[1],
+			color = colorOf(rec),
+			rep = rep,
+			level = level,
+		})
+	end
+	local fromStore = false
+	if storeOk and rankStore then
+		local ok, page = pcall(function()
+			return (rankStore :: OrderedDataStore):GetSortedAsync(false, 10):GetCurrentPage()
+		end)
+		if ok and type(page) == "table" then
+			fromStore = true
+			for _, entry in page do
+				local rec = readCrew(entry.key, false)
+				if rec and not rec.disbanded then
+					row(rec, entry.value)
+				end
+			end
+		end
+	end
+	if not fromStore then
+		local recs = {}
+		for _, rec in cache do
+			if not rec.disbanded then
+				table.insert(recs, rec)
+			end
+		end
+		table.sort(recs, function(a, b)
+			return (a.rep or 0) > (b.rep or 0)
+		end)
+		for i = 1, math.min(10, #recs) do
+			row(recs[i], recs[i].rep or 0)
+		end
+	end
+	leaderboardCache = { at = os.clock(), list = list }
+	return list
+end
+
+local function crewSnapshot(rec: any, viewer: Player)
+	local now = os.time()
+	local level, floorRep, nextRep = CrewsConfig.levelFor(rec.rep or 0)
+	local members = {}
+	local totalWins = 0
+	for key, m in rec.members do
+		local userId = tonumber(key) or 0
+		local here = Players:GetPlayerByUserId(userId)
+		local wins = if here then (here:GetAttribute("Wins") or 0) else (m.wins or 0)
+		totalWins += wins
+		table.insert(members, {
+			userId = userId,
+			name = if here then here.DisplayName else (m.name or "Player"),
+			role = m.role,
+			wins = wins,
+			online = here ~= nil or (type(m.server) == "string" and m.server ~= "" and now - (m.seen or 0) < ONLINE_STALE),
+			here = here ~= nil,
+			seen = m.seen or 0,
+		})
+	end
+	table.sort(members, function(a, b)
+		if rank(a.role) ~= rank(b.role) then
+			return rank(a.role) > rank(b.role)
+		end
+		if a.online ~= b.online then
+			return a.online
+		end
+		return a.name < b.name
+	end)
+	local mission = currentMission(rec, now)
+	local def = missionDef(mission.id)
+	return {
+		id = rec.id,
+		name = rec.name,
+		tag = rec.tag,
+		color = colorOf(rec),
+		logo = CrewsConfig.LOGOS[rec.logo] or CrewsConfig.LOGOS[1],
+		rep = rec.rep or 0,
+		level = level,
+		levelFloor = floorRep,
+		levelNext = nextRep,
+		createdAt = rec.createdAt or 0,
+		announcement = rec.announcement,
+		members = members,
+		memberCount = #members,
+		maxMembers = CrewsConfig.MAX_MEMBERS,
+		totalWins = totalWins,
+		myRole = roleOf(rec, viewer.UserId) or "Member",
+		mission = {
+			title = def.title,
+			progress = mission.progress,
+			goal = def.goal,
+			reward = def.reward,
+			done = mission.done,
+			endsAt = CrewsConfig.weekEnds(now),
+		},
+	}
+end
+
+local function snapshotFor(player: Player)
+	local id = crewIdOf[player]
+	local rec = id and cache[id]
+	local section = PlayerData.section(player, "crew")
+	local invites = {}
+	if section and not rec then
+		for _, inv in section.invites do
+			if os.time() - (inv.at or 0) <= CrewsConfig.INVITE_DAYS * 86400 then
+				table.insert(invites, { crewId = inv.crewId, name = inv.name, tag = inv.tag, by = inv.by, at = inv.at })
+			end
+		end
+	end
+	return {
+		loaded = section ~= nil,
+		crew = if rec and not rec.disbanded then crewSnapshot(rec, player) else nil,
+		invites = invites,
+		leaderboard = getLeaderboard(),
+		fee = CrewsConfig.FEE,
+		minLevel = CrewsConfig.MIN_LEVEL,
+		persistent = storeOk,
+	}
+end
+
+---------------------------------------------------------------------------
+-- Actions
+---------------------------------------------------------------------------
+local function myCrew(player: Player): (any, string?)
+	local id = crewIdOf[player]
+	local rec = id and cache[id]
+	if not rec or rec.disbanded then
+		return nil, "You're not in a crew."
+	end
+	return rec
+end
+
+local function claimName(lower: string, id: string): boolean
+	if not storeOk or not nameStore then
+		if memoryNames[lower] and cache[memoryNames[lower]] and not cache[memoryNames[lower]].disbanded then
+			return false
+		end
+		memoryNames[lower] = id
+		return true
+	end
+	local taken = false
+	local ok = retry(3, function()
+		return (nameStore :: DataStore):UpdateAsync(lower, function(old)
+			taken = false
+			if type(old) == "string" and old ~= id then
+				taken = true
+				return nil
+			end
+			return id
+		end)
+	end)
+	return ok and not taken
+end
+
+local function releaseName(lower: string, id: string)
+	if not storeOk or not nameStore then
+		if memoryNames[lower] == id then
+			memoryNames[lower] = nil
+		end
+		return
+	end
+	task.spawn(function()
+		pcall(function()
+			(nameStore :: DataStore):UpdateAsync(lower, function(old)
+				if old == id then
+					return nil
+				end
+				return old
+			end)
+		end)
+		pcall(function()
+			(nameStore :: DataStore):RemoveAsync(lower)
+		end)
+	end)
+end
+
+function Crews.create(player: Player, args: any): (boolean, string?)
+	if type(args) ~= "table" then
+		return false, "Fill in the form."
+	end
+	local section = PlayerData.section(player, "crew")
+	if not section then
+		return false, "Your data is still loading."
+	end
+	if crewIdOf[player] or section.crewId ~= "" then
+		return false, "Leave your crew before starting a new one."
+	end
+	if (player:GetAttribute("Level") or 1) < CrewsConfig.MIN_LEVEL then
+		return false, "You need to be level " .. CrewsConfig.MIN_LEVEL .. " to start a crew."
+	end
+	if (player:GetAttribute("Cash") or 0) < CrewsConfig.FEE then
+		return false, "Starting a crew costs " .. CrewsConfig.FEE .. " cash."
+	end
+	local name = type(args.name) == "string" and cleanSpaces(args.name) or ""
+	local tag = type(args.tag) == "string" and string.upper((args.tag:gsub("%s", ""))) or ""
+	local color = args.color
+	local logo = args.logo
+	if #name < CrewsConfig.NAME_MIN or #name > CrewsConfig.NAME_MAX or not name:match("^[%w '%-_%.]+$") then
+		return false, "Crew names are 3-20 letters, numbers or spaces."
+	end
+	if #tag < CrewsConfig.TAG_MIN or #tag > CrewsConfig.TAG_MAX or not tag:match("^[%w]+$") then
+		return false, "Tags are 2-4 letters or numbers."
+	end
+	if type(color) ~= "number" or not CrewsConfig.COLORS[color] then
+		return false, "Pick a crew colour."
+	end
+	if type(logo) ~= "number" or not CrewsConfig.LOGOS[logo] then
+		return false, "Pick a crew logo."
+	end
+	local filteredName = filterBroadcast(name, player.UserId)
+	local filteredTag = filterBroadcast(tag, player.UserId)
+	if not filteredName or not filteredTag then
+		return false, "Couldn't check that name right now. Try again."
+	end
+	if filteredName ~= name or filteredTag ~= tag then
+		return false, "That name or tag isn't allowed. Try another."
+	end
+
+	local id = HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 12)
+	local lower = string.lower(name)
+	if not claimName(lower, id) then
+		return false, "A crew called " .. name .. " already exists."
+	end
+	if not PlayerData.spendCash(player, CrewsConfig.FEE, "Crew founded: " .. name) then
+		releaseName(lower, id)
+		return false, "Starting a crew costs " .. CrewsConfig.FEE .. " cash."
+	end
+	local now = os.time()
+	local rec = {
+		id = id,
+		name = name,
+		tag = tag,
+		color = color,
+		logo = logo,
+		leader = player.UserId,
+		createdAt = now,
+		rep = 0,
+		version = 1,
+		members = {
+			[uidKey(player.UserId)] = { name = player.DisplayName, role = "Leader", joined = now, server = SERVER_ID, seen = now, wins = player:GetAttribute("Wins") or 0 },
+		},
+		invites = {},
+		announcement = nil,
+		mission = nil,
+	}
+	rec.mission = (currentMission(rec, now))
+	local saved = true
+	if storeOk and store then
+		local exists = false
+		saved = retry(3, function()
+			return (store :: DataStore):UpdateAsync("crew_" .. id, function(old)
+				exists = old ~= nil
+				if exists then
+					return nil
+				end
+				return rec
+			end)
+		end) and not exists
+	end
+	if not saved then
+		releaseName(lower, id)
+		PlayerData.addCash(player, CrewsConfig.FEE, "Crew fee refund")
+		return false, "Couldn't save your crew. Your fee was refunded - try again."
+	end
+	cache[id] = rec
+	setRank(rec)
+	leaderboardCache = nil
+	if player.Parent then
+		section.invites = {}
+		attach(player, rec)
+	end
+	return true, "Welcome to " .. name .. " [" .. tag .. "]!"
+end
+
+function Crews.invite(from: Player, to: Player): (boolean, string?)
+	local rec, why = myCrew(from)
+	if not rec then
+		return false, why
+	end
+	if rank(roleOf(rec, from.UserId)) < CrewsConfig.ROLE_RANK.Officer then
+		return false, "Only officers and the leader can invite."
+	end
+	if to == from or not to.Parent then
+		return false, "Pick someone else."
+	end
+	if crewIdOf[to] then
+		return false, to.DisplayName .. " is already in a crew."
+	end
+	local toSection = PlayerData.section(to, "crew")
+	if not toSection then
+		return false, to.DisplayName .. " is still loading in."
+	end
+	if memberCount(rec) >= CrewsConfig.MAX_MEMBERS then
+		return false, "Your crew is full."
+	end
+	local Social = lazy("Social")
+	if Social and Social.allows then
+		local ok, allowed, reason = pcall(Social.allows, from, to, "invite")
+		if ok and not allowed then
+			return false, reason or (to.DisplayName .. " isn't taking invites right now.")
+		end
+	end
+	local key = uidKey(to.UserId)
+	local ok, err, saved = editCrew(rec.id, function(r)
+		if rank(roleOf(r, from.UserId)) < CrewsConfig.ROLE_RANK.Officer then
+			return false, "Only officers and the leader can invite."
+		end
+		if r.members[key] then
+			return false, to.DisplayName .. " is already in your crew."
+		end
+		pruneInvites(r)
+		r.invites[key] = { by = from.DisplayName, at = os.time() }
+		return true
+	end)
+	if not ok or not saved then
+		return false, err
+	end
+	-- the invitee's own pending list (shown in their Crew app)
+	for i = #toSection.invites, 1, -1 do
+		local inv = toSection.invites[i]
+		if inv.crewId == saved.id or os.time() - (inv.at or 0) > CrewsConfig.INVITE_DAYS * 86400 then
+			table.remove(toSection.invites, i)
+		end
+	end
+	table.insert(toSection.invites, 1, { crewId = saved.id, name = saved.name, tag = saved.tag, by = from.DisplayName, at = os.time() })
+	while #toSection.invites > 10 do
+		table.remove(toSection.invites)
+	end
+	PlayerData.markChanged(to)
+
+	local Messages = lazy("Messages")
+	local sent = false
+	if Messages and Messages.sendInvite then
+		local okCall, delivered, reason = pcall(Messages.sendInvite, from, to, "crew", {
+			crewId = saved.id,
+			label = saved.name .. " [" .. saved.tag .. "]", -- stored names are already filtered
+		})
+		if okCall and delivered then
+			sent = true
+		elseif okCall and reason then
+			return false, reason
+		end
+	end
+	if not sent then
+		CrewEvent:FireClient(to, "invite", { crewId = saved.id, name = saved.name, tag = saved.tag, by = from.DisplayName })
+		Net.notify(to, "CREW INVITE", from.DisplayName .. " invited you to " .. saved.name .. " [" .. saved.tag .. "]. Open the Crew app.")
+	end
+	changed(to)
+	return true, "Invite sent to " .. to.DisplayName .. "."
+end
+
+local function dropInvite(player: Player, crewId: string)
+	local section = PlayerData.section(player, "crew")
+	if not section then
+		return
+	end
+	for i = #section.invites, 1, -1 do
+		if section.invites[i].crewId == crewId then
+			table.remove(section.invites, i)
+		end
+	end
+	PlayerData.markChanged(player)
+end
+
+function Crews.accept(player: Player, crewId: any): (boolean, string?)
+	if type(crewId) ~= "string" or #crewId > 40 then
+		return false, "That invite is no longer valid."
+	end
+	if crewIdOf[player] then
+		return false, "Leave your crew before joining another."
+	end
+	local section = PlayerData.section(player, "crew")
+	if not section then
+		return false, "Your data is still loading."
+	end
+	if busy[player] then
+		return false, "One moment..."
+	end
+	busy[player] = true
+	local key = uidKey(player.UserId)
+	local ok, why, rec = editCrew(crewId, function(r)
+		pruneInvites(r)
+		if r.members[key] then
+			return true -- already a member (e.g. retried)
+		end
+		if not r.invites[key] then
+			return false, "That invite expired. Ask for a new one."
+		end
+		if memberCount(r) >= CrewsConfig.MAX_MEMBERS then
+			return false, "That crew is full."
+		end
+		r.invites[key] = nil
+		local now = os.time()
+		r.members[key] = { name = player.DisplayName, role = "Member", joined = now, server = SERVER_ID, seen = now, wins = player:GetAttribute("Wins") or 0 }
+		return true
+	end)
+	busy[player] = nil
+	dropInvite(player, crewId)
+	if not ok or not rec then
+		changed(player)
+		return false, why
+	end
+	if not player.Parent then
+		return false, nil
+	end
+	section.invites = {}
+	attach(player, rec)
+	afterEdit(rec, { title = "CREW", body = player.DisplayName .. " joined " .. rec.name .. "!" }, player)
+	return true, "You joined " .. rec.name .. " [" .. rec.tag .. "]!"
+end
+
+function Crews.decline(player: Player, crewId: any): (boolean, string?)
+	if type(crewId) ~= "string" then
+		return false, nil
+	end
+	dropInvite(player, crewId)
+	local key = uidKey(player.UserId)
+	task.spawn(editCrew, crewId, function(r)
+		if not r.invites or not r.invites[key] then
+			return false
+		end
+		r.invites[key] = nil
+		return true
+	end)
+	changed(player)
+	return true, "Invite declined."
+end
+
+local function disbandCrew(rec: any, byName: string)
+	local ok, why, saved = editCrew(rec.id, function(r)
+		r.disbanded = true
+		r.members = {}
+		r.invites = {}
+		return true
+	end)
+	if not ok or not saved then
+		return false, why
+	end
+	releaseName(string.lower(saved.name), saved.id)
+	if storeOk and rankStore then
+		task.spawn(function()
+			pcall(function()
+				(rankStore :: OrderedDataStore):RemoveAsync(saved.id)
+			end)
+		end)
+	end
+	pending[saved.id] = nil
+	leaderboardCache = nil
+	afterEdit(saved, { title = "CREW", body = saved.name .. " was disbanded by " .. byName .. "." })
+	return true, nil
+end
+
+function Crews.leave(player: Player): (boolean, string?)
+	local rec, why = myCrew(player)
+	if not rec then
+		return false, why
+	end
+	local key = uidKey(player.UserId)
+	if roleOf(rec, player.UserId) == "Leader" then
+		if memberCount(rec) <= 1 then
+			local ok, err = disbandCrew(rec, player.DisplayName)
+			if ok then
+				return true, "You left and the crew was disbanded."
+			end
+			return false, err
+		end
+		return false, "Make someone else leader first, or disband the crew."
+	end
+	flushCrew(rec.id)
+	local ok, err, saved = editCrew(rec.id, function(r)
+		if not r.members[key] then
+			return true
+		end
+		if r.members[key].role == "Leader" then
+			return false, "Make someone else leader first, or disband the crew."
+		end
+		r.members[key] = nil
+		return true
+	end)
+	if not ok or not saved then
+		return false, err
+	end
+	detach(player, nil)
+	afterEdit(saved, { title = "CREW", body = player.DisplayName .. " left the crew." }, player)
+	return true, "You left " .. saved.name .. "."
+end
+
+-- Role changes and kicks on any member, online or not.
+local function manage(player: Player, action: string, targetId: any): (boolean, string?)
+	local rec, why = myCrew(player)
+	if not rec then
+		return false, why
+	end
+	if type(targetId) ~= "number" or targetId % 1 ~= 0 or targetId == player.UserId then
+		return false, "Pick another member."
+	end
+	local me, them = uidKey(player.UserId), uidKey(targetId)
+	local targetName = "They"
+	local resultMsg = ""
+	local ok, err, saved = editCrew(rec.id, function(r)
+		local myRole = r.members[me] and r.members[me].role
+		local target = r.members[them]
+		if not myRole then
+			return false, "You're not in this crew anymore."
+		end
+		if not target then
+			return false, "They're not in the crew anymore."
+		end
+		targetName = target.name or "They"
+		if action == "kick" then
+			if not (myRole == "Leader" or (myRole == "Officer" and target.role == "Member")) then
+				return false, "You can't remove that member."
+			end
+			r.members[them] = nil
+			resultMsg = targetName .. " was removed from the crew."
+		elseif action == "promote" then
+			if myRole ~= "Leader" or target.role ~= "Member" then
+				return false, "Only the leader can promote members to officer."
+			end
+			target.role = "Officer"
+			resultMsg = targetName .. " is now an officer."
+		elseif action == "demote" then
+			if myRole ~= "Leader" or target.role ~= "Officer" then
+				return false, "Only the leader can demote officers."
+			end
+			target.role = "Member"
+			resultMsg = targetName .. " is now a member."
+		elseif action == "transfer" then
+			if myRole ~= "Leader" then
+				return false, "Only the leader can hand over the crew."
+			end
+			target.role = "Leader"
+			r.members[me].role = "Officer"
+			r.leader = targetId
+			resultMsg = targetName .. " is the new crew leader."
+		else
+			return false, nil
+		end
+		return true
+	end)
+	if not ok or not saved then
+		return false, err
+	end
+	if action == "kick" then
+		local kicked = Players:GetPlayerByUserId(targetId)
+		if kicked and crewIdOf[kicked] == saved.id then
+			detach(kicked, "You were removed from " .. saved.name .. ".")
+		end
+	end
+	afterEdit(saved, { title = "CREW", body = resultMsg })
+	return true, resultMsg
+end
+
+function Crews.announce(player: Player, text: any): (boolean, string?)
+	local rec, why = myCrew(player)
+	if not rec then
+		return false, why
+	end
+	if rank(roleOf(rec, player.UserId)) < CrewsConfig.ROLE_RANK.Officer then
+		return false, "Only officers and the leader can post announcements."
+	end
+	if type(text) ~= "string" then
+		return false, nil
+	end
+	text = cleanSpaces(text)
+	if #text < 1 or utf8.len(text) == nil or #text > CrewsConfig.ANNOUNCE_MAX then
+		return false, "Announcements are 1-" .. CrewsConfig.ANNOUNCE_MAX .. " characters."
+	end
+	local filtered = filterBroadcast(text, player.UserId)
+	if not filtered then
+		return false, "Couldn't post that right now. Try again."
+	end
+	local me = uidKey(player.UserId)
+	local ok, err, saved = editCrew(rec.id, function(r)
+		if rank(roleOf(r, player.UserId)) < CrewsConfig.ROLE_RANK.Officer or not r.members[me] then
+			return false, "Only officers and the leader can post announcements."
+		end
+		r.announcement = { text = filtered, by = player.DisplayName, at = os.time() }
+		return true
+	end)
+	if not ok or not saved then
+		return false, err
+	end
+	afterEdit(saved, { title = "CREW ANNOUNCEMENT", body = filtered }, player)
+	return true, "Announcement posted."
+end
+
+-- Public: the player's crew, or nil.
+function Crews.crewOf(player: Player): { id: string, name: string, tag: string, color: Color3, role: string }?
+	local id = crewIdOf[player]
+	local rec = id and cache[id]
+	if not rec or rec.disbanded then
+		return nil
+	end
+	return { id = rec.id, name = rec.name, tag = rec.tag, color = colorOf(rec), role = roleOf(rec, player.UserId) or "Member" }
+end
+
+---------------------------------------------------------------------------
+-- Loading players
+---------------------------------------------------------------------------
+local function onLoaded(player: Player)
+	waitProbe()
+	local section = PlayerData.section(player, "crew")
+	if not section or not player.Parent then
+		return
+	end
+	if type(section.invites) ~= "table" then
+		section.invites = {}
+	end
+	local id = section.crewId
+	if type(id) ~= "string" or id == "" then
+		setAttributes(player, nil)
+		changed(player)
+		return
+	end
+	local rec = readCrew(id, true)
+	local key = uidKey(player.UserId)
+	if not rec or rec.disbanded or not rec.members[key] then
+		-- (in memory mode crews don't outlive the server, so the old id just clears)
+		if rec and storeOk then
+			detach(player, if rec.disbanded then rec.name .. " was disbanded while you were away." else "You're no longer in " .. rec.name .. ".")
+		else
+			detach(player, nil)
+		end
+		return
+	end
+	attach(player, rec)
+	-- mark online + refresh name/wins
+	task.spawn(function()
+		local ok, _, saved = editCrew(id, function(r)
+			local m = r.members[key]
+			if not m then
+				return false
+			end
+			m.server = SERVER_ID
+			m.seen = os.time()
+			m.name = player.DisplayName
+			m.wins = player:GetAttribute("Wins") or m.wins or 0
+			return true
+		end)
+		if ok and saved then
+			afterEdit(saved, nil)
+		end
+	end)
+end
+
+local function onRemoving(player: Player)
+	local id = crewIdOf[player]
+	crewIdOf[player] = nil
+	lastStats[player] = nil
+	busy[player] = nil
+	if not id then
+		return
+	end
+	local key = uidKey(player.UserId)
+	local wins = player:GetAttribute("Wins") or 0
+	local p = pending[id]
+	pending[id] = nil
+	local ok, _, saved = editCrew(id, function(r)
+		local m = r.members[key]
+		if p then
+			r.rep = (r.rep or 0) + p.rep
+			local mission = currentMission(r, os.time())
+			r.mission = mission
+			local def = missionDef(mission.id)
+			local gained = p.stats[def.stat]
+			if gained and not mission.done then
+				mission.progress = math.min(def.goal, mission.progress + gained)
+				if mission.progress >= def.goal then
+					mission.done = true
+					r.rep += def.reward
+				end
+			end
+		end
+		if m then
+			m.server = ""
+			m.seen = os.time()
+			m.wins = wins
+		end
+		return true
+	end)
+	if ok and saved then
+		setRank(saved)
+		afterEdit(saved, nil)
+	elseif p and cache[id] and not cache[id].disbanded then
+		addPending(id, p.rep, nil, nil)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local ACTIONS: { [string]: { cooldown: number, run: (Player, any) -> (boolean, string?) } } = {
+	create = { cooldown = 4, run = Crews.create },
+	invite = {
+		cooldown = 2,
+		run = function(player, args)
+			local target = type(args) == "table" and args.target
+			if typeof(target) ~= "Instance" or not target:IsA("Player") then
+				return false, "Pick a player."
+			end
+			return Crews.invite(player, target)
+		end,
+	},
+	accept = { cooldown = 1, run = function(player, args)
+		return Crews.accept(player, type(args) == "table" and args.crewId)
+	end },
+	decline = { cooldown = 0.5, run = function(player, args)
+		return Crews.decline(player, type(args) == "table" and args.crewId)
+	end },
+	leave = { cooldown = 2, run = function(player)
+		return Crews.leave(player)
+	end },
+	disband = {
+		cooldown = 3,
+		run = function(player)
+			local rec, why = myCrew(player)
+			if not rec then
+				return false, why
+			end
+			if roleOf(rec, player.UserId) ~= "Leader" then
+				return false, "Only the leader can disband the crew."
+			end
+			local ok, err = disbandCrew(rec, player.DisplayName)
+			return ok, if ok then "Crew disbanded." else err
+		end,
+	},
+	announce = { cooldown = 10, run = function(player, args)
+		return Crews.announce(player, type(args) == "table" and args.text)
+	end },
+}
+for _, action in { "kick", "promote", "demote", "transfer" } do
+	ACTIONS[action] = { cooldown = 1, run = function(player, args)
+		return manage(player, action, type(args) == "table" and args.userId)
+	end }
+end
+
+function Crews.start(_city: Instance?)
+	-- Probe DataStore access once (fails fast in Studio without API access).
+	task.spawn(function()
+		if store then
+			local ok = pcall(function()
+				(store :: DataStore):GetAsync("probe")
+			end)
+			storeOk = ok
+		end
+		probeDone = true
+		if not storeOk then
+			warn("[CityGrind] Crews are running in memory only (no DataStore access).")
+			return
+		end
+		pcall(function()
+			MessagingService:SubscribeAsync(TOPIC, function(message)
+				local data = message.Data
+				if type(data) ~= "table" or type(data.id) ~= "string" or data.server == SERVER_ID then
+					return
+				end
+				local relevant = cache[data.id] ~= nil
+				for _, crewId in crewIdOf do
+					if crewId == data.id then
+						relevant = true
+					end
+				end
+				if not relevant then
+					return
+				end
+				readCrew(data.id, true)
+				refreshMembers(data.id)
+				if type(data.title) == "string" and type(data.body) == "string" then
+					notifyCrew(data.id, data.title, data.body)
+				end
+			end)
+		end)
+	end)
+
+	CrewRequest.OnServerInvoke = function(player: Player, action: any, args: any)
+		local entry = type(action) == "string" and ACTIONS[action]
+		if not entry then
+			return { ok = false, message = "Unknown action." }
+		end
+		if not Net.allow(player, "Crew" .. action, entry.cooldown) then
+			return { ok = false, message = "Slow down a little." }
+		end
+		local ok, result, message = pcall(entry.run, player, args)
+		if not ok then
+			warn("[CityGrind] Crew action failed:", result)
+			return { ok = false, message = "Something went wrong. Try again." }
+		end
+		leaderboardCache = if action == "create" or action == "disband" then nil else leaderboardCache
+		return { ok = result == true, message = message }
+	end
+
+	CrewGet.OnServerInvoke = function(player: Player)
+		if not Net.allow(player, "CrewGet", 0.5) then
+			return nil
+		end
+		local ok, snap = pcall(snapshotFor, player)
+		return if ok then snap else nil
+	end
+
+	-- Crew invite cards in the Messages app.
+	task.spawn(function()
+		local Messages = lazy("Messages")
+		if Messages and Messages.onInvite then
+			Messages.onInvite("crew", function(_from: Player?, to: Player, payload: any)
+				-- Messages shows the returned message to the player
+				return Crews.accept(to, type(payload) == "table" and payload.crewId or nil)
+			end)
+		end
+	end)
+
+	PlayerData.onLoaded(onLoaded)
+	Players.PlayerAdded:Connect(watchStats)
+	for _, player in Players:GetPlayers() do
+		watchStats(player)
+	end
+	Players.PlayerRemoving:Connect(onRemoving)
+
+	task.spawn(function()
+		while true do
+			task.wait(FLUSH_SECONDS)
+			local ok, err = pcall(flushAll)
+			if not ok then
+				warn("[CityGrind] Crew flush failed:", err)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		if not storeOk then
+			return
+		end
+		local count = 0
+		for player in crewIdOf do
+			count += 1
+			task.spawn(function()
+				onRemoving(player)
+				count -= 1
+			end)
+		end
+		local deadline = os.clock() + 20
+		while count > 0 and os.clock() < deadline do
+			task.wait(0.2)
+		end
+		pcall(flushAll)
+	end)
+end
+
+return Crews
+]=====])
+put(server, 'ModuleScript', 'Emotes', [=====[
+-- CITY GRIND: emotes (sections 31, 95). Server side.
+-- The server tweens the character's R15 Motor6D C0s (like the gym) so every
+-- player sees the emote. Looping emotes run until the player moves or jumps;
+-- one-shot emotes return to rest. R6 avatars only get the emote bubble.
+-- Paired emotes (High Five, Fist Bump, Handshake) need both players to agree:
+-- one sends a request, the other accepts, then both face each other and play.
+--
+-- Remotes:  EmoteAction (client -> server): ("play", id) ("stop") ("equip", slot, id)
+--                  ("pairRequest", target, id) ("pairRespond", requestId, accept)
+--           EmoteEvent  (server -> client): ("pairPrompt", {id, fromName, fromUserId, emote, expires})
+-- Player attributes: Emote (id playing, "" when idle), EmoteSlots (comma list of the 8 equipped ids)
+-- Saved section "emotes" = { slots = { id x8 } }
+
+local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local EmotesConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("EmotesConfig"))
+
+local Emotes = {}
+
+type Emote = EmotesConfig.Emote
+
+local JOINT_NAMES = {
+	"Root", "Waist", "Neck",
+	"LeftShoulder", "RightShoulder", "LeftElbow", "RightElbow",
+	"LeftHip", "RightHip", "LeftKnee", "RightKnee", "LeftAnkle", "RightAnkle",
+}
+
+type Playing = {
+	emote: Emote,
+	character: Model,
+	humanoid: Humanoid,
+	root: BasePart,
+	motors: { [string]: Motor6D },
+	rest: { [Motor6D]: CFrame },
+	tweens: { Tween },
+	token: number,
+	startedAt: number,
+	anchoredByUs: boolean,
+	bubble: BillboardGui?,
+	conns: { RBXScriptConnection },
+}
+
+local playing: { [Player]: Playing } = {}
+local tokenCounter = 0
+-- characters whose pose was interrupted by another posing system (the gym);
+-- they get reset to rest once that system lets go.
+local needsReset: { [Model]: boolean } = {}
+
+type PairRequest = { id: string, from: Player, to: Player, emote: Emote, expires: number }
+local pairRequests: { [string]: PairRequest } = {}
+
+local EmoteAction = Net.remote("RemoteEvent", "EmoteAction")
+local EmoteEvent = Net.remote("RemoteEvent", "EmoteEvent")
+
+PlayerData.registerSection("emotes", function()
+	return { slots = table.clone(EmotesConfig.DEFAULT_SLOTS) }
+end)
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function lazy(name: string): any
+	local module = script.Parent:FindFirstChild(name)
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function attr(player: Player, name: string): any
+	local v = player:GetAttribute(name)
+	if v == "" then
+		return nil
+	end
+	return v
+end
+
+local function findMotors(character: Model): { [string]: Motor6D }
+	local wanted = {}
+	for _, name in JOINT_NAMES do
+		wanted[name] = true
+	end
+	local motors = {}
+	for _, d in character:GetDescendants() do
+		if d:IsA("Motor6D") and wanted[d.Name] and not motors[d.Name] then
+			motors[d.Name] = d
+		end
+	end
+	return motors
+end
+
+local function isR15(humanoid: Humanoid, motors: { [string]: Motor6D }): boolean
+	if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+		return false
+	end
+	for _, name in { "Root", "Waist", "LeftShoulder", "RightShoulder", "LeftElbow", "RightElbow", "LeftHip", "RightHip", "LeftKnee", "RightKnee" } do
+		if not motors[name] then
+			return false
+		end
+	end
+	return true
+end
+
+-- The joint's true rest C0 is the rig attachment it was built from.
+local function restC0(motor: Motor6D): CFrame?
+	local part0 = motor.Part0
+	local att = part0 and part0:FindFirstChild(motor.Name .. "RigAttachment")
+	if att and att:IsA("Attachment") then
+		return att.CFrame
+	end
+	return nil
+end
+
+local function nearlyEqual(a: CFrame, b: CFrame): boolean
+	if (a.Position - b.Position).Magnitude > 0.02 then
+		return false
+	end
+	return a.LookVector:Dot(b.LookVector) > 0.999 and a.UpVector:Dot(b.UpVector) > 0.999
+end
+
+local function charParts(player: Player): (Model?, Humanoid?, BasePart?)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not character or not humanoid or not root or not root:IsA("BasePart") then
+		return nil, nil, nil
+	end
+	return character, humanoid, root
+end
+
+-- Why a player can't emote right now (nil = they can).
+local function blockReason(player: Player): string?
+	if not Net.alive(player) then
+		return "You can't emote right now."
+	end
+	local _, humanoid, root = charParts(player)
+	if not humanoid or not root then
+		return "You can't emote right now."
+	end
+	if attr(player, "Training") then
+		return "Finish your workout first."
+	end
+	if attr(player, "Driving") or humanoid.SeatPart then
+		return "You can't emote while seated or driving."
+	end
+	if humanoid.PlatformStand or root.Anchored then
+		return "You can't emote right now."
+	end
+	local state = humanoid:GetState()
+	if state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping or state == Enum.HumanoidStateType.Swimming
+		or state == Enum.HumanoidStateType.Climbing or state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown then
+		return "Land first, then emote."
+	end
+	return nil
+end
+
+-- True when another system (carrying a box at work, etc.) is already posing the arms.
+local function posedByOthers(motors: { [string]: Motor6D }): boolean
+	for _, name in { "LeftShoulder", "RightShoulder", "Root" } do
+		local motor = motors[name]
+		local rest = motor and restC0(motor)
+		if motor and rest and not nearlyEqual(motor.C0, rest) then
+			return true
+		end
+	end
+	return false
+end
+
+local function showBubble(character: Model, emote: Emote): BillboardGui?
+	local head = character:FindFirstChild("Head")
+	if not head or not head:IsA("BasePart") then
+		return nil
+	end
+	local old = head:FindFirstChild("EmoteBubble")
+	if old then
+		old:Destroy()
+	end
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "EmoteBubble"
+	gui.Size = UDim2.fromOffset(44, 44)
+	gui.StudsOffset = Vector3.new(0, 2.6, 0)
+	gui.MaxDistance = 90
+	gui.LightInfluence = 0
+	gui.ResetOnSpawn = false
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+	bg.BackgroundTransparency = 0.15
+	bg.BorderSizePixel = 0
+	bg.Parent = gui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.Parent = bg
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = emote.icon
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Parent = bg
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.Parent = label
+	gui.Parent = head
+	return gui
+end
+
+---------------------------------------------------------------------------
+-- Playback
+---------------------------------------------------------------------------
+-- Ends the emote. `keepPose` leaves the joints alone (another system just took them over).
+local function stopEmote(player: Player, keepPose: boolean?)
+	local p = playing[player]
+	if not p then
+		return
+	end
+	playing[player] = nil
+	p.token = -1
+	for _, c in p.conns do
+		c:Disconnect()
+	end
+	for _, t in p.tweens do
+		t:Cancel()
+	end
+	if keepPose then
+		needsReset[p.character] = true
+	else
+		local info = TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+		for motor, rest in p.rest do
+			if motor.Parent then
+				TweenService:Create(motor, info, { C0 = rest }):Play()
+			end
+		end
+	end
+	if p.anchoredByUs and p.root.Parent then
+		p.root.Anchored = false
+	end
+	if p.bubble then
+		p.bubble:Destroy()
+	end
+	if player.Parent then
+		player:SetAttribute("Emote", "")
+	end
+end
+
+local function runFrames(player: Player, p: Playing, frames: { EmotesConfig.Frame }, sitDrop: number): boolean
+	for _, frame in frames do
+		if playing[player] ~= p then
+			return false
+		end
+		local info = TweenInfo.new(frame.t, frame.style or Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+		table.clear(p.tweens)
+		for name, motor in p.motors do
+			local rest = p.rest[motor]
+			if rest and motor.Parent then
+				local offset = frame.joints[name] or CFrame.identity
+				if name == "Root" and sitDrop ~= 0 then
+					offset = CFrame.new(0, sitDrop, 0) * offset
+				end
+				local t = TweenService:Create(motor, info, { C0 = rest * offset })
+				t:Play()
+				table.insert(p.tweens, t)
+			end
+		end
+		task.wait(frame.t)
+	end
+	return true
+end
+
+-- Starts an emote on one player (validation already done). Returns false for R6.
+local function startEmote(player: Player, emote: Emote, holdSeconds: number?): boolean
+	stopEmote(player)
+	local character, humanoid, root = charParts(player)
+	if not character or not humanoid or not root then
+		return false
+	end
+	local motors = findMotors(character)
+	local posed = isR15(humanoid, motors)
+	tokenCounter += 1
+	local p: Playing = {
+		emote = emote,
+		character = character,
+		humanoid = humanoid,
+		root = root,
+		motors = if posed then motors else {},
+		rest = {},
+		tweens = {},
+		token = tokenCounter,
+		startedAt = os.clock(),
+		anchoredByUs = false,
+		bubble = showBubble(character, emote),
+		conns = {},
+	}
+	for _, motor in p.motors do
+		p.rest[motor] = restC0(motor) or motor.C0
+	end
+	playing[player] = p
+	player:SetAttribute("Emote", emote.id)
+	needsReset[character] = nil
+
+	table.insert(p.conns, humanoid.Died:Connect(function()
+		stopEmote(player, true)
+	end))
+	table.insert(p.conns, character.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			stopEmote(player, true)
+		end
+	end))
+
+	local sitDrop = 0
+	if emote.sit then
+		sitDrop = -math.max(0.6, humanoid.HipHeight - 0.55)
+	end
+
+	task.spawn(function()
+		local myToken = p.token
+		if not posed then
+			-- R6 / custom rigs: just the bubble for a moment.
+			local untilTime = os.clock() + (holdSeconds or 2)
+			while p.token == myToken and (emote.loop or os.clock() < untilTime) do
+				task.wait(0.25)
+			end
+		else
+			if emote.intro then
+				runFrames(player, p, emote.intro, sitDrop)
+			end
+			repeat
+				if not runFrames(player, p, emote.frames, sitDrop) then
+					return
+				end
+			until not emote.loop or p.token ~= myToken
+		end
+		if p.token == myToken and playing[player] == p then
+			stopEmote(player)
+		end
+	end)
+	return true
+end
+
+-- Public: play an emote on a player after full validation. Returns (ok, reason).
+function Emotes.play(player: Player, name: string): (boolean, string?)
+	local emote = EmotesConfig.find(name)
+	if not emote then
+		return false, "Unknown emote."
+	end
+	if emote.paired then
+		return false, "Find a partner for " .. emote.name .. "."
+	end
+	local reason = blockReason(player)
+	if reason then
+		return false, reason
+	end
+	local character = player.Character
+	local current = playing[player]
+	if not current and character and posedByOthers(findMotors(character)) then
+		return false, "Put down what you're holding first."
+	end
+	startEmote(player, emote)
+	return true
+end
+
+function Emotes.stop(player: Player)
+	stopEmote(player)
+end
+
+function Emotes.isEmoting(player: Player): boolean
+	return playing[player] ~= nil
+end
+
+-- Public: both players face each other and play the same paired emote.
+-- Call only after both agreed (Social's request flow or our own pair request).
+function Emotes.playPaired(a: Player, b: Player, name: string): (boolean, string?)
+	local emote = EmotesConfig.find(name)
+	if not emote or not emote.paired then
+		return false, "Unknown paired emote."
+	end
+	if a == b then
+		return false, "You need someone else for that."
+	end
+	for _, pl in { a, b } do
+		local reason = blockReason(pl)
+		if reason then
+			return false, pl.DisplayName .. ": " .. reason
+		end
+		local character = pl.Character
+		if not playing[pl] and character and posedByOthers(findMotors(character)) then
+			return false, pl.DisplayName .. " has their hands full."
+		end
+	end
+	local _, _, rootA = charParts(a)
+	local _, _, rootB = charParts(b)
+	if not rootA or not rootB then
+		return false, "You can't do that right now."
+	end
+	local flat = Vector3.new(rootB.Position.X - rootA.Position.X, 0, rootB.Position.Z - rootA.Position.Z)
+	if flat.Magnitude > EmotesConfig.PAIR_RANGE + 2 or math.abs(rootA.Position.Y - rootB.Position.Y) > 6 then
+		return false, "Get closer to each other first."
+	end
+	local dir = if flat.Magnitude > 0.05 then flat.Unit else rootA.CFrame.LookVector * Vector3.new(1, 0, 1)
+	if dir.Magnitude < 0.05 then
+		dir = Vector3.new(0, 0, -1)
+	end
+	dir = dir.Unit
+	local mid = (rootA.Position + rootB.Position) / 2
+	local gap = emote.gap or 3
+	local right = dir:Cross(Vector3.yAxis) -- a's right-hand side
+	local shift = emote.sideShift or 0
+	local posA = Vector3.new(mid.X, rootA.Position.Y, mid.Z) - dir * gap / 2 - right * shift
+	local posB = Vector3.new(mid.X, rootB.Position.Y, mid.Z) + dir * gap / 2 + right * shift
+
+	for _, entry in { { a, rootA, posA, posA + dir }, { b, rootB, posB, posB - dir } } do
+		local pl, root, pos, look = entry[1], entry[2], entry[3], entry[4]
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.CFrame = CFrame.lookAt(pos, Vector3.new(look.X, pos.Y, look.Z))
+		if startEmote(pl, emote) then
+			local p = playing[pl]
+			if p and not root.Anchored then
+				root.Anchored = true -- hold still for the short animation
+				p.anchoredByUs = true
+			end
+		end
+	end
+	return true
+end
+
+-- Public: one player asks another for a paired emote; the target gets an ACCEPT prompt.
+function Emotes.requestPaired(from: Player, to: Player, name: string): (boolean, string?)
+	local emote = EmotesConfig.find(name)
+	if not emote or not emote.paired then
+		return false, "Unknown paired emote."
+	end
+	if to == from or not to.Parent then
+		return false, "Pick someone else."
+	end
+	local reason = blockReason(from)
+	if reason then
+		return false, reason
+	end
+	local _, _, rootTo = charParts(to)
+	if not rootTo or Net.distance(from, rootTo.Position) > EmotesConfig.PAIR_RANGE then
+		return false, "Get closer to " .. to.DisplayName .. " first."
+	end
+	local Social = lazy("Social")
+	if Social and Social.allows then
+		local ok, allowed, why = pcall(Social.allows, from, to, "interact")
+		if ok and not allowed then
+			return false, why or (to.DisplayName .. " isn't accepting that right now.")
+		end
+	end
+	for id, req in pairRequests do
+		if req.from == from and req.to == to and os.clock() < req.expires then
+			return false, "You already asked " .. to.DisplayName .. "."
+		end
+		if os.clock() >= req.expires then
+			pairRequests[id] = nil
+		end
+	end
+	local id = HttpService:GenerateGUID(false)
+	local req: PairRequest = { id = id, from = from, to = to, emote = emote, expires = os.clock() + EmotesConfig.PAIR_REQUEST_SECONDS }
+	pairRequests[id] = req
+	EmoteEvent:FireClient(to, "pairPrompt", {
+		id = id,
+		fromName = from.DisplayName,
+		fromUserId = from.UserId,
+		emote = emote.id,
+		seconds = EmotesConfig.PAIR_REQUEST_SECONDS,
+	})
+	return true
+end
+
+local function respondPair(player: Player, id: any, accept: any)
+	if type(id) ~= "string" then
+		return
+	end
+	local req = pairRequests[id]
+	if not req or req.to ~= player then
+		return
+	end
+	pairRequests[id] = nil
+	if os.clock() > req.expires or not req.from.Parent then
+		Net.notify(player, "TOO LATE", "That request expired.")
+		return
+	end
+	if accept ~= true then
+		Net.notify(req.from, req.emote.name:upper(), player.DisplayName .. " passed this time.")
+		return
+	end
+	local ok, why = Emotes.playPaired(req.from, player, req.emote.id)
+	if not ok then
+		Net.notify(player, req.emote.name:upper(), why or "Couldn't do that right now.")
+		Net.notify(req.from, req.emote.name:upper(), why or "Couldn't do that right now.")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Equipped slots
+---------------------------------------------------------------------------
+local function publishSlots(player: Player)
+	local section = PlayerData.section(player, "emotes")
+	if not section then
+		return
+	end
+	local valid = {}
+	for i = 1, EmotesConfig.SLOTS do
+		local id = section.slots[i]
+		if type(id) ~= "string" or not EmotesConfig.BY_ID[id] then
+			id = EmotesConfig.DEFAULT_SLOTS[i]
+			section.slots[i] = id
+		end
+		valid[i] = id
+	end
+	player:SetAttribute("EmoteSlots", table.concat(valid, ","))
+end
+
+local function equip(player: Player, slot: any, id: any)
+	if type(slot) ~= "number" or slot % 1 ~= 0 or slot < 1 or slot > EmotesConfig.SLOTS then
+		return
+	end
+	if type(id) ~= "string" or not EmotesConfig.BY_ID[id] then
+		return
+	end
+	local section = PlayerData.section(player, "emotes")
+	if not section then
+		return
+	end
+	-- an emote sits in one slot only: swap with wherever it was
+	local oldIndex = table.find(section.slots, id)
+	if oldIndex and oldIndex ~= slot then
+		section.slots[oldIndex] = section.slots[slot]
+	end
+	section.slots[slot] = id
+	PlayerData.markChanged(player)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Emotes.start(_city: Instance?)
+	PlayerData.onPublish(function(player)
+		publishSlots(player)
+	end)
+
+	EmoteAction.OnServerEvent:Connect(function(player: Player, action: any, a: any, b: any)
+		if action == "play" then
+			if not Net.allow(player, "EmotePlay", EmotesConfig.COOLDOWN) then
+				return
+			end
+			local ok, why = Emotes.play(player, a)
+			if not ok and why then
+				Net.notify(player, "EMOTE", why)
+			end
+		elseif action == "stop" then
+			if Net.allow(player, "EmoteStop", 0.1) then
+				local p = playing[player]
+				-- paired emotes hold both players still and finish on their own
+				if p and not p.emote.paired then
+					stopEmote(player)
+				end
+			end
+		elseif action == "equip" then
+			if Net.allow(player, "EmoteEquip", 0.15) then
+				equip(player, a, b)
+			end
+		elseif action == "pairRequest" then
+			if not Net.allow(player, "EmotePair", 2) then
+				return
+			end
+			if typeof(a) ~= "Instance" or not a:IsA("Player") then
+				return
+			end
+			local ok, why = Emotes.requestPaired(player, a, b)
+			if ok then
+				local emote = EmotesConfig.find(b)
+				Net.notify(player, (emote and emote.name or "EMOTE"):upper(), "Asked " .. a.DisplayName .. ". Waiting for them to accept.")
+			else
+				Net.notify(player, "EMOTE", why or "Can't do that right now.")
+			end
+		elseif action == "pairRespond" then
+			if Net.allow(player, "EmotePairRespond", 0.3) then
+				respondPair(player, a, b)
+			end
+		end
+	end)
+
+	-- Using a prompt (gym machine, job pickup, door...) ends the emote first.
+	local function promptStop(_prompt: ProximityPrompt, player: Player)
+		local p = playing[player]
+		if p and not p.emote.paired then
+			stopEmote(player, attr(player, "Training") ~= nil)
+		end
+	end
+	ProximityPromptService.PromptButtonHoldBegan:Connect(promptStop)
+	ProximityPromptService.PromptTriggered:Connect(promptStop)
+
+	local function watchPlayer(player: Player)
+		for _, name in { "Training", "Driving" } do
+			player:GetAttributeChangedSignal(name):Connect(function()
+				local value = attr(player, name)
+				if value and playing[player] then
+					-- another system is posing the body now: don't fight it
+					stopEmote(player, name == "Training")
+				elseif not value and name == "Training" then
+					local character = player.Character
+					if character and needsReset[character] then
+						needsReset[character] = nil
+						task.defer(function()
+							if attr(player, "Training") or playing[player] then
+								return
+							end
+							for _, motor in findMotors(character) do
+								local rest = restC0(motor)
+								if rest then
+									motor.C0 = rest
+								end
+							end
+						end)
+					end
+				end
+			end)
+		end
+		player.CharacterRemoving:Connect(function(character)
+			needsReset[character] = nil
+			stopEmote(player, true)
+		end)
+	end
+	Players.PlayerAdded:Connect(watchPlayer)
+	for _, player in Players:GetPlayers() do
+		watchPlayer(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		stopEmote(player, true)
+		for id, req in pairRequests do
+			if req.from == player or req.to == player then
+				pairRequests[id] = nil
+			end
+		end
+	end)
+
+	-- Moving, jumping, sitting or getting knocked over ends an emote.
+	local acc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		acc += dt
+		if acc < 0.1 then
+			return
+		end
+		acc = 0
+		for player, p in playing do
+			if p.anchoredByUs then
+				continue
+			end
+			local humanoid, root = p.humanoid, p.root
+			if not root.Parent or humanoid.Health <= 0 then
+				stopEmote(player, true)
+				continue
+			end
+			if os.clock() - p.startedAt < 0.3 then
+				continue
+			end
+			local v = root.AssemblyLinearVelocity
+			local state = humanoid:GetState()
+			if Vector3.new(v.X, 0, v.Z).Magnitude > 3.5 or v.Y > 6 or humanoid.Jump or humanoid.SeatPart
+				or state == Enum.HumanoidStateType.Jumping or state == Enum.HumanoidStateType.Freefall then
+				stopEmote(player)
+			end
+		end
+	end)
+end
+
+return Emotes
 ]=====])
 put(server, 'ModuleScript', 'Gym', [=====[
 -- CITY GRIND: Iron Box Gym (sections 56, 69, 110, 120).
@@ -10363,6 +13088,1905 @@ end
 
 return Jobs
 ]=====])
+put(server, 'ModuleScript', 'Messages', [=====[
+-- CITY GRIND: phone messaging, group chats and invites (spec sections 17, 18, 36, 48, 109).
+--
+-- Direct messages: player -> player text. Same server = delivered instantly,
+-- filtered for that recipient (GetChatForUserAsync). Offline / other server =
+-- filtered for broadcast and written to the recipient's mailbox in DataStore
+-- "CityGrind_Mail_v1" (drained when they join, or live through MessagingService
+-- if they're online somewhere else). Never delivers text that failed filtering.
+-- Group chats: up to 20 members, persisted in "CityGrind_Groups_v1" (members,
+-- name, icon, last messages), synced across servers with MessagingService.
+-- Without DataStore/MessagingService (unpublished Studio) everything still works
+-- in memory for players in the same server.
+-- Invites: cards in the chat with ACCEPT / DECLINE (10 minutes). Other systems
+-- call Messages.sendInvite / Messages.onInvite (Party, Crews register their own kinds).
+-- Coach Ray: two welcome texts on a player's very first join (saved flag).
+--
+-- Remotes:  MessagesRequest (RemoteFunction, client -> server: action, payload) -> (ok, message, data)
+--           MessagesEvent   (RemoteEvent, server -> client):
+--             "Msg" (summary, msg) | "Summary" (summary) | "InviteState" (convId, msgId, state)
+--             "Removed" (convId) | "Gps" (name, position)
+-- Saved section "messages": { coachRay, convos = { [convId] = { kind, with, title, msgs, read, updated } },
+--   groups = { [groupId] = true }, groupRead = { [groupId] = time }, muted = { [groupId] = true } }
+-- Conversation ids: "d<userId>" direct, "s<Name>" system/NPC, "g<guid>" group.
+
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+local MemoryStoreService = game:GetService("MemoryStoreService")
+local MessagingService = game:GetService("MessagingService")
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TextChatService = game:GetService("TextChatService")
+local TextService = game:GetService("TextService")
+local UserService = game:GetService("UserService")
+local Workspace = game:GetService("Workspace")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Cfg = require(shared:WaitForChild("MessagesConfig"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Net = require(script.Parent:WaitForChild("Net"))
+
+local Messages = {}
+
+local SERVER_ID = if game.JobId ~= "" then game.JobId else "studio"
+local IS_STUDIO = RunService:IsStudio()
+
+---------------------------------------------------------------------------
+-- Saved data
+---------------------------------------------------------------------------
+PlayerData.registerSection("messages", function()
+	return {
+		coachRay = false, -- Coach Ray's welcome was sent
+		convos = {}, -- DMs + system threads, keyed by conversation id
+		groups = {}, -- group ids this player belongs to
+		groupRead = {}, -- group id -> last read time
+		muted = {}, -- group id -> true (no notifications)
+	}
+end)
+
+local function data(player: Player): any
+	return PlayerData.section(player, "messages")
+end
+
+---------------------------------------------------------------------------
+-- Services that may be unavailable (Studio without API access)
+---------------------------------------------------------------------------
+local function getStore(name: string): DataStore?
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(name)
+	end)
+	return if ok then result else nil
+end
+local mailStore = getStore("CityGrind_Mail_v1")
+local groupStore = getStore("CityGrind_Groups_v1")
+
+local presence: MemoryStoreSortedMap? = nil
+pcall(function()
+	presence = MemoryStoreService:GetSortedMap("CityGrind_Presence_v1")
+end)
+
+local function retry(fn: () -> ()): boolean
+	for attempt = 1, 3 do
+		if pcall(fn) then
+			return true
+		end
+		task.wait(attempt)
+	end
+	return false
+end
+
+-- Publishes to MessagingService; quietly does nothing where it isn't available.
+local function publish(topic: string, message: any)
+	task.spawn(pcall, function()
+		MessagingService:PublishAsync(topic, message)
+	end)
+end
+
+local function now(): number
+	return Workspace:GetServerTimeNow() -- unix seconds, same clock on every server
+end
+
+local function newId(prefix: string): string
+	return prefix .. (HttpService:GenerateGUID(false):gsub("-", "")):sub(1, 16)
+end
+
+---------------------------------------------------------------------------
+-- Other modules (loaded lazily: they may start after us)
+---------------------------------------------------------------------------
+local moduleCache: { [string]: any } = {}
+local function sibling(name: string): any?
+	local cached = moduleCache[name]
+	if cached ~= nil then
+		return cached or nil
+	end
+	local m = script.Parent:FindFirstChild(name)
+	if not m then
+		return nil
+	end
+	local ok, result = pcall(require, m)
+	moduleCache[name] = if ok then result else false
+	return if ok then result else nil
+end
+
+-- Social.allows with a safe fallback (no Social module = only Roblox's own checks).
+local function socialAllows(from: Player, to: Player, kind: string): (boolean, string?)
+	local Social = sibling("Social")
+	if not Social or type(Social.allows) ~= "function" then
+		return true, nil
+	end
+	local ok, allowed, reason = pcall(Social.allows, from, to, kind)
+	if not ok then
+		return false, "Try again in a moment."
+	end
+	return allowed == true, reason
+end
+
+-- True if `player` and `otherId` blocked each other (either way) in game.
+local function blockedId(player: Player, otherId: number): boolean
+	local Social = sibling("Social")
+	if not Social then
+		return false
+	end
+	local other = Players:GetPlayerByUserId(otherId)
+	if other and type(Social.isBlocked) == "function" then
+		local ok, result = pcall(Social.isBlocked, player, other)
+		return not ok or result == true
+	end
+	if type(Social.isBlockedId) == "function" then
+		local ok, result = pcall(Social.isBlockedId, player, otherId)
+		return not ok or result == true
+	end
+	return false
+end
+
+-- Recipient-side check for mail from someone not in this server.
+local function allowsFromId(fromId: number, to: Player, kind: string): boolean
+	if blockedId(to, fromId) then
+		return false
+	end
+	local Social = sibling("Social")
+	if Social and type(Social.allowsFromId) == "function" then
+		local ok, allowed = pcall(Social.allowsFromId, fromId, to, kind)
+		return ok and allowed == true
+	end
+	return true
+end
+
+local function friendIds(player: Player): { number }
+	local Social = sibling("Social")
+	if Social and type(Social.friendIds) == "function" then
+		local ok, ids = pcall(Social.friendIds, player)
+		if ok and type(ids) == "table" then
+			return ids
+		end
+	end
+	return {}
+end
+
+local function isFriendId(player: Player, userId: number): boolean
+	for _, id in friendIds(player) do
+		if id == userId then
+			return true
+		end
+	end
+	return false
+end
+
+---------------------------------------------------------------------------
+-- Roblox chat privacy + text filtering (sections 20, 44, 45, 101)
+---------------------------------------------------------------------------
+local chatCache: { [string]: { ok: boolean, at: number } } = {}
+
+-- Can `fromId` send text to `toId`? Uses Roblox's privacy settings; failure = no.
+local function canChat(fromId: number, toId: number, direct: boolean): boolean
+	if fromId == toId then
+		return true
+	end
+	if IS_STUDIO and (fromId <= 0 or toId <= 0) then
+		return true -- Studio test players have no real accounts to check
+	end
+	local key = fromId .. ":" .. toId .. (if direct then "d" else "g")
+	local hit = chatCache[key]
+	if hit and os.clock() - hit.at < 300 then
+		return hit.ok
+	end
+	local allowed = false
+	local ok, result = pcall(function()
+		if direct then
+			return TextChatService:CanUsersDirectChatAsync(fromId, { toId })
+		end
+		return TextChatService:CanUsersChatAsync(fromId, toId)
+	end)
+	if ok and direct and type(result) == "table" then
+		allowed = table.find(result, toId) ~= nil
+	elseif ok and not direct then
+		allowed = result == true
+	elseif not ok and direct then
+		local ok2, result2 = pcall(function()
+			return TextChatService:CanUsersChatAsync(fromId, toId)
+		end)
+		allowed = ok2 and result2 == true
+	end
+	chatCache[key] = { ok = allowed, at = os.clock() }
+	return allowed
+end
+
+-- Trims, collapses whitespace and rejects anything too long or not valid UTF-8.
+local function cleanText(raw: any, maxLength: number): string?
+	if type(raw) ~= "string" or #raw > maxLength * 4 + 32 or utf8.len(raw) == nil then
+		return nil
+	end
+	local text = raw:gsub("%c", " "):gsub("%s+", " ")
+	text = text:match("^%s*(.-)%s*$") or ""
+	local length = utf8.len(text)
+	if text == "" or not length or length > maxLength then
+		return nil
+	end
+	return text
+end
+
+local function filterResult(text: string, fromId: number, context: Enum.TextFilterContext): TextFilterResult?
+	local ok, result = pcall(function()
+		return TextService:FilterStringAsync(text, fromId, context)
+	end)
+	return if ok then result else nil
+end
+
+local function forUser(result: TextFilterResult, toId: number): string?
+	local ok, text = pcall(function()
+		return result:GetChatForUserAsync(toId)
+	end)
+	return if ok and type(text) == "string" then text else nil
+end
+
+local function forBroadcast(result: TextFilterResult): string?
+	local ok, text = pcall(function()
+		return result:GetNonChatStringForBroadcastAsync()
+	end)
+	return if ok and type(text) == "string" then text else nil
+end
+
+-- Sliding-window limit: one message per MIN_GAP and MAX_PER_MINUTE per minute.
+local sentTimes: { [Player]: { number } } = {}
+local function rateOk(player: Player): (boolean, string?)
+	local t = os.clock()
+	local list = sentTimes[player] or {}
+	sentTimes[player] = list
+	while list[1] and t - list[1] > 60 do
+		table.remove(list, 1)
+	end
+	local last = list[#list]
+	if last and t - last < Cfg.MIN_GAP then
+		return false, "Slow down a little."
+	end
+	if #list >= Cfg.MAX_PER_MINUTE then
+		return false, "You're sending too many messages. Wait a minute."
+	end
+	table.insert(list, t)
+	return true, nil
+end
+
+---------------------------------------------------------------------------
+-- Names
+---------------------------------------------------------------------------
+local nameCache: { [number]: string } = {}
+local function nameOf(userId: number): string
+	local p = Players:GetPlayerByUserId(userId)
+	if p then
+		nameCache[userId] = p.DisplayName
+		return p.DisplayName
+	end
+	if nameCache[userId] then
+		return nameCache[userId]
+	end
+	local ok, infos = pcall(function()
+		return UserService:GetUserInfosByUserIdsAsync({ userId })
+	end)
+	if ok and type(infos) == "table" and infos[1] and type(infos[1].DisplayName) == "string" then
+		nameCache[userId] = infos[1].DisplayName
+		return infos[1].DisplayName
+	end
+	local ok2, name = pcall(function()
+		return Players:GetNameFromUserIdAsync(userId)
+	end)
+	if ok2 and type(name) == "string" then
+		nameCache[userId] = name
+		return name
+	end
+	return "Player"
+end
+
+-- Batch lookup for contact lists.
+local function namesOf(ids: { number }): { [number]: string }
+	local out, missing = {}, {}
+	for _, id in ids do
+		local p = Players:GetPlayerByUserId(id)
+		if p then
+			out[id] = p.DisplayName
+		elseif nameCache[id] then
+			out[id] = nameCache[id]
+		else
+			table.insert(missing, id)
+		end
+	end
+	for i = 1, #missing, 100 do
+		local chunk = table.move(missing, i, math.min(i + 99, #missing), 1, {})
+		local ok, infos = pcall(function()
+			return UserService:GetUserInfosByUserIdsAsync(chunk)
+		end)
+		if ok and type(infos) == "table" then
+			for _, info in infos do
+				if type(info.Id) == "number" and type(info.DisplayName) == "string" then
+					nameCache[info.Id] = info.DisplayName
+					out[info.Id] = info.DisplayName
+				end
+			end
+		end
+	end
+	for _, id in missing do
+		out[id] = out[id] or "Player"
+	end
+	return out
+end
+
+---------------------------------------------------------------------------
+-- Remotes and pushing to clients
+---------------------------------------------------------------------------
+local Event: RemoteEvent
+
+local function fire(player: Player, ...)
+	if Event and player.Parent then
+		Event:FireClient(player, ...)
+	end
+end
+
+local function preview(msg: any): string
+	if msg.kind == "invite" and msg.invite then
+		return msg.invite.icon .. " " .. msg.invite.title
+	end
+	local text = tostring(msg.text or "")
+	if utf8.len(text) and (utf8.len(text) :: number) > 40 then
+		text = text:sub(1, (utf8.offset(text, 41) or 41) - 1) .. "…"
+	end
+	return text
+end
+
+-- What a client sees for one message.
+local function publicMsg(msg: any): any
+	return {
+		id = msg.id,
+		from = msg.from,
+		name = msg.name,
+		text = msg.text,
+		t = msg.t,
+		kind = msg.kind,
+		invite = if msg.invite then table.clone(msg.invite) else nil,
+	}
+end
+
+---------------------------------------------------------------------------
+-- Groups: cache + write-behind persistence
+---------------------------------------------------------------------------
+type GroupRecord = {
+	id: string,
+	name: string,
+	icon: number,
+	color: number,
+	owner: number,
+	admins: { [string]: boolean },
+	members: { [string]: string }, -- tostring(userId) -> display name
+	msgs: { any },
+	deleted: boolean?,
+}
+
+local groupCache: { [string]: GroupRecord } = {}
+local groupPending: { [string]: { any } } = {} -- ops not yet written to the store
+local groupLoading: { [string]: boolean } = {}
+
+local function deepCopy(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+	local out = {}
+	for k, v in value do
+		out[k] = deepCopy(v)
+	end
+	return out
+end
+
+local function memberCount(rec: GroupRecord): number
+	local n = 0
+	for _ in rec.members do
+		n += 1
+	end
+	return n
+end
+
+local function roleOf(rec: GroupRecord, userId: number): string?
+	local key = tostring(userId)
+	if not rec.members[key] then
+		return nil
+	end
+	if rec.owner == userId then
+		return "owner"
+	end
+	return if rec.admins[key] then "admin" else "member"
+end
+
+-- Applies one change to a group record (used on the cache and inside UpdateAsync).
+local function applyOp(rec: GroupRecord, op: any)
+	if op.op == "msg" then
+		for _, m in rec.msgs do
+			if m.id == op.m.id then
+				return
+			end
+		end
+		table.insert(rec.msgs, op.m)
+		while #rec.msgs > Cfg.GROUP_HISTORY do
+			table.remove(rec.msgs, 1)
+		end
+	elseif op.op == "add" then
+		if not rec.members[op.k] and memberCount(rec) < Cfg.GROUP_MAX_MEMBERS then
+			rec.members[op.k] = op.name
+		end
+	elseif op.op == "remove" then
+		rec.members[op.k] = nil
+		rec.admins[op.k] = nil
+		if tostring(rec.owner) == op.k then
+			-- ownership passes to an admin, else the longest-standing member id
+			local nextOwner: string? = nil
+			for k in rec.admins do
+				if rec.members[k] and (not nextOwner or k < nextOwner) then
+					nextOwner = k
+				end
+			end
+			if not nextOwner then
+				for k in rec.members do
+					if not nextOwner or k < nextOwner then
+						nextOwner = k
+					end
+				end
+			end
+			if nextOwner then
+				rec.owner = tonumber(nextOwner) or 0
+				rec.admins[nextOwner] = nil
+			else
+				rec.deleted = true
+			end
+		end
+	elseif op.op == "admin" then
+		if rec.members[op.k] and tostring(rec.owner) ~= op.k then
+			rec.admins[op.k] = if op.on then true else nil :: any
+		end
+	elseif op.op == "meta" then
+		if op.name then
+			rec.name = op.name
+		end
+		if op.icon then
+			rec.icon = op.icon
+		end
+		if op.color then
+			rec.color = op.color
+		end
+	end
+end
+
+local function queueOp(gid: string, op: any)
+	local rec = groupCache[gid]
+	if rec then
+		applyOp(rec, op)
+	end
+	if groupStore then
+		groupPending[gid] = groupPending[gid] or {}
+		table.insert(groupPending[gid], op)
+	end
+end
+
+-- Reads a key without DataStore's read cache (UpdateAsync that cancels itself).
+local function freshRead(store: DataStore, key: string): (boolean, any)
+	local value = nil
+	local ok = retry(function()
+		store:UpdateAsync(key, function(old)
+			value = old
+			return nil
+		end)
+	end)
+	return ok, value
+end
+
+-- The group (cached unless `fresh`), with our unsaved changes on top.
+local function getGroup(gid: string, fresh: boolean?): GroupRecord?
+	if type(gid) ~= "string" or #gid > 40 then
+		return nil
+	end
+	local cached = groupCache[gid]
+	if cached and not fresh then
+		return if cached.deleted then nil else cached
+	end
+	if not groupStore then
+		return if cached and not cached.deleted then cached else nil
+	end
+	while groupLoading[gid] do
+		task.wait(0.1)
+	end
+	if not fresh and groupCache[gid] then
+		return groupCache[gid]
+	end
+	groupLoading[gid] = true
+	local ok, value = freshRead(groupStore, "group_" .. gid)
+	groupLoading[gid] = nil
+	if ok and type(value) == "table" then
+		local rec = value :: GroupRecord
+		rec.admins = rec.admins or {}
+		rec.members = rec.members or {}
+		rec.msgs = rec.msgs or {}
+		for _, op in groupPending[gid] or {} do
+			applyOp(rec, op)
+		end
+		groupCache[gid] = rec
+	end
+	local rec = groupCache[gid]
+	return if rec and not rec.deleted then rec else nil
+end
+
+local function flushGroup(gid: string)
+	local ops = groupPending[gid]
+	if not ops or not groupStore then
+		return
+	end
+	groupPending[gid] = nil
+	local result = nil
+	local store = groupStore :: DataStore
+	local ok = retry(function()
+		store:UpdateAsync("group_" .. gid, function(old)
+			local rec = old
+			for _, op in ops do
+				if op.op == "create" then
+					rec = rec or deepCopy(op.rec)
+				elseif rec then
+					applyOp(rec, op)
+				end
+			end
+			result = rec
+			return rec
+		end)
+	end)
+	if not ok then
+		-- put them back in front of anything queued meanwhile; try again next flush
+		for _, op in groupPending[gid] or {} do
+			table.insert(ops, op)
+		end
+		groupPending[gid] = ops
+		return
+	end
+	if type(result) == "table" then
+		local rec = result :: GroupRecord
+		for _, op in groupPending[gid] or {} do
+			applyOp(rec, op)
+		end
+		groupCache[gid] = rec
+	end
+	publish("CGGroup", { g = gid, s = SERVER_ID })
+end
+
+---------------------------------------------------------------------------
+-- Mailbox (offline / other-server delivery)
+---------------------------------------------------------------------------
+local mailPending: { [number]: { any } } = {}
+
+local function queueMail(toId: number, item: any)
+	if not mailStore then
+		return false
+	end
+	mailPending[toId] = mailPending[toId] or {}
+	table.insert(mailPending[toId], item)
+	-- live push to the server they're on (if any); the mailbox copy dedupes by id
+	local okEncode, encoded = pcall(HttpService.JSONEncode, HttpService, { to = toId, item = item })
+	if okEncode and #encoded < 900 then
+		publish("CGMail", { to = toId, item = item })
+	end
+	return true
+end
+
+local function flushMail(toId: number)
+	local items = mailPending[toId]
+	if not items or not mailStore then
+		return
+	end
+	mailPending[toId] = nil
+	local store = mailStore :: DataStore
+	local ok = retry(function()
+		store:UpdateAsync("inbox_" .. toId, function(old)
+			local box = if type(old) == "table" then old else {}
+			for _, item in items do
+				table.insert(box, item)
+			end
+			while #box > Cfg.MAILBOX_MAX do
+				table.remove(box, 1)
+			end
+			return box
+		end)
+	end)
+	if ok then
+		publish("CGMail", { to = toId })
+	else
+		for _, item in mailPending[toId] or {} do
+			table.insert(items, item)
+		end
+		mailPending[toId] = items
+	end
+end
+
+---------------------------------------------------------------------------
+-- Conversations (DMs + system threads, stored in the player's own save)
+---------------------------------------------------------------------------
+local function convoTitle(convo: any): string
+	return convo.title or "Chat"
+end
+
+local function unreadIn(msgs: { any }, read: number, me: number): number
+	local n = 0
+	for i = #msgs, 1, -1 do
+		local m = msgs[i]
+		if m.t <= read then
+			break
+		end
+		if m.from ~= me then
+			n += 1
+		end
+	end
+	return n
+end
+
+local function summaryOf(player: Player, convId: string): any?
+	local sec = data(player)
+	if not sec then
+		return nil
+	end
+	if convId:sub(1, 1) == "g" then
+		local rec = groupCache[convId]
+		if not rec or rec.deleted or not sec.groups[convId] then
+			return nil
+		end
+		local last = rec.msgs[#rec.msgs]
+		return {
+			id = convId,
+			kind = "group",
+			title = rec.name,
+			icon = Cfg.GROUP_ICONS[rec.icon] or Cfg.GROUP_ICONS[1],
+			color = Cfg.GROUP_COLORS[rec.color] or Cfg.GROUP_COLORS[1],
+			preview = if last then (if last.kind == "text" then last.name .. ": " else "") .. preview(last) else "Group created",
+			t = if last then last.t else 0,
+			unread = unreadIn(rec.msgs, sec.groupRead[convId] or 0, player.UserId),
+			muted = sec.muted[convId] == true,
+			canReply = true,
+			role = roleOf(rec, player.UserId),
+			members = memberCount(rec),
+		}
+	end
+	local convo = sec.convos[convId]
+	if not convo then
+		return nil
+	end
+	local last = convo.msgs[#convo.msgs]
+	local isSystem = convo.kind == "system"
+	return {
+		id = convId,
+		kind = convo.kind,
+		title = convoTitle(convo),
+		icon = if isSystem then (Cfg.SYSTEM_ICONS[convo.title] or "📣") else "👤",
+		color = if isSystem then Color3.fromRGB(255, 140, 50) else Color3.fromRGB(90, 170, 255),
+		preview = if last then (if last.from == player.UserId then "You: " else "") .. preview(last) else "",
+		t = convo.updated or 0,
+		unread = unreadIn(convo.msgs, convo.read or 0, player.UserId),
+		muted = false,
+		canReply = not isSystem,
+		with = convo.with,
+	}
+end
+
+local function pushSummary(player: Player, convId: string)
+	local summary = summaryOf(player, convId)
+	if summary then
+		fire(player, "Summary", summary)
+	end
+end
+
+-- Drops the stalest DM/system threads past the cap (never `keep`).
+local function trimConvos(sec: any, keep: string)
+	local count = 0
+	for _ in sec.convos do
+		count += 1
+	end
+	while count > Cfg.MAX_CONVERSATIONS do
+		local oldestId, oldestT = nil, math.huge
+		for id, c in sec.convos do
+			if id ~= keep and (c.updated or 0) < oldestT then
+				oldestId, oldestT = id, c.updated or 0
+			end
+		end
+		if not oldestId then
+			break
+		end
+		sec.convos[oldestId] = nil
+		count -= 1
+	end
+end
+
+-- Adds a message to a player's DM/system thread, saves, and pushes it. Returns false if not loaded.
+local function addToConvo(player: Player, convId: string, msg: any, meta: { kind: string, with: number?, title: string }): boolean
+	local sec = data(player)
+	if not sec then
+		return false
+	end
+	local convo = sec.convos[convId]
+	if not convo then
+		convo = { kind = meta.kind, with = meta.with, title = meta.title, msgs = {}, read = 0, updated = 0 }
+		sec.convos[convId] = convo
+	end
+	for _, m in convo.msgs do
+		if m.id == msg.id then
+			return true -- already delivered (mailbox + live push)
+		end
+	end
+	convo.title = meta.title
+	table.insert(convo.msgs, msg)
+	while #convo.msgs > Cfg.DM_HISTORY do
+		table.remove(convo.msgs, 1)
+	end
+	convo.updated = math.max(convo.updated or 0, msg.t)
+	if msg.from == player.UserId then
+		convo.read = math.max(convo.read or 0, msg.t)
+	end
+	trimConvos(sec, convId)
+	PlayerData.markChanged(player)
+	fire(player, "Msg", summaryOf(player, convId), publicMsg(msg))
+	return true
+end
+
+-- Finds a message by id in a player's thread and changes its invite state.
+local function setInviteState(player: Player?, convId: string, msgId: string, state: string)
+	local sec = player and data(player)
+	local convo = sec and sec.convos[convId]
+	if not convo then
+		return
+	end
+	for _, m in convo.msgs do
+		if m.id == msgId and m.invite then
+			m.invite.state = state
+			PlayerData.markChanged(player :: Player)
+			fire(player :: Player, "InviteState", convId, msgId, state)
+			pushSummary(player :: Player, convId)
+			return
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- System messages (Coach Ray and other NPCs)
+---------------------------------------------------------------------------
+function Messages.sendSystem(to: Player, fromName: string, text: string)
+	local convId = "s" .. fromName:gsub("[^%w]", "")
+	local msg = { id = newId("m"), from = 0, name = fromName, text = text, t = now(), kind = "system" }
+	if not addToConvo(to, convId, msg, { kind = "system", title = fromName }) then
+		-- save not loaded yet: deliver once it is
+		task.spawn(function()
+			local deadline = os.clock() + 60
+			while to.Parent and not data(to) and os.clock() < deadline do
+				task.wait(1)
+			end
+			if to.Parent then
+				addToConvo(to, convId, msg, { kind = "system", title = fromName })
+			end
+		end)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Direct messages
+---------------------------------------------------------------------------
+-- Has `fromId` ever written to `player` (so a reply to them is always allowed)?
+local function hasThreadFrom(player: Player, fromId: number): boolean
+	local sec = data(player)
+	local convo = sec and sec.convos["d" .. fromId]
+	if not convo then
+		return false
+	end
+	for _, m in convo.msgs do
+		if m.from == fromId then
+			return true
+		end
+	end
+	return false
+end
+
+local function sendDirect(sender: Player, toId: number, raw: any): (boolean, string?)
+	if toId == sender.UserId then
+		return false, "You can't text yourself."
+	end
+	local text = cleanText(raw, Cfg.MAX_LENGTH)
+	if not text then
+		return false, "Messages are 1-" .. Cfg.MAX_LENGTH .. " characters."
+	end
+	local target = Players:GetPlayerByUserId(toId)
+	if target then
+		local ok, reason = socialAllows(sender, target, "message")
+		if not ok then
+			return false, reason or "You can't message this player."
+		end
+	else
+		if blockedId(sender, toId) then
+			return false, "You can't message this player."
+		end
+		if not isFriendId(sender, toId) and not hasThreadFrom(sender, toId) then
+			return false, "They're not in this server. Add them as a friend to text them anywhere."
+		end
+	end
+	local okRate, why = rateOk(sender)
+	if not okRate then
+		return false, why
+	end
+	if not canChat(sender.UserId, toId, true) then
+		return false, "You can't message this player."
+	end
+	local result = filterResult(text, sender.UserId, Enum.TextFilterContext.PrivateChat)
+	local filtered = result and (if target then forUser(result, toId) else forBroadcast(result))
+	if not filtered then
+		return false, "Your message couldn't be sent right now. Try again."
+	end
+	local msg = { id = newId("m"), from = sender.UserId, name = sender.DisplayName, text = filtered, t = now(), kind = "text" }
+	local toName = if target then target.DisplayName else nameOf(toId)
+
+	if target and data(target) then
+		addToConvo(target, "d" .. sender.UserId, msg, { kind = "dm", with = sender.UserId, title = sender.DisplayName })
+	elseif target then
+		return false, toName .. " is still loading in. Try again in a moment."
+	elseif not queueMail(toId, { type = "dm", msg = msg }) then
+		return false, toName .. " isn't in this server, and offline mail is unavailable here."
+	end
+	addToConvo(sender, "d" .. toId, msg, { kind = "dm", with = toId, title = toName })
+	return true, nil
+end
+
+-- Mail arriving for a player in this server (from their mailbox or a live push).
+local function receiveMail(player: Player, item: any)
+	local sec = data(player)
+	if not sec or type(item) ~= "table" then
+		return
+	end
+	if item.type == "dm" and type(item.msg) == "table" then
+		local msg = item.msg
+		if type(msg.from) ~= "number" or type(msg.text) ~= "string" or type(msg.id) ~= "string" then
+			return
+		end
+		if not allowsFromId(msg.from, player, "message") then
+			return
+		end
+		msg.kind = "text"
+		msg.name = tostring(msg.name or "Player")
+		msg.t = tonumber(msg.t) or now()
+		msg.invite = nil
+		addToConvo(player, "d" .. msg.from, msg, { kind = "dm", with = msg.from, title = msg.name })
+	elseif item.type == "group" and type(item.g) == "string" then
+		if sec.groups[item.g] then
+			return
+		end
+		local rec = getGroup(item.g, true)
+		if rec and rec.members[tostring(player.UserId)] then
+			sec.groups[item.g] = true
+			PlayerData.markChanged(player)
+			pushSummary(player, item.g)
+			Net.notify(player, "NEW GROUP", (tostring(item.by or "Someone")) .. " added you to " .. rec.name .. ".")
+		end
+	end
+end
+
+local function drainMailbox(player: Player)
+	if not mailStore or not data(player) then
+		return
+	end
+	local taken = nil
+	local store = mailStore :: DataStore
+	local ok = retry(function()
+		store:UpdateAsync("inbox_" .. player.UserId, function(old)
+			taken = old
+			if type(old) ~= "table" or #old == 0 then
+				return nil
+			end
+			return {}
+		end)
+	end)
+	if ok and type(taken) == "table" and player.Parent then
+		for _, item in taken do
+			receiveMail(player, item)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Group chats
+---------------------------------------------------------------------------
+local function groupCountOf(sec: any): number
+	local n = 0
+	for _ in sec.groups do
+		n += 1
+	end
+	return n
+end
+
+-- Delivers a group message to members in this server who may see it.
+local function deliverGroupMsg(rec: GroupRecord, msg: any)
+	for key in rec.members do
+		local p = Players:GetPlayerByUserId(tonumber(key) or 0)
+		local sec = p and data(p)
+		if p and sec and sec.groups[rec.id] then
+			task.spawn(function()
+				if msg.from ~= p.UserId and msg.kind == "text" then
+					if blockedId(p, msg.from) or not canChat(msg.from, p.UserId, false) then
+						return
+					end
+				end
+				if msg.from == p.UserId then
+					sec.groupRead[rec.id] = math.max(sec.groupRead[rec.id] or 0, msg.t)
+					PlayerData.markChanged(p)
+				end
+				fire(p, "Msg", summaryOf(p, rec.id), publicMsg(msg))
+			end)
+		end
+	end
+end
+
+local function groupNotice(rec: GroupRecord, text: string)
+	local msg = { id = newId("m"), from = 0, name = rec.name, text = text, t = now(), kind = "system" }
+	queueOp(rec.id, { op = "msg", m = msg })
+	deliverGroupMsg(rec, msg)
+	publish("CGGroup", { g = rec.id, m = msg, s = SERVER_ID })
+end
+
+-- Re-checks a present player's group list against the records (removed while away, deleted...).
+local function syncPlayerGroup(player: Player, gid: string)
+	local sec = data(player)
+	if not sec or not sec.groups[gid] then
+		return
+	end
+	local rec = groupCache[gid]
+	if not rec then
+		return
+	end
+	if rec.deleted or not rec.members[tostring(player.UserId)] then
+		sec.groups[gid] = nil
+		sec.groupRead[gid] = nil
+		sec.muted[gid] = nil
+		PlayerData.markChanged(player)
+		fire(player, "Removed", gid)
+	else
+		pushSummary(player, gid)
+	end
+end
+
+local function sendGroup(sender: Player, gid: string, raw: any): (boolean, string?)
+	local sec = data(sender)
+	local rec = getGroup(gid)
+	if not sec or not rec or not sec.groups[gid] or not rec.members[tostring(sender.UserId)] then
+		return false, "You're not in that group."
+	end
+	local text = cleanText(raw, Cfg.MAX_LENGTH)
+	if not text then
+		return false, "Messages are 1-" .. Cfg.MAX_LENGTH .. " characters."
+	end
+	local okRate, why = rateOk(sender)
+	if not okRate then
+		return false, why
+	end
+	local okChat = IS_STUDIO and sender.UserId <= 0
+	if not okChat then
+		local ok, result = pcall(function()
+			return TextChatService:CanUserChatAsync(sender.UserId)
+		end)
+		okChat = ok and result == true
+	end
+	if not okChat then
+		return false, "Your account settings don't allow chat."
+	end
+	local result = filterResult(text, sender.UserId, Enum.TextFilterContext.PrivateChat)
+	local filtered = result and forBroadcast(result)
+	if not filtered then
+		return false, "Your message couldn't be sent right now. Try again."
+	end
+	local msg = { id = newId("m"), from = sender.UserId, name = sender.DisplayName, text = filtered, t = now(), kind = "text" }
+	queueOp(gid, { op = "msg", m = msg })
+	deliverGroupMsg(rec, msg)
+	publish("CGGroup", { g = gid, m = msg, s = SERVER_ID })
+	return true, nil
+end
+
+-- Can `adder` put `userId` in a group? Same-server players need their invite privacy; others must be friends.
+local function canAddMember(adder: Player, userId: number): (boolean, string?)
+	if userId == adder.UserId then
+		return false, nil
+	end
+	local target = Players:GetPlayerByUserId(userId)
+	if target then
+		local ok, reason = socialAllows(adder, target, "invite")
+		if not ok then
+			return false, reason or (target.DisplayName .. " can't be added.")
+		end
+		local sec = data(target)
+		if not sec then
+			return false, target.DisplayName .. " is still loading in."
+		end
+		if groupCountOf(sec) >= Cfg.MAX_GROUPS then
+			return false, target.DisplayName .. " is in too many groups."
+		end
+		return true, nil
+	end
+	if blockedId(adder, userId) or not isFriendId(adder, userId) then
+		return false, "You can only add friends or players in this server."
+	end
+	if not mailStore then
+		return false, "Players outside this server can't be added here."
+	end
+	return true, nil
+end
+
+local function addMember(rec: GroupRecord, adder: Player, userId: number)
+	local name = nameOf(userId)
+	queueOp(rec.id, { op = "add", k = tostring(userId), name = name })
+	local target = Players:GetPlayerByUserId(userId)
+	local sec = target and data(target)
+	if target and sec then
+		sec.groups[rec.id] = true
+		sec.groupRead[rec.id] = now()
+		PlayerData.markChanged(target)
+		pushSummary(target, rec.id)
+		Net.notify(target, "NEW GROUP", adder.DisplayName .. " added you to " .. rec.name .. ".")
+	else
+		queueMail(userId, { type = "group", g = rec.id, by = adder.DisplayName })
+	end
+	return name
+end
+
+local function readUserIds(list: any, max: number): { number }?
+	if type(list) ~= "table" or #list > max then
+		return nil
+	end
+	local out = {}
+	for _, id in list do
+		if type(id) ~= "number" or id ~= math.floor(id) or table.find(out, id) then
+			return nil
+		end
+		table.insert(out, id)
+	end
+	return out
+end
+
+local function filterGroupName(player: Player, raw: any): (string?, string?)
+	local name = cleanText(raw, Cfg.GROUP_NAME_MAX)
+	if not name then
+		return nil, "Group names are 1-" .. Cfg.GROUP_NAME_MAX .. " characters."
+	end
+	local result = filterResult(name, player.UserId, Enum.TextFilterContext.PublicChat)
+	local filtered = result and forBroadcast(result)
+	if not filtered then
+		return nil, "That name couldn't be checked right now. Try again."
+	end
+	return filtered, nil
+end
+
+local function validIndex(value: any, list: { any }): number?
+	return if type(value) == "number" and list[value] then value else nil
+end
+
+---------------------------------------------------------------------------
+-- Invites
+---------------------------------------------------------------------------
+type Invite = {
+	id: string,
+	kind: string,
+	from: number,
+	to: number,
+	payload: { [string]: any },
+	expires: number,
+	state: string,
+	msgId: string,
+}
+local invites: { [string]: Invite } = {}
+local inviteHandlers: { [string]: (Player?, Player, { [string]: any }) -> (boolean?, string?) } = {}
+
+function Messages.onInvite(kind: string, handler: (Player?, Player, { [string]: any }) -> (boolean?, string?))
+	inviteHandlers[kind] = handler
+end
+
+local function endInvite(inv: Invite, state: string)
+	inv.state = state
+	setInviteState(Players:GetPlayerByUserId(inv.to), "d" .. inv.from, inv.msgId, state)
+	setInviteState(Players:GetPlayerByUserId(inv.from), "d" .. inv.to, inv.msgId, state)
+	invites[inv.id] = nil
+end
+
+-- payload.label / payload.place (optional) must be game text or text the caller already filtered.
+function Messages.sendInvite(from: Player, to: Player, inviteKind: string, payload: { [string]: any }): (boolean, string?)
+	if typeof(from) ~= "Instance" or typeof(to) ~= "Instance" or not from:IsA("Player") or not to:IsA("Player") then
+		return false, "Invalid player."
+	end
+	if from == to then
+		return false, "You can't invite yourself."
+	end
+	if not to.Parent or not from.Parent then
+		return false, "They're not in this server."
+	end
+	local style = Cfg.INVITE_STYLE[inviteKind]
+	if not style or not inviteHandlers[inviteKind] then
+		return false, "Unknown invite."
+	end
+	if not data(from) or not data(to) then
+		return false, "Try again in a moment."
+	end
+	local okSocial, reason = socialAllows(from, to, "invite")
+	if not okSocial then
+		return false, reason or "You can't invite this player."
+	end
+	if not Net.allow(from, "MsgInvite" .. to.UserId .. inviteKind, 4) then
+		return false, "You just invited them."
+	end
+	payload = if type(payload) == "table" then payload else {}
+	-- one pending invite of each kind per pair: a new one replaces the old
+	for _, old in invites do
+		if old.from == from.UserId and old.to == to.UserId and old.kind == inviteKind then
+			endInvite(old, "expired")
+		end
+	end
+	local sub = payload.place or payload.label
+	sub = if type(sub) == "string" then sub:sub(1, 60) else nil
+	local inv: Invite = {
+		id = newId("i"),
+		kind = inviteKind,
+		from = from.UserId,
+		to = to.UserId,
+		payload = payload,
+		expires = os.time() + Cfg.INVITE_SECONDS,
+		state = "pending",
+		msgId = newId("m"),
+	}
+	invites[inv.id] = inv
+	local card = { id = inv.id, kind = inviteKind, icon = style.icon, title = style.title, sub = sub, expires = inv.expires, state = "pending", to = to.UserId }
+	local msg = { id = inv.msgId, from = from.UserId, name = from.DisplayName, text = "", t = now(), kind = "invite", invite = card }
+	addToConvo(to, "d" .. from.UserId, msg, { kind = "dm", with = from.UserId, title = from.DisplayName })
+	addToConvo(from, "d" .. to.UserId, deepCopy(msg), { kind = "dm", with = to.UserId, title = to.DisplayName })
+	return true, nil
+end
+
+local function respond(player: Player, inviteId: any, accept: boolean): (boolean, string?)
+	local inv = type(inviteId) == "string" and invites[inviteId]
+	if not inv then
+		-- server restarted or it was already answered: make sure the card doesn't stay clickable
+		local sec = data(player)
+		if sec and type(inviteId) == "string" then
+			for convId, convo in sec.convos do
+				for _, m in convo.msgs do
+					if m.invite and m.invite.id == inviteId and m.invite.state == "pending" then
+						setInviteState(player, convId, m.id, "expired")
+					end
+				end
+			end
+		end
+		return false, "That invite isn't open anymore."
+	end
+	if inv.to ~= player.UserId then
+		return false, "That invite isn't for you."
+	end
+	if os.time() > inv.expires then
+		endInvite(inv, "expired")
+		return false, "That invite expired."
+	end
+	local from = Players:GetPlayerByUserId(inv.from)
+	if not accept then
+		endInvite(inv, "declined")
+		if from then
+			Net.notify(from, "INVITE DECLINED", player.DisplayName .. " passed on your invite.")
+		end
+		return true, "Declined."
+	end
+	local handler = inviteHandlers[inv.kind]
+	local ok, result, reason = pcall(handler, from, player, inv.payload)
+	if not ok then
+		warn("[CityGrind] invite handler failed:", inv.kind, result)
+		return false, "That didn't work. Try again."
+	end
+	if result == false then
+		return false, reason or "That can't happen right now." -- stays pending so they can try again
+	end
+	endInvite(inv, "accepted")
+	if from then
+		Net.notify(from, "INVITE ACCEPTED", player.DisplayName .. " accepted your invite.")
+	end
+	return true, reason or "Accepted."
+end
+
+-- Courts: the one the player is playing on, else the nearest one.
+local function courtFor(player: Player): (string?, Vector3?)
+	local CourtGames = sibling("CourtGames")
+	local playing = nil
+	if CourtGames and type(CourtGames.gameOf) == "function" then
+		local ok, name = pcall(CourtGames.gameOf, player)
+		playing = if ok then name else nil
+	end
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local origin = if root and root:IsA("BasePart") then root.Position else Vector3.zero
+	local bestName, bestPos, bestDist = nil, nil, math.huge
+	for _, court in CollectionService:GetTagged("Court") do
+		local center = court:GetAttribute("CourtCenter")
+		if typeof(center) == "Vector3" then
+			local display = court:GetAttribute("DisplayName")
+			local label = if type(display) == "string" then display else court.Name
+			local dist = if playing and (court.Name == playing or label == playing) then -1 else (center - origin).Magnitude
+			if dist < bestDist then
+				bestName, bestPos, bestDist = label, center, dist
+			end
+		end
+	end
+	return bestName, bestPos
+end
+
+local function registerBuiltInInvites()
+	Messages.onInvite("apartment", function(owner: Player?, guest: Player, _payload)
+		if not owner or not owner.Parent then
+			return false, "They're not in this server anymore."
+		end
+		local Apartments = sibling("Apartments")
+		if not Apartments or type(Apartments.visit) ~= "function" then
+			return false, "Apartments aren't open right now."
+		end
+		Apartments.setGuestAllowed(owner, guest.UserId, true)
+		local ok, reason = Apartments.visit(guest, owner)
+		if not ok then
+			return false, reason
+		end
+		return true, "Heading to " .. owner.DisplayName .. "'s place."
+	end)
+
+	Messages.onInvite("basketball", function(from: Player?, to: Player, payload)
+		local name, pos = nil, nil
+		if from and from.Parent then
+			name, pos = courtFor(from)
+		end
+		if not pos and typeof(payload.position) == "Vector3" then
+			name, pos = payload.place, payload.position
+		end
+		if not pos then
+			return false, "Couldn't find the court."
+		end
+		local label = if type(name) == "string" then name else "Court"
+		fire(to, "Gps", label, pos)
+		if from and from.Parent then
+			fire(from, "Gps", label, pos)
+			Net.notify(from, "ON THE WAY", to.DisplayName .. " is heading to " .. label .. ".")
+		end
+		return true, "GPS set to " .. label .. "."
+	end)
+
+	Messages.onInvite("event", function(_from, to: Player, payload)
+		if typeof(payload.position) == "Vector3" then
+			fire(to, "Gps", if type(payload.label) == "string" then payload.label:sub(1, 40) else "Event", payload.position)
+			return true, "GPS set."
+		end
+		return true, "See you there."
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Contacts + presence (section 46)
+---------------------------------------------------------------------------
+local function setPresence(player: Player, online: boolean)
+	if not presence then
+		return
+	end
+	task.spawn(pcall, function()
+		if online then
+			(presence :: MemoryStoreSortedMap):SetAsync(tostring(player.UserId), SERVER_ID, 150)
+		else
+			(presence :: MemoryStoreSortedMap):RemoveAsync(tostring(player.UserId))
+		end
+	end)
+end
+
+local presenceCache: { [number]: { on: boolean, at: number } } = {}
+local function isOnline(userId: number): boolean
+	if Players:GetPlayerByUserId(userId) then
+		return true
+	end
+	if not presence then
+		return false
+	end
+	local hit = presenceCache[userId]
+	if hit and os.clock() - hit.at < 30 then
+		return hit.on
+	end
+	local ok, value = pcall(function()
+		return (presence :: MemoryStoreSortedMap):GetAsync(tostring(userId))
+	end)
+	local on = ok and value ~= nil
+	presenceCache[userId] = { on = on, at = os.clock() }
+	return on
+end
+
+local function contactsFor(player: Player): { any }
+	local ids = table.clone(friendIds(player))
+	if #ids > 60 then
+		ids = table.move(ids, 1, 60, 1, {})
+	end
+	local names = namesOf(ids)
+	local list = {}
+	for _, id in ids do
+		local here = Players:GetPlayerByUserId(id) ~= nil
+		table.insert(list, {
+			id = id,
+			name = names[id],
+			status = if here then "here" elseif isOnline(id) then "online" else "offline",
+			friend = true,
+		})
+	end
+	return list
+end
+
+-- People you can start a chat with / add to a group: friends + players here.
+local function pickList(player: Player): { any }
+	local list = contactsFor(player)
+	local seen = {}
+	for _, c in list do
+		seen[c.id] = true
+	end
+	for _, p in Players:GetPlayers() do
+		if p ~= player and not seen[p.UserId] and not blockedId(player, p.UserId) then
+			table.insert(list, { id = p.UserId, name = p.DisplayName, status = "here", friend = false })
+		end
+	end
+	return list
+end
+
+---------------------------------------------------------------------------
+-- Requests from the client
+---------------------------------------------------------------------------
+local function stateFor(player: Player): any
+	local sec = data(player)
+	if not sec then
+		return nil
+	end
+	local list = {}
+	for convId in sec.convos do
+		table.insert(list, summaryOf(player, convId))
+	end
+	for gid in sec.groups do
+		local s = summaryOf(player, gid)
+		if s then
+			table.insert(list, s)
+		end
+	end
+	return list
+end
+
+local function groupInfo(player: Player, rec: GroupRecord): any
+	local members = {}
+	for key, name in rec.members do
+		local id = tonumber(key) or 0
+		table.insert(members, { id = id, name = name, role = roleOf(rec, id), here = Players:GetPlayerByUserId(id) ~= nil })
+	end
+	local sec = data(player)
+	return {
+		id = rec.id,
+		name = rec.name,
+		icon = rec.icon,
+		color = rec.color,
+		members = members,
+		myRole = roleOf(rec, player.UserId),
+		muted = sec and sec.muted[rec.id] == true,
+	}
+end
+
+local function isAdmin(rec: GroupRecord, userId: number): boolean
+	local role = roleOf(rec, userId)
+	return role == "owner" or role == "admin"
+end
+
+local handlers: { [string]: (Player, any, any) -> (boolean, string?, any) } = {}
+
+handlers.GetState = function(player)
+	return true, nil, stateFor(player)
+end
+
+-- Opens a thread: returns its messages and marks it read.
+handlers.Open = function(player, sec, convId)
+	if type(convId) ~= "string" then
+		return false, nil, nil
+	end
+	if convId:sub(1, 1) == "g" then
+		local rec = getGroup(convId)
+		if not rec or not sec.groups[convId] then
+			return false, "That group is gone.", nil
+		end
+		local msgs = {}
+		for _, m in rec.msgs do
+			if m.kind ~= "text" or m.from == player.UserId or (not blockedId(player, m.from) and canChat(m.from, player.UserId, false)) then
+				table.insert(msgs, publicMsg(m))
+			end
+		end
+		sec.groupRead[convId] = now()
+		PlayerData.markChanged(player)
+		return true, nil, { summary = summaryOf(player, convId), msgs = msgs, info = groupInfo(player, rec) }
+	end
+	local convo = sec.convos[convId]
+	if not convo then
+		local id = tonumber(convId:match("^d(%-?%d+)$"))
+		if not id or id == player.UserId then
+			return false, nil, nil
+		end
+		-- new thread: nothing saved until the first message
+		return true, nil, {
+			summary = { id = convId, kind = "dm", title = nameOf(id), icon = "👤", color = Color3.fromRGB(90, 170, 255), preview = "", t = 0, unread = 0, muted = false, canReply = true, with = id },
+			msgs = {},
+		}
+	end
+	local t = os.time()
+	for _, m in convo.msgs do
+		if m.invite and m.invite.state == "pending" and t > m.invite.expires then
+			m.invite.state = "expired"
+		end
+	end
+	convo.read = now()
+	PlayerData.markChanged(player)
+	local msgs = {}
+	for _, m in convo.msgs do
+		table.insert(msgs, publicMsg(m))
+	end
+	return true, nil, { summary = summaryOf(player, convId), msgs = msgs }
+end
+
+handlers.Read = function(player, sec, convId)
+	if type(convId) ~= "string" then
+		return false, nil, nil
+	end
+	if sec.groups[convId] then
+		sec.groupRead[convId] = now()
+	elseif sec.convos[convId] then
+		sec.convos[convId].read = now()
+	else
+		return false, nil, nil
+	end
+	PlayerData.markChanged(player)
+	return true, nil, summaryOf(player, convId)
+end
+
+handlers.Send = function(player, _sec, payload)
+	if type(payload) ~= "table" or type(payload.to) ~= "string" then
+		return false, nil, nil
+	end
+	local convId = payload.to
+	if convId:sub(1, 1) == "g" then
+		return sendGroup(player, convId, payload.text)
+	end
+	local id = tonumber(convId:match("^d(%-?%d+)$"))
+	if not id then
+		return false, "You can't reply to this thread.", nil
+	end
+	return sendDirect(player, id, payload.text)
+end
+
+handlers.Respond = function(player, _sec, payload)
+	if type(payload) ~= "table" then
+		return false, nil, nil
+	end
+	return respond(player, payload.id, payload.accept == true)
+end
+
+-- Invites from the interaction menu ("basketball" / "apartment").
+handlers.Invite = function(player, _sec, payload)
+	if type(payload) ~= "table" or type(payload.userId) ~= "number" then
+		return false, nil, nil
+	end
+	local target = Players:GetPlayerByUserId(payload.userId)
+	if not target then
+		return false, "They're not in this server.", nil
+	end
+	if payload.kind == "basketball" then
+		local name, pos = courtFor(player)
+		if not pos then
+			return false, "There's no court to invite them to.", nil
+		end
+		local ok, reason = Messages.sendInvite(player, target, "basketball", { place = name, position = pos })
+		return ok, if ok then "Invite sent to " .. target.DisplayName .. "." else reason, nil
+	elseif payload.kind == "apartment" then
+		local ok, reason = Messages.sendInvite(player, target, "apartment", { place = tostring(player:GetAttribute("HomeTier") or "My place") })
+		return ok, if ok then "Invite sent. Be home when they accept!" else reason, nil
+	end
+	return false, nil, nil
+end
+
+handlers.Delete = function(player, sec, convId)
+	if type(convId) ~= "string" or not sec.convos[convId] then
+		return false, nil, nil
+	end
+	sec.convos[convId] = nil
+	PlayerData.markChanged(player)
+	fire(player, "Removed", convId)
+	return true, nil, nil
+end
+
+handlers.Contacts = function(player)
+	return true, nil, contactsFor(player)
+end
+
+handlers.Pick = function(player)
+	return true, nil, pickList(player)
+end
+
+handlers.CreateGroup = function(player, sec, payload)
+	if type(payload) ~= "table" then
+		return false, nil, nil
+	end
+	if groupCountOf(sec) >= Cfg.MAX_GROUPS then
+		return false, "You're in " .. Cfg.MAX_GROUPS .. " groups already. Leave one first.", nil
+	end
+	local icon = validIndex(payload.icon, Cfg.GROUP_ICONS) or 1
+	local color = validIndex(payload.color, Cfg.GROUP_COLORS) or 1
+	local ids = readUserIds(payload.members, Cfg.GROUP_MAX_MEMBERS - 1)
+	if not ids or #ids == 0 then
+		return false, "Pick at least one person.", nil
+	end
+	for _, id in ids do
+		local ok, reason = canAddMember(player, id)
+		if not ok then
+			return false, reason or "Someone on that list can't be added.", nil
+		end
+	end
+	local name, err = filterGroupName(player, payload.name)
+	if not name then
+		return false, err, nil
+	end
+	local gid = newId("g")
+	local rec: GroupRecord = {
+		id = gid,
+		name = name,
+		icon = icon,
+		color = color,
+		owner = player.UserId,
+		admins = {},
+		members = { [tostring(player.UserId)] = player.DisplayName },
+		msgs = {},
+	}
+	groupCache[gid] = rec
+	if groupStore then
+		groupPending[gid] = { { op = "create", rec = deepCopy(rec) } }
+	end
+	sec.groups[gid] = true
+	sec.groupRead[gid] = now()
+	PlayerData.markChanged(player)
+	local names = {}
+	for _, id in ids do
+		table.insert(names, addMember(rec, player, id))
+	end
+	groupNotice(rec, player.DisplayName .. " created the group with " .. table.concat(names, ", ") .. ".")
+	return true, "Group created.", summaryOf(player, gid)
+end
+
+-- Group management: everything goes through one action with a sub-command.
+handlers.Group = function(player, sec, payload)
+	if type(payload) ~= "table" or type(payload.id) ~= "string" then
+		return false, nil, nil
+	end
+	local rec = getGroup(payload.id)
+	if not rec or not sec.groups[payload.id] or not rec.members[tostring(player.UserId)] then
+		return false, "You're not in that group.", nil
+	end
+	local gid = rec.id
+	local cmd = payload.cmd
+	local admin = isAdmin(rec, player.UserId)
+
+	if cmd == "Info" then
+		return true, nil, groupInfo(player, rec)
+	elseif cmd == "Mute" then
+		sec.muted[gid] = if payload.on == true then true else nil
+		PlayerData.markChanged(player)
+		pushSummary(player, gid)
+		return true, if payload.on then "Group muted." else "Notifications on.", groupInfo(player, rec)
+	elseif cmd == "Leave" then
+		queueOp(gid, { op = "remove", k = tostring(player.UserId) })
+		sec.groups[gid] = nil
+		sec.groupRead[gid] = nil
+		sec.muted[gid] = nil
+		PlayerData.markChanged(player)
+		fire(player, "Removed", gid)
+		if not rec.deleted then
+			groupNotice(rec, player.DisplayName .. " left the group.")
+		end
+		return true, "You left " .. rec.name .. ".", nil
+	end
+
+	if not admin then
+		return false, "Only the group's admins can do that.", nil
+	end
+	if cmd == "Rename" then
+		local name, err = filterGroupName(player, payload.name)
+		if not name then
+			return false, err, nil
+		end
+		queueOp(gid, { op = "meta", name = name })
+		groupNotice(rec, player.DisplayName .. " renamed the group to " .. name .. ".")
+	elseif cmd == "Style" then
+		local icon = validIndex(payload.icon, Cfg.GROUP_ICONS)
+		local color = validIndex(payload.color, Cfg.GROUP_COLORS)
+		if not icon and not color then
+			return false, nil, nil
+		end
+		queueOp(gid, { op = "meta", icon = icon, color = color })
+		for key in rec.members do
+			local p = Players:GetPlayerByUserId(tonumber(key) or 0)
+			if p then
+				pushSummary(p, gid)
+			end
+		end
+		publish("CGGroup", { g = gid, s = SERVER_ID, meta = true })
+	elseif cmd == "Add" then
+		local ids = readUserIds(payload.userIds, Cfg.GROUP_MAX_MEMBERS)
+		if not ids or #ids == 0 then
+			return false, nil, nil
+		end
+		local fresh = {}
+		for _, id in ids do
+			if not rec.members[tostring(id)] then
+				table.insert(fresh, id)
+			end
+		end
+		if memberCount(rec) + #fresh > Cfg.GROUP_MAX_MEMBERS then
+			return false, "Groups hold up to " .. Cfg.GROUP_MAX_MEMBERS .. " people.", nil
+		end
+		for _, id in fresh do
+			local ok, reason = canAddMember(player, id)
+			if not ok then
+				return false, reason or "Someone on that list can't be added.", nil
+			end
+		end
+		local names = {}
+		for _, id in fresh do
+			table.insert(names, addMember(rec, player, id))
+		end
+		if #names > 0 then
+			groupNotice(rec, player.DisplayName .. " added " .. table.concat(names, ", ") .. ".")
+		end
+	elseif cmd == "Remove" then
+		local id = payload.userId
+		local key = tostring(id)
+		if type(id) ~= "number" or not rec.members[key] or id == player.UserId then
+			return false, nil, nil
+		end
+		if id == rec.owner or (rec.admins[key] and rec.owner ~= player.UserId) then
+			return false, "Only the owner can remove an admin.", nil
+		end
+		local name = rec.members[key]
+		queueOp(gid, { op = "remove", k = key })
+		local target = Players:GetPlayerByUserId(id)
+		if target then
+			syncPlayerGroup(target, gid)
+		end
+		groupNotice(rec, player.DisplayName .. " removed " .. name .. ".")
+	elseif cmd == "Admin" then
+		local id = payload.userId
+		if rec.owner ~= player.UserId then
+			return false, "Only the owner can pick admins.", nil
+		end
+		if type(id) ~= "number" or not rec.members[tostring(id)] or id == player.UserId then
+			return false, nil, nil
+		end
+		queueOp(gid, { op = "admin", k = tostring(id), on = payload.on == true })
+		publish("CGGroup", { g = gid, s = SERVER_ID, meta = true })
+	else
+		return false, nil, nil
+	end
+	return true, nil, groupInfo(player, rec)
+end
+
+local COOLDOWNS = {
+	GetState = 0.5,
+	Open = 0.15,
+	Read = 0.15,
+	Send = 0.2, -- the real limit is rateOk
+	Respond = 0.5,
+	Invite = 1.5,
+	Delete = 0.3,
+	Contacts = 2,
+	Pick = 2,
+	CreateGroup = 3,
+	Group = 0.4,
+}
+
+---------------------------------------------------------------------------
+-- Cross-server
+---------------------------------------------------------------------------
+local function onMailTopic(message: any)
+	local body = type(message) == "table" and message.Data
+	if type(body) ~= "table" or type(body.to) ~= "number" then
+		return
+	end
+	local player = Players:GetPlayerByUserId(body.to)
+	if not player or not data(player) then
+		return
+	end
+	if body.item then
+		receiveMail(player, body.item)
+	else
+		drainMailbox(player)
+	end
+end
+
+local function onGroupTopic(message: any)
+	local body = type(message) == "table" and message.Data
+	if type(body) ~= "table" or type(body.g) ~= "string" or body.s == SERVER_ID then
+		return
+	end
+	local gid = body.g
+	if not groupCache[gid] then
+		return -- nobody here is in it
+	end
+	if type(body.m) == "table" and type(body.m.id) == "string" then
+		local rec = groupCache[gid]
+		applyOp(rec, { op = "msg", m = body.m })
+		deliverGroupMsg(rec, body.m)
+		return
+	end
+	-- full sync after another server saved: reload, then deliver messages we never saw live
+	local known = {}
+	for _, m in groupCache[gid].msgs do
+		known[m.id] = true
+	end
+	getGroup(gid, true)
+	local found = groupCache[gid]
+	if found then
+		for key in found.members do
+			local p = Players:GetPlayerByUserId(tonumber(key) or 0)
+			if p then
+				syncPlayerGroup(p, gid)
+			end
+		end
+		if not found.deleted then
+			for _, m in found.msgs do
+				if not known[m.id] then
+					deliverGroupMsg(found, m)
+				end
+			end
+		end
+	end
+	-- also catch players here who were just removed
+	for _, p in Players:GetPlayers() do
+		local sec = data(p)
+		if sec and sec.groups[gid] then
+			syncPlayerGroup(p, gid)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Player lifecycle
+---------------------------------------------------------------------------
+local function onLoaded(player: Player)
+	local sec = data(player)
+	if not sec then
+		return
+	end
+	setPresence(player, true)
+	-- groups: load and drop any we were removed from while away
+	for gid in table.clone(sec.groups) do
+		getGroup(gid)
+		local rec = groupCache[gid] -- nil only if the read failed (kept) or there's no store
+		if (rec and (rec.deleted or not rec.members[tostring(player.UserId)])) or (not rec and not groupStore) then
+			sec.groups[gid] = nil
+			sec.groupRead[gid] = nil
+			sec.muted[gid] = nil
+			PlayerData.markChanged(player)
+		end
+	end
+	drainMailbox(player)
+	if player.Parent then
+		fire(player, "State", stateFor(player))
+	end
+	-- Coach Ray (section 109): once per save
+	if not sec.coachRay then
+		sec.coachRay = true
+		PlayerData.markChanged(player)
+		task.delay(8, function()
+			if player.Parent then
+				Messages.sendSystem(player, Cfg.COACH_RAY, Cfg.COACH_RAY_LINES[1])
+				task.wait(4)
+				if player.Parent then
+					Messages.sendSystem(player, Cfg.COACH_RAY, Cfg.COACH_RAY_LINES[2])
+				end
+			end
+		end)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Messages.start(_city: Instance?)
+	Event = Net.remote("RemoteEvent", "MessagesEvent")
+	local Request = Net.remote("RemoteFunction", "MessagesRequest")
+
+	Request.OnServerInvoke = function(player: Player, action: any, payload: any)
+		if type(action) ~= "string" or not handlers[action] then
+			return false, "Unknown request.", nil
+		end
+		if not Net.allow(player, "Msg" .. action, COOLDOWNS[action] or 0.3) then
+			return false, nil, nil
+		end
+		local sec = data(player)
+		if not sec then
+			return false, "Your phone is still loading.", nil
+		end
+		local ok, message, result = handlers[action](player, sec, payload)
+		return ok, message, result
+	end
+
+	registerBuiltInInvites()
+
+	pcall(function()
+		MessagingService:SubscribeAsync("CGMail", onMailTopic)
+	end)
+	pcall(function()
+		MessagingService:SubscribeAsync("CGGroup", onGroupTopic)
+	end)
+
+	PlayerData.onLoaded(onLoaded)
+	Players.PlayerRemoving:Connect(function(player)
+		sentTimes[player] = nil
+		setPresence(player, false)
+	end)
+
+	-- write-behind loop: groups first (so mailed group adds see the member), then mail
+	task.spawn(function()
+		local tick = 0
+		while true do
+			task.wait(7)
+			tick += 1
+			for gid in table.clone(groupPending) do
+				flushGroup(gid)
+			end
+			for toId in table.clone(mailPending) do
+				flushMail(toId)
+			end
+			-- expire invites, refresh presence, and re-check mailboxes every minute
+			local t = os.time()
+			for _, inv in table.clone(invites) do
+				if t > inv.expires then
+					endInvite(inv, "expired")
+				end
+			end
+			if tick % 8 == 0 then
+				for _, p in Players:GetPlayers() do
+					if data(p) then
+						setPresence(p, true)
+						task.spawn(drainMailbox, p)
+					end
+				end
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		for gid in table.clone(groupPending) do
+			flushGroup(gid)
+		end
+		for toId in table.clone(mailPending) do
+			flushMail(toId)
+		end
+	end)
+end
+
+return Messages
+]=====])
 put(server, 'ModuleScript', 'Net', [=====[
 -- CITY GRIND: remotes, rate limits and notifications shared by every server system.
 -- Remotes live in ReplicatedStorage.CityGrind.Remotes so clients can WaitForChild them.
@@ -10438,6 +15062,479 @@ function Net.alive(player: Player): boolean
 end
 
 return Net
+]=====])
+put(server, 'ModuleScript', 'Party', [=====[
+-- CITY GRIND: parties (section 93). Server side.
+-- A party is a small group (max 6) inside one server. The leader creates it,
+-- members invite friends (through the Messages app's invite cards, or a direct
+-- prompt when Messages isn't installed), and the leader can kick, promote,
+-- disband, set a shared GPS destination, ask everyone to travel to them, or
+-- send the whole party to the nearest basketball court. Nobody is ever
+-- teleported by someone else.
+--
+-- Remotes:  PartyAction (client -> server): ("create") ("invite", target) ("accept", partyId)
+--                ("decline", partyId) ("leave") ("kick", target) ("promote", target) ("disband")
+--                ("destination", mapPointName) ("travel") ("hoops")
+--           PartyEvent (server -> client): ("state", snapshot?) ("invite", {partyId, fromName, fromUserId})
+--                ("gps", name, position, note)
+-- Player attribute: PartyId ("" when not in a party)
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local CollectionService = game:GetService("CollectionService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+
+local Party = {}
+
+Party.MAX_MEMBERS = 6
+local INVITE_SECONDS = 180
+
+export type PartyRecord = {
+	id: string,
+	leader: Player,
+	members: { Player },
+	invites: { [Player]: number }, -- invitee -> expiry (os.clock)
+	createdAt: number,
+}
+
+local parties: { [string]: PartyRecord } = {}
+local partyOfPlayer: { [Player]: PartyRecord } = {}
+local cityModel: Instance? = nil
+
+local PartyAction = Net.remote("RemoteEvent", "PartyAction")
+local PartyEvent = Net.remote("RemoteEvent", "PartyEvent")
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function lazy(name: string): any
+	local module = script.Parent:FindFirstChild(name)
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function snapshot(party: PartyRecord)
+	local members = {}
+	for _, m in party.members do
+		table.insert(members, { userId = m.UserId, name = m.DisplayName, username = m.Name, leader = m == party.leader })
+	end
+	return { id = party.id, leaderId = party.leader.UserId, members = members, max = Party.MAX_MEMBERS }
+end
+
+local function broadcast(party: PartyRecord)
+	local snap = snapshot(party)
+	for _, m in party.members do
+		PartyEvent:FireClient(m, "state", snap)
+	end
+end
+
+local function notifyAll(party: PartyRecord, title: string, body: string, except: Player?)
+	for _, m in party.members do
+		if m ~= except then
+			Net.notify(m, title, body)
+		end
+	end
+end
+
+local function setMembership(player: Player, party: PartyRecord?)
+	partyOfPlayer[player] = party :: any
+	if player.Parent then
+		player:SetAttribute("PartyId", if party then party.id else "")
+		if not party then
+			PartyEvent:FireClient(player, "state", nil)
+		end
+	end
+end
+
+local function disband(party: PartyRecord, reason: string?)
+	parties[party.id] = nil
+	for _, m in party.members do
+		setMembership(m, nil)
+		if reason then
+			Net.notify(m, "PARTY", reason)
+		end
+	end
+	table.clear(party.members)
+	table.clear(party.invites)
+end
+
+local function removeMember(party: PartyRecord, player: Player, why: string?)
+	local index = table.find(party.members, player)
+	if not index then
+		return
+	end
+	table.remove(party.members, index)
+	setMembership(player, nil)
+	if #party.members == 0 then
+		disband(party, nil)
+		return
+	end
+	if party.leader == player then
+		party.leader = party.members[1]
+		notifyAll(party, "PARTY", party.leader.DisplayName .. " is now the party leader.")
+	end
+	if why then
+		notifyAll(party, "PARTY", why)
+	end
+	broadcast(party)
+end
+
+local function createParty(leader: Player): PartyRecord
+	local existing = partyOfPlayer[leader]
+	if existing then
+		return existing
+	end
+	local party: PartyRecord = {
+		id = HttpService:GenerateGUID(false):sub(1, 8),
+		leader = leader,
+		members = { leader },
+		invites = {},
+		createdAt = os.time(),
+	}
+	parties[party.id] = party
+	setMembership(leader, party)
+	broadcast(party)
+	return party
+end
+
+local function socialAllows(from: Player, to: Player, kind: string): (boolean, string?)
+	local Social = lazy("Social")
+	if Social and Social.allows then
+		local ok, allowed, why = pcall(Social.allows, from, to, kind)
+		if ok then
+			return allowed == true, why
+		end
+	end
+	return true, nil
+end
+
+local function gpsAll(party: PartyRecord, name: string, position: Vector3, note: string, except: Player?)
+	for _, m in party.members do
+		if m ~= except then
+			PartyEvent:FireClient(m, "gps", name, position, note)
+		end
+	end
+end
+
+local function rootPos(player: Player): Vector3?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root.Position else nil
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+-- The player's party ({id, leader, members}) or nil.
+function Party.partyOf(player: Player): { id: string, leader: Player, members: { Player } }?
+	local party = partyOfPlayer[player]
+	if not party then
+		return nil
+	end
+	return { id = party.id, leader = party.leader, members = table.clone(party.members) }
+end
+
+function Party.create(player: Player): (boolean, string?)
+	if partyOfPlayer[player] then
+		return false, "You're already in a party."
+	end
+	createParty(player)
+	return true
+end
+
+-- Invite a player. Creates a party for the inviter when they don't have one yet.
+function Party.invite(from: Player, to: Player): (boolean, string?)
+	if to == from or not to.Parent then
+		return false, "Pick someone else."
+	end
+	if not to:GetAttribute("DataLoaded") then
+		return false, to.DisplayName .. " is still loading in."
+	end
+	local current = partyOfPlayer[from]
+	if current and table.find(current.members, to) then
+		return false, to.DisplayName .. " is already in your party."
+	end
+	if current and #current.members >= Party.MAX_MEMBERS then
+		return false, "Your party is full (" .. Party.MAX_MEMBERS .. " max)."
+	end
+	local allowed, why = socialAllows(from, to, "invite")
+	if not allowed then
+		return false, why or (to.DisplayName .. " isn't taking invites right now.")
+	end
+	if current and current.invites[to] and os.clock() < current.invites[to] then
+		return false, "You already invited " .. to.DisplayName .. "."
+	end
+	local party = current or createParty(from)
+	party.invites[to] = os.clock() + INVITE_SECONDS
+
+	local Messages = lazy("Messages")
+	local sent = false
+	if Messages and Messages.sendInvite then
+		local ok, delivered, reason = pcall(Messages.sendInvite, from, to, "party", {
+			partyId = party.id,
+			label = from.DisplayName .. "'s party (" .. #party.members .. "/" .. Party.MAX_MEMBERS .. ")",
+		})
+		if ok and delivered then
+			sent = true
+		elseif ok and reason then
+			party.invites[to] = nil
+			if not current and #party.members == 1 then
+				disband(party, nil)
+			end
+			return false, reason
+		end
+	end
+	if not sent then
+		-- no Messages app: show the invite as a direct prompt
+		PartyEvent:FireClient(to, "invite", { partyId = party.id, fromName = from.DisplayName, fromUserId = from.UserId })
+		Net.notify(to, "PARTY INVITE", from.DisplayName .. " invited you to their party.")
+	end
+	return true
+end
+
+function Party.accept(player: Player, partyId: any): (boolean, string?)
+	if type(partyId) ~= "string" then
+		return false, "That invite is no longer valid."
+	end
+	local party = parties[partyId]
+	if not party then
+		return false, "That party doesn't exist anymore."
+	end
+	local expires = party.invites[player]
+	if not expires or os.clock() > expires then
+		party.invites[player] = nil
+		return false, "That invite expired. Ask for a new one."
+	end
+	if table.find(party.members, player) then
+		return false, "You're already in that party."
+	end
+	if #party.members >= Party.MAX_MEMBERS then
+		return false, "That party is full."
+	end
+	party.invites[player] = nil
+	local old = partyOfPlayer[player]
+	if old then
+		removeMember(old, player, player.DisplayName .. " left the party.")
+	end
+	table.insert(party.members, player)
+	setMembership(player, party)
+	notifyAll(party, "PARTY", player.DisplayName .. " joined the party.", player)
+	Net.notify(player, "PARTY", "You joined " .. party.leader.DisplayName .. "'s party.")
+	broadcast(party)
+	return true
+end
+
+function Party.leave(player: Player): (boolean, string?)
+	local party = partyOfPlayer[player]
+	if not party then
+		return false, "You're not in a party."
+	end
+	removeMember(party, player, player.DisplayName .. " left the party.")
+	Net.notify(player, "PARTY", "You left the party.")
+	return true
+end
+
+---------------------------------------------------------------------------
+-- Remote handling
+---------------------------------------------------------------------------
+local function leaderParty(player: Player): (PartyRecord?, string?)
+	local party = partyOfPlayer[player]
+	if not party then
+		return nil, "You're not in a party."
+	end
+	if party.leader ~= player then
+		return nil, "Only the party leader can do that."
+	end
+	return party
+end
+
+local function targetIn(party: PartyRecord, target: any): Player?
+	if typeof(target) == "Instance" and target:IsA("Player") and table.find(party.members, target) then
+		return target
+	end
+	return nil
+end
+
+local function nearestCourt(from: Vector3): (string?, Vector3?)
+	local bestName, bestPos, bestDist = nil, nil, math.huge
+	for _, model in CollectionService:GetTagged("Court") do
+		local center = model:GetAttribute("CourtCenter")
+		if typeof(center) == "Vector3" then
+			local d = (center - from).Magnitude
+			if d < bestDist then
+				bestName = model:GetAttribute("DisplayName") or model.Name
+				bestPos = center
+				bestDist = d
+			end
+		end
+	end
+	return bestName, bestPos
+end
+
+local handlers: { [string]: (Player, any) -> (boolean, string?) } = {
+	create = function(player)
+		local ok, why = Party.create(player)
+		if ok then
+			Net.notify(player, "PARTY", "Party created. Invite people from their menu or the Party app.")
+		end
+		return ok, why
+	end,
+	invite = function(player, target)
+		if typeof(target) ~= "Instance" or not target:IsA("Player") then
+			return false, nil
+		end
+		local ok, why = Party.invite(player, target)
+		if ok then
+			Net.notify(player, "PARTY", "Invite sent to " .. target.DisplayName .. ".")
+		end
+		return ok, why
+	end,
+	accept = function(player, partyId)
+		return Party.accept(player, partyId)
+	end,
+	decline = function(player, partyId)
+		local party = type(partyId) == "string" and parties[partyId]
+		if party and party.invites[player] then
+			party.invites[player] = nil
+			Net.notify(party.leader, "PARTY", player.DisplayName .. " declined the party invite.")
+		end
+		return true
+	end,
+	leave = function(player)
+		return Party.leave(player)
+	end,
+	kick = function(player, target)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		local t = targetIn(party, target)
+		if not t or t == player then
+			return false, "Pick a party member."
+		end
+		Net.notify(t, "PARTY", "You were removed from the party.")
+		removeMember(party, t, t.DisplayName .. " was removed from the party.")
+		return true
+	end,
+	promote = function(player, target)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		local t = targetIn(party, target)
+		if not t or t == player then
+			return false, "Pick a party member."
+		end
+		party.leader = t
+		notifyAll(party, "PARTY", t.DisplayName .. " is now the party leader.")
+		broadcast(party)
+		return true
+	end,
+	disband = function(player)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		disband(party, player.DisplayName .. " disbanded the party.")
+		return true
+	end,
+	destination = function(player, pointName)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		local points = cityModel and cityModel:FindFirstChild("MapPoints")
+		local point = type(pointName) == "string" and #pointName < 80 and points and points:FindFirstChild(pointName)
+		if not point or not point:IsA("BasePart") then
+			return false, "Pick a place from the list."
+		end
+		gpsAll(party, point.Name, point.Position, player.DisplayName .. " set the party destination.")
+		return true
+	end,
+	travel = function(player)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		local pos = rootPos(player)
+		if not pos then
+			return false, "Respawn first."
+		end
+		if player:GetAttribute("Interior") and player:GetAttribute("Interior") ~= "" then
+			return false, "Step outside first so the party can find you."
+		end
+		gpsAll(party, player.DisplayName, pos, "Travel together: head to your party leader.", player)
+		Net.notify(player, "PARTY", "Your party is on the way to you.")
+		return true
+	end,
+	hoops = function(player)
+		local party, why = leaderParty(player)
+		if not party then
+			return false, why
+		end
+		local pos = rootPos(player)
+		if not pos then
+			return false, "Respawn first."
+		end
+		local name, center = nearestCourt(pos)
+		if not name or not center then
+			return false, "No court found."
+		end
+		gpsAll(party, name, center, "Basketball run! Teams form on the HOME and AWAY pads at " .. name .. ".")
+		return true
+	end,
+}
+
+local COOLDOWNS = { create = 1, invite = 1.5, accept = 0.5, decline = 0.5, leave = 1, kick = 0.5, promote = 0.5, disband = 1, destination = 3, travel = 5, hoops = 5 }
+
+function Party.start(city: Instance?)
+	cityModel = city
+
+	PartyAction.OnServerEvent:Connect(function(player: Player, action: any, arg: any)
+		local handler = type(action) == "string" and handlers[action]
+		if not handler or not Net.allow(player, "Party" .. action, COOLDOWNS[action] or 1) then
+			return
+		end
+		local ok, why = handler(player, arg)
+		if not ok and why then
+			Net.notify(player, "PARTY", why)
+		end
+	end)
+
+	-- Accepting the invite card in the Messages app.
+	task.spawn(function()
+		local Messages = lazy("Messages")
+		if Messages and Messages.onInvite then
+			Messages.onInvite("party", function(_from: Player?, to: Player, payload: any)
+				-- Messages shows the returned reason to the player
+				return Party.accept(to, type(payload) == "table" and payload.partyId or nil)
+			end)
+		end
+	end)
+
+	Players.PlayerAdded:Connect(function(player)
+		player:SetAttribute("PartyId", "")
+	end)
+	for _, player in Players:GetPlayers() do
+		player:SetAttribute("PartyId", "")
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		local party = partyOfPlayer[player]
+		if party then
+			removeMember(party, player, player.DisplayName .. " left the game.")
+		end
+		partyOfPlayer[player] = nil
+		for _, p in parties do
+			p.invites[player] = nil
+		end
+	end)
+end
+
+return Party
 ]=====])
 put(server, 'ModuleScript', 'Places', [=====[
 -- CITY GRIND: doors and interiors.
@@ -12726,6 +17823,1659 @@ end
 
 return Shops
 ]=====])
+put(server, 'ModuleScript', 'Social', [=====[
+-- CITY GRIND: social core (spec 21, 28, 29, 44, 45, 46, 47, 96, 97, 101).
+-- In-game friends (requests persist offline through a DataStore inbox and reach
+-- other servers live through MessagingService), privacy, block / mute, player
+-- status, profiles and customization, two-person emotes and the overhead nametag.
+-- Everything is decided here; clients only ask.
+--
+-- Saved section "Social" (string userId keys so DataStores accept them):
+--   friends[uid]  = { n = displayName, u = username, t = since, lv = lastSeenLevel }
+--   incoming[uid] / outgoing[uid] = { n, u, t }      pending friend requests
+--   blocked[uid] / muted[uid]     = { n, u }
+--   privacy = { message/invite/call/visit/follow/interact = "Everyone"|"Friends"|"Crew"|"Nobody",
+--               profile = "Public"|"Friends Only"|"Private", showStatus = bool, shareLocation = bool }
+--   status = SocialConfig.STATUSES id
+--   profile = { banner = index, title = id, favorite = name, featured = id, bio = raw text (re-filtered on display) }
+--
+-- Player attribute: SocialStatus (string) - the status everyone may see ("" when hidden / none).
+-- DataStore CityGrind_Social_v1, key "inbox_<userId>" = { [fromUserId] = { k = "request"|"accept"|"remove", n, u, t } }
+
+local DataStoreService = game:GetService("DataStoreService")
+local MessagingService = game:GetService("MessagingService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
+local TweenService = game:GetService("TweenService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local SC = require(shared:WaitForChild("SocialConfig"))
+
+local Social = {}
+
+local SECTION = "Social"
+local GYM_INTERIOR = "Gym"
+do
+	local gc = shared:FindFirstChild("GymConfig")
+	if gc then
+		local ok, cfg = pcall(require, gc)
+		if ok and type(cfg) == "table" and type(cfg.INTERIOR) == "string" then
+			GYM_INTERIOR = cfg.INTERIOR
+		end
+	end
+end
+
+local function cloneDefaults()
+	return table.clone(SC.DEFAULT_PRIVACY)
+end
+
+PlayerData.registerSection(SECTION, function()
+	return {
+		friends = {},
+		incoming = {},
+		outgoing = {},
+		blocked = {},
+		muted = {},
+		privacy = cloneDefaults(),
+		status = "Auto",
+		profile = { banner = 1, title = "Newcomer", favorite = "None", featured = "Level", bio = "" },
+	}
+end)
+
+local SocialAction: RemoteFunction
+local SocialProfile: RemoteFunction
+local SocialEvent: RemoteEvent
+local SocialEmote: RemoteEvent
+
+local store: DataStore? = nil
+local messagingOk = false
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function sec(player: Player): any
+	return PlayerData.section(player, SECTION)
+end
+
+local function key(userId: number): string
+	return tostring(userId)
+end
+
+local function count(t: { [any]: any }): number
+	local n = 0
+	for _ in t do
+		n += 1
+	end
+	return n
+end
+
+local function validId(id: any): boolean
+	return type(id) == "number" and id == id and id % 1 == 0 and id > 0 and id < 1e15
+end
+
+local function record(player: Player)
+	return { n = player.DisplayName, u = player.Name, t = os.time() }
+end
+
+local function retry(attempts: number, fn: () -> any): (boolean, any)
+	local ok, result
+	for attempt = 1, attempts do
+		ok, result = pcall(fn)
+		if ok then
+			return true, result
+		end
+		if attempt < attempts then
+			task.wait(attempt)
+		end
+	end
+	return false, result
+end
+
+-- Lazily required sibling modules (they may not exist yet, and may require us).
+local function sibling(name: string): any
+	local m = script.Parent:FindFirstChild(name)
+	if not m then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return if ok then mod else nil
+end
+
+local function crewOf(player: Player): any
+	local Crews = sibling("Crews")
+	if not Crews or type(Crews.crewOf) ~= "function" then
+		return nil
+	end
+	local ok, crew = pcall(Crews.crewOf, player)
+	return if ok and type(crew) == "table" then crew else nil
+end
+
+local function sameCrew(a: Player, b: Player): boolean
+	local ca, cb = crewOf(a), crewOf(b)
+	return ca ~= nil and cb ~= nil and ca.id == cb.id
+end
+
+-- Roblox (platform) friendship between two players in this server, cached.
+local robloxFriends: { [string]: boolean } = {}
+local function pairKey(a: number, b: number): string
+	return if a < b then a .. ":" .. b else b .. ":" .. a
+end
+local function checkRobloxFriends(a: Player, b: Player)
+	local k = pairKey(a.UserId, b.UserId)
+	if robloxFriends[k] ~= nil then
+		return
+	end
+	local ok, result = pcall(function()
+		local anyA = a :: any
+		if anyA.IsFriendsWithAsync then
+			return anyA:IsFriendsWithAsync(b.UserId)
+		end
+		return anyA:IsFriendsWith(b.UserId)
+	end)
+	robloxFriends[k] = ok and result == true
+end
+local function isRobloxFriend(a: Player, b: Player): boolean
+	return robloxFriends[pairKey(a.UserId, b.UserId)] == true
+end
+
+---------------------------------------------------------------------------
+-- State push (the owner's own lists, for their phone and menus)
+---------------------------------------------------------------------------
+local pushQueued: { [Player]: boolean } = {}
+local buildState: (Player) -> any
+
+local function queuePush(player: Player)
+	if pushQueued[player] then
+		return
+	end
+	pushQueued[player] = true
+	task.defer(function()
+		pushQueued[player] = nil
+		if player.Parent and sec(player) then
+			SocialEvent:FireClient(player, "State", buildState(player))
+		end
+	end)
+end
+
+local function changed(player: Player)
+	PlayerData.markChanged(player)
+	queuePush(player)
+end
+
+---------------------------------------------------------------------------
+-- Status (spec 47)
+---------------------------------------------------------------------------
+local function activityOf(player: Player): string
+	if player:GetAttribute("InGame") then
+		return "Playing Basketball"
+	end
+	local CourtGames = sibling("CourtGames")
+	if CourtGames and CourtGames.gameOf then
+		local ok, court = pcall(CourtGames.gameOf, player)
+		if ok and court then
+			return "Playing Basketball"
+		end
+	end
+	local driving = player:GetAttribute("Driving")
+	if type(driving) == "string" and driving ~= "" then
+		return "Driving"
+	end
+	local training = player:GetAttribute("Training")
+	if (type(training) == "string" and training ~= "") or player:GetAttribute("Interior") == GYM_INTERIOR then
+		return "At Gym"
+	end
+	local job = player:GetAttribute("Job")
+	if type(job) == "string" and job ~= "" then
+		return "Working"
+	end
+	return ""
+end
+
+-- The player's own status label, ignoring privacy ("" = none).
+local function statusLabel(player: Player): string
+	local s = sec(player)
+	if not s then
+		return ""
+	end
+	if s.status == "Auto" then
+		return activityOf(player)
+	elseif s.status == "None" then
+		return ""
+	end
+	return s.status
+end
+
+-- What another player may see as this player's status in a friends list.
+local function visibleStatus(player: Player): string
+	local s = sec(player)
+	if not s or not s.privacy.showStatus then
+		return "Online"
+	end
+	local label = statusLabel(player)
+	return if label == "" then "Online" else label
+end
+
+---------------------------------------------------------------------------
+-- Public checks used by other modules
+---------------------------------------------------------------------------
+function Social.isBlockedId(player: Player, otherUserId: number): boolean
+	local s = sec(player)
+	if s and s.blocked[key(otherUserId)] then
+		return true
+	end
+	local other = Players:GetPlayerByUserId(otherUserId)
+	local os_ = other and sec(other)
+	return os_ ~= nil and os_.blocked[key(player.UserId)] ~= nil
+end
+
+function Social.isBlocked(a: Player, b: Player): boolean
+	return Social.isBlockedId(a, b.UserId)
+end
+
+-- True when `viewer` muted (or blocked) the user.
+function Social.isMutedBy(viewer: Player, otherUserId: number): boolean
+	local s = sec(viewer)
+	return s ~= nil and (s.muted[key(otherUserId)] ~= nil or s.blocked[key(otherUserId)] ~= nil)
+end
+
+function Social.areFriends(a: Player, b: Player): boolean
+	local sa, sb = sec(a), sec(b)
+	if not sa and not sb then
+		return false
+	end
+	return (not sa or sa.friends[key(b.UserId)] ~= nil) and (not sb or sb.friends[key(a.UserId)] ~= nil)
+end
+
+function Social.friendIds(player: Player): { number }
+	local s = sec(player)
+	local ids = {}
+	if s then
+		for uid in s.friends do
+			local n = tonumber(uid)
+			if n then
+				table.insert(ids, n)
+			end
+		end
+	end
+	return ids
+end
+
+local VALID_KINDS = { message = true, invite = true, call = true, visit = true, follow = true, interact = true }
+
+-- Can `from` do `kind` to `to`? Uses the receiver's privacy, blocks and Do Not Disturb.
+function Social.allows(from: Player, to: Player, kind: string): (boolean, string?)
+	if from == to then
+		return true, nil
+	end
+	if Social.isBlocked(from, to) then
+		return false, "You can't interact with this player."
+	end
+	local s = sec(to)
+	if not s then
+		return false, to.DisplayName .. " is still loading in."
+	end
+	if not VALID_KINDS[kind] then
+		return false, "That isn't allowed."
+	end
+	if (kind == "invite" or kind == "call") and s.status == "Do Not Disturb" then
+		return false, to.DisplayName .. " has Do Not Disturb on."
+	end
+	local setting = s.privacy[kind] or "Everyone"
+	if setting == "Everyone" then
+		return true, nil
+	elseif setting == "Friends" then
+		if Social.areFriends(from, to) then
+			return true, nil
+		end
+		return false, to.DisplayName .. " only allows that from friends."
+	elseif setting == "Crew" then
+		if sameCrew(from, to) then
+			return true, nil
+		end
+		return false, to.DisplayName .. " only allows that from their crew."
+	end
+	return false, to.DisplayName .. " isn't accepting that right now."
+end
+
+-- Same check when the sender is offline or on another server (used by Messages).
+function Social.allowsFromId(fromUserId: number, to: Player, kind: string): (boolean, string?)
+	local fromPlayer = Players:GetPlayerByUserId(fromUserId)
+	if fromPlayer then
+		return Social.allows(fromPlayer, to, kind)
+	end
+	local s = sec(to)
+	if not s then
+		return false, to.DisplayName .. " is still loading in."
+	end
+	if s.blocked[key(fromUserId)] or not VALID_KINDS[kind] then
+		return false, "You can't interact with this player."
+	end
+	if (kind == "invite" or kind == "call") and s.status == "Do Not Disturb" then
+		return false, to.DisplayName .. " has Do Not Disturb on."
+	end
+	local setting = s.privacy[kind] or "Everyone"
+	if setting == "Everyone" then
+		return true, nil
+	elseif setting == "Friends" and s.friends[key(fromUserId)] then
+		return true, nil
+	end
+	return false, to.DisplayName .. " isn't accepting that right now."
+end
+
+-- Phone notification to every online friend in this server (who has them as a friend too).
+function Social.notifyFriends(player: Player, title: string, body: string)
+	for _, other in Players:GetPlayers() do
+		if other ~= player and Social.areFriends(player, other) then
+			Net.notify(other, title, body)
+		end
+	end
+end
+
+-- The status label other players see (respects "show my status").
+function Social.statusOf(player: Player): string
+	local s = sec(player)
+	if not s or not s.privacy.showStatus then
+		return ""
+	end
+	return statusLabel(player)
+end
+
+---------------------------------------------------------------------------
+-- Offline inbox (DataStore) + cross-server delivery (MessagingService)
+---------------------------------------------------------------------------
+local applyInbox: (Player, { [string]: any }) -> ()
+
+local function publish(toUserId: number)
+	if not messagingOk then
+		return
+	end
+	task.spawn(function()
+		pcall(function()
+			MessagingService:PublishAsync(SC.TOPIC, { to = toUserId })
+		end)
+	end)
+end
+
+-- Records a friend action for a player who isn't in this server. Returns false
+-- when DataStores are unavailable (Studio without API access).
+local function inboxWrite(toUserId: number, from: { userId: number, n: string, u: string }, kind: string): boolean
+	if not store then
+		return false
+	end
+	local ok = retry(3, function()
+		return (store :: DataStore):UpdateAsync("inbox_" .. toUserId, function(old)
+			old = if type(old) == "table" then old else {}
+			old[key(from.userId)] = { k = kind, n = from.n, u = from.u, t = os.time() }
+			-- keep the inbox small: drop the oldest entries past the cap
+			while count(old) > 250 do
+				local oldestKey, oldestT = nil, math.huge
+				for k, v in old do
+					local t = type(v) == "table" and v.t or 0
+					if t < oldestT then
+						oldestKey, oldestT = k, t
+					end
+				end
+				if oldestKey == nil then
+					break
+				end
+				old[oldestKey] = nil
+			end
+			return old
+		end)
+	end)
+	if ok then
+		publish(toUserId)
+	end
+	return ok
+end
+
+local draining: { [Player]: boolean } = {}
+local function drainInbox(player: Player)
+	if not store or draining[player] or not sec(player) then
+		return
+	end
+	draining[player] = true
+	local captured = nil
+	local ok = retry(3, function()
+		return (store :: DataStore):UpdateAsync("inbox_" .. player.UserId, function(old)
+			if type(old) ~= "table" or next(old) == nil then
+				captured = nil
+				return nil -- nothing to do, no write
+			end
+			captured = old
+			return {}
+		end)
+	end)
+	draining[player] = nil
+	if ok and captured and player.Parent and sec(player) then
+		applyInbox(player, captured)
+	end
+end
+
+-- A friend action addressed to `targetId` from `from`: applied directly when the
+-- target is in this server, otherwise written to their inbox.
+local function deliver(from: Player, targetId: number, kind: string): boolean
+	local target = Players:GetPlayerByUserId(targetId)
+	if target and sec(target) then
+		applyInbox(target, { [key(from.UserId)] = { k = kind, n = from.DisplayName, u = from.Name, t = os.time() } })
+		return true
+	end
+	return inboxWrite(targetId, { userId = from.UserId, n = from.DisplayName, u = from.Name }, kind)
+end
+
+applyInbox = function(player: Player, entries: { [string]: any })
+	local s = sec(player)
+	if not s then
+		return
+	end
+	local me = { userId = player.UserId, n = player.DisplayName, u = player.Name }
+	for fromKey, e in entries do
+		local fromId = tonumber(fromKey)
+		if not fromId or type(e) ~= "table" or type(e.k) ~= "string" then
+			continue
+		end
+		local rec = { n = tostring(e.n or "Player"), u = tostring(e.u or ""), t = os.time() }
+		if e.k == "remove" then
+			if s.friends[fromKey] then
+				Net.notify(player, "FRIENDS", rec.n .. " is no longer on your friends list.")
+			end
+			s.friends[fromKey] = nil
+			s.incoming[fromKey] = nil
+			s.outgoing[fromKey] = nil
+		elseif e.k == "request" then
+			if s.blocked[fromKey] then
+				continue
+			elseif s.friends[fromKey] or s.outgoing[fromKey] then
+				-- they asked while we already were / wanted to be friends: make it mutual
+				if count(s.friends) < SC.MAX_FRIENDS or s.friends[fromKey] then
+					s.friends[fromKey] = s.friends[fromKey] or rec
+					s.outgoing[fromKey] = nil
+					Net.notify(player, "NEW FRIEND", "You and " .. rec.n .. " are now friends.")
+					local fromPlayer = Players:GetPlayerByUserId(fromId)
+					if fromPlayer then
+						deliver(player, fromId, "accept")
+					else
+						task.spawn(inboxWrite, fromId, me, "accept")
+					end
+				end
+			elseif count(s.incoming) < SC.MAX_INCOMING then
+				s.incoming[fromKey] = rec
+				Net.notify(player, "FRIEND REQUEST", rec.n .. " wants to be friends. Open Friends on your phone.")
+			end
+		elseif e.k == "accept" then
+			if s.outgoing[fromKey] or s.friends[fromKey] then
+				local isNew = s.friends[fromKey] == nil
+				s.outgoing[fromKey] = nil
+				s.incoming[fromKey] = nil
+				if isNew and count(s.friends) >= SC.MAX_FRIENDS then
+					task.spawn(inboxWrite, fromId, me, "remove")
+				else
+					s.friends[fromKey] = s.friends[fromKey] or rec
+					if isNew then
+						Net.notify(player, "NEW FRIEND", rec.n .. " accepted your friend request.")
+					end
+				end
+			else
+				-- we cancelled before their accept arrived: undo it on their side
+				local fromPlayer = Players:GetPlayerByUserId(fromId)
+				if fromPlayer and sec(fromPlayer) then
+					local fs = sec(fromPlayer)
+					fs.friends[key(player.UserId)] = nil
+					changed(fromPlayer)
+				else
+					task.spawn(inboxWrite, fromId, me, "remove")
+				end
+			end
+		end
+	end
+	changed(player)
+end
+
+---------------------------------------------------------------------------
+-- Friend actions (spec 46)
+---------------------------------------------------------------------------
+local requestTimes: { [Player]: { number } } = {}
+local function requestAllowed(player: Player): boolean
+	local now = os.clock()
+	local list = requestTimes[player] or {}
+	requestTimes[player] = list
+	while list[1] and now - list[1] > 60 do
+		table.remove(list, 1)
+	end
+	if #list >= SC.REQUESTS_PER_MINUTE then
+		return false
+	end
+	table.insert(list, now)
+	return true
+end
+
+local acceptRequest: (Player, number) -> (boolean, string?)
+
+local function sendRequest(player: Player, targetId: number, nameHint: string?): (boolean, string?)
+	local s = sec(player)
+	if not s then
+		return false, "Your data is still loading."
+	end
+	if targetId == player.UserId then
+		return false, "You can't add yourself."
+	end
+	local k = key(targetId)
+	if s.friends[k] then
+		return false, "You're already friends."
+	end
+	if s.blocked[k] then
+		return false, "Unblock them first."
+	end
+	if s.incoming[k] then
+		return acceptRequest(player, targetId)
+	end
+	if s.outgoing[k] then
+		return false, "Request already sent."
+	end
+	if count(s.friends) >= SC.MAX_FRIENDS then
+		return false, "Your friends list is full (" .. SC.MAX_FRIENDS .. ")."
+	end
+	if not requestAllowed(player) then
+		return false, "Slow down - you can send " .. SC.REQUESTS_PER_MINUTE .. " requests a minute."
+	end
+
+	local target = Players:GetPlayerByUserId(targetId)
+	if target then
+		local ts = sec(target)
+		if not ts then
+			return false, target.DisplayName .. " is still loading in."
+		end
+		local allowed, reason = Social.allows(player, target, "interact")
+		if not allowed then
+			return false, reason
+		end
+		if ts.friends[key(player.UserId)] then
+			-- they still have us (e.g. we removed them while they were away): restore both sides
+			s.friends[k] = record(target)
+			changed(player)
+			return true, "You and " .. target.DisplayName .. " are friends again."
+		end
+		if count(ts.friends) >= SC.MAX_FRIENDS then
+			return false, target.DisplayName .. "'s friends list is full."
+		end
+		if count(ts.incoming) >= SC.MAX_INCOMING then
+			return false, target.DisplayName .. " has too many pending requests."
+		end
+		s.outgoing[k] = record(target)
+		changed(player)
+		deliver(player, targetId, "request")
+		return true, "Friend request sent to " .. target.DisplayName .. "."
+	end
+
+	-- Not in this server: goes into their saved inbox.
+	local name = nameHint
+	if not name then
+		local ok, result = pcall(function()
+			return Players:GetNameFromUserIdAsync(targetId)
+		end)
+		if not ok then
+			return false, "Couldn't find that player."
+		end
+		name = result
+	end
+	if not inboxWrite(targetId, { userId = player.UserId, n = player.DisplayName, u = player.Name }, "request") then
+		return false, "They need to be in this server to get your request right now."
+	end
+	s.outgoing[k] = { n = name, u = name, t = os.time() }
+	changed(player)
+	return true, "Friend request sent to " .. tostring(name) .. ". They'll see it next time they play."
+end
+
+acceptRequest = function(player: Player, fromId: number): (boolean, string?)
+	local s = sec(player)
+	local k = key(fromId)
+	if not s or not s.incoming[k] then
+		return false, "That request is gone."
+	end
+	if count(s.friends) >= SC.MAX_FRIENDS then
+		return false, "Your friends list is full (" .. SC.MAX_FRIENDS .. ")."
+	end
+	local rec = s.incoming[k]
+	s.incoming[k] = nil
+	local from = Players:GetPlayerByUserId(fromId)
+	s.friends[k] = if from then record(from) else { n = rec.n, u = rec.u, t = os.time() }
+	changed(player)
+	if not deliver(player, fromId, "accept") then
+		-- no DataStore and they left: they'll miss the accept, so keep it consistent
+		s.friends[k] = nil
+		changed(player)
+		return false, "They left the server - ask them again next time."
+	end
+	return true, "You and " .. tostring(s.friends[k].n) .. " are now friends."
+end
+
+local function dropRelation(player: Player, otherId: number, field: string): (boolean, string?)
+	local s = sec(player)
+	local k = key(otherId)
+	if not s or not s[field][k] then
+		return false, "Nothing to remove."
+	end
+	local name = s[field][k].n
+	s[field][k] = nil
+	changed(player)
+	deliver(player, otherId, "remove")
+	return true, if field == "friends" then tostring(name) .. " removed from friends." else "Request removed."
+end
+
+---------------------------------------------------------------------------
+-- Block / mute (spec 45, 101)
+---------------------------------------------------------------------------
+local pendingEmotes: { [Player]: { [Player]: { kind: string, t: number } } } = {}
+
+local function block(player: Player, otherId: number): (boolean, string?)
+	local s = sec(player)
+	if not s or otherId == player.UserId then
+		return false, "You can't block that player."
+	end
+	local k = key(otherId)
+	if s.blocked[k] then
+		return true, "Already blocked."
+	end
+	if count(s.blocked) >= SC.MAX_BLOCKED then
+		return false, "Your block list is full."
+	end
+	local other = Players:GetPlayerByUserId(otherId)
+	local rec = if other then record(other) else (s.friends[k] or s.incoming[k] or s.outgoing[k] or s.muted[k])
+	if not rec then
+		local ok, name = pcall(function()
+			return Players:GetNameFromUserIdAsync(otherId)
+		end)
+		rec = { n = if ok then name else "Player", u = if ok then name else "" }
+	end
+	local hadRelation = s.friends[k] or s.incoming[k] or s.outgoing[k]
+	s.blocked[k] = { n = rec.n, u = rec.u }
+	s.friends[k] = nil
+	s.incoming[k] = nil
+	s.outgoing[k] = nil
+	changed(player)
+	if hadRelation then
+		deliver(player, otherId, "remove")
+	end
+	if other then
+		if pendingEmotes[other] then
+			pendingEmotes[other][player] = nil
+		end
+		if pendingEmotes[player] then
+			pendingEmotes[player][other] = nil
+		end
+		queuePush(other) -- so their client hides our nametag too
+	end
+	return true, tostring(rec.n) .. " is blocked. You won't see each other's messages, invites or interactions."
+end
+
+local function unblock(player: Player, otherId: number): (boolean, string?)
+	local s = sec(player)
+	local k = key(otherId)
+	if not s or not s.blocked[k] then
+		return false, "They aren't blocked."
+	end
+	local name = s.blocked[k].n
+	s.blocked[k] = nil
+	changed(player)
+	local other = Players:GetPlayerByUserId(otherId)
+	if other then
+		queuePush(other)
+	end
+	return true, tostring(name) .. " is unblocked."
+end
+
+local function setMuted(player: Player, otherId: number, muted: boolean): (boolean, string?)
+	local s = sec(player)
+	if not s or otherId == player.UserId then
+		return false, "You can't mute that player."
+	end
+	local k = key(otherId)
+	if muted then
+		if count(s.muted) >= SC.MAX_BLOCKED then
+			return false, "Your mute list is full."
+		end
+		local other = Players:GetPlayerByUserId(otherId)
+		local rec = if other then record(other) else (s.friends[k] or s.blocked[k] or { n = "Player", u = "" })
+		s.muted[k] = { n = rec.n, u = rec.u }
+	else
+		s.muted[k] = nil
+	end
+	changed(player)
+	return true, if muted then "Muted. Their messages are hidden from you and their voice is muted for you where supported." else "Unmuted."
+end
+
+-- Voice: with Roblox's audio API each player has an AudioDeviceInput. Its Deny
+-- list keeps their voice from the players who muted or blocked them.
+local function refreshVoice(speaker: Player)
+	local input = speaker:FindFirstChildWhichIsA("AudioDeviceInput", true)
+	if not input then
+		return
+	end
+	pcall(function()
+		local adi = input :: AudioDeviceInput
+		if adi.AccessType ~= Enum.AccessModifierType.Deny then
+			return -- another system (calls) controls this input
+		end
+		local deny = {}
+		for _, listener in Players:GetPlayers() do
+			if listener ~= speaker and (Social.isMutedBy(listener, speaker.UserId) or Social.isBlocked(listener, speaker)) then
+				table.insert(deny, listener.UserId)
+			end
+		end
+		local current = adi:GetUserIdAccessList()
+		local same = #current == #deny
+		if same then
+			for i, id in deny do
+				if current[i] ~= id then
+					same = false
+					break
+				end
+			end
+		end
+		if not same then
+			adi:SetUserIdAccessList(deny)
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Profiles (spec 28, 29, 97)
+---------------------------------------------------------------------------
+local filteredBios: { [number]: { raw: string, text: string } } = {}
+
+-- Bio text as everyone may see it (filtered for broadcast; "" if filtering fails).
+local function publicBio(owner: Player): string
+	local s = sec(owner)
+	local raw = s and s.profile.bio or ""
+	if raw == "" then
+		return ""
+	end
+	local cached = filteredBios[owner.UserId]
+	if cached and cached.raw == raw then
+		return cached.text
+	end
+	local ok, text = pcall(function()
+		local result = TextService:FilterStringAsync(raw, owner.UserId, Enum.TextFilterContext.PublicChat)
+		return result:GetNonChatStringForBroadcastAsync()
+	end)
+	if not ok then
+		return ""
+	end
+	filteredBios[owner.UserId] = { raw = raw, text = text }
+	return text
+end
+
+local function titlesFor(player: Player): { string }
+	local data = PlayerData.get(player)
+	if not data then
+		return { "Newcomer" }
+	end
+	return SC.unlockedTitles(data.level, data.reputation, data.basketball.wins, data.basketball.points)
+end
+
+local function featuredValue(player: Player, id: string): string
+	local data = PlayerData.get(player)
+	if not data then
+		return "-"
+	end
+	local bb = data.basketball
+	local values = {
+		Level = data.level,
+		Reputation = data.reputation,
+		Fame = data.fame,
+		Wins = bb.wins,
+		Points = bb.points,
+		Threes = bb.threes,
+		Dunks = bb.dunks,
+	}
+	local v = values[id] or data.stats[id]
+	return if v ~= nil then tostring(v) else "-"
+end
+
+local function relationOf(viewer: Player, targetId: number): string
+	local s = sec(viewer)
+	if not s then
+		return "none"
+	end
+	local k = key(targetId)
+	if s.friends[k] then
+		return "friends"
+	elseif s.incoming[k] then
+		return "incoming"
+	elseif s.outgoing[k] then
+		return "outgoing"
+	end
+	return "none"
+end
+
+local function profileSnapshot(viewer: Player, targetId: number): any
+	local vs = sec(viewer)
+	local target = Players:GetPlayerByUserId(targetId)
+	local k = key(targetId)
+	local base = {
+		userId = targetId,
+		self = targetId == viewer.UserId,
+		relation = relationOf(viewer, targetId),
+		blocked = vs ~= nil and vs.blocked[k] ~= nil,
+		muted = vs ~= nil and vs.muted[k] ~= nil,
+	}
+	if not target then
+		local rec = vs and (vs.friends[k] or vs.incoming[k] or vs.outgoing[k] or vs.blocked[k])
+		if rec then
+			base.name = rec.n
+			base.username = rec.u
+			base.level = rec.lv
+		else
+			local ok, name = pcall(function()
+				return Players:GetNameFromUserIdAsync(targetId)
+			end)
+			if not ok then
+				return nil
+			end
+			base.name = name
+			base.username = name
+		end
+		base.online = false
+		base.note = "Not in this city right now."
+		return base
+	end
+
+	local ts = sec(target)
+	local data = PlayerData.get(target)
+	base.name = target.DisplayName
+	base.username = target.Name
+	base.online = true
+	base.level = target:GetAttribute("Level") or 1
+	base.robloxFriend = target ~= viewer and isRobloxFriend(viewer, target)
+	if not ts or not data then
+		base.limited = true
+		base.note = "Still loading in."
+		return base
+	end
+	if Social.isBlocked(viewer, target) and target ~= viewer then
+		base.limited = true
+		base.note = "You can't view this profile."
+		return base
+	end
+	local vis = ts.privacy.profile
+	local friends = Social.areFriends(viewer, target)
+	if target ~= viewer and (vis == "Private" or (vis == "Friends Only" and not friends)) then
+		base.limited = true
+		base.note = if vis == "Private" then "This profile is private." else "Only friends can see this profile."
+		return base
+	end
+	local crew = crewOf(target)
+	local featured = SC.FEATURED_BY_ID[ts.profile.featured] or SC.FEATURED[1]
+	base.rank = data and Config.reputationRank(data.reputation) or "Nobody"
+	base.reputation = data.reputation
+	base.fame = data.fame
+	base.basketball = {
+		wins = data.basketball.wins,
+		losses = data.basketball.losses,
+		points = data.basketball.points,
+		threes = data.basketball.threes,
+		dunks = data.basketball.dunks,
+	}
+	base.crew = if crew then { name = tostring(crew.name), tag = tostring(crew.tag), color = crew.color, role = tostring(crew.role or "") } else nil
+	base.homeTier = target:GetAttribute("HomeTier") or "Starter Apartment"
+	base.favorite = ts.profile.favorite
+	base.title = ts.profile.title
+	base.banner = ts.profile.banner
+	base.featured = { label = featured.label, value = featuredValue(target, featured.id) }
+	base.status = Social.statusOf(target)
+	base.friendCount = count(ts.friends)
+	base.bio = publicBio(target)
+	return base
+end
+
+---------------------------------------------------------------------------
+-- State for the owner
+---------------------------------------------------------------------------
+local function list(dict: { [string]: any }): { any }
+	local out = {}
+	for uid, rec in dict do
+		local id = tonumber(uid)
+		if id then
+			table.insert(out, { userId = id, name = rec.n, username = rec.u, t = rec.t })
+		end
+	end
+	table.sort(out, function(a, b)
+		return (a.t or 0) > (b.t or 0)
+	end)
+	return out
+end
+
+buildState = function(player: Player)
+	local s = sec(player)
+	local friends = {}
+	for uid, rec in s.friends do
+		local id = tonumber(uid)
+		if not id then
+			continue
+		end
+		local other = Players:GetPlayerByUserId(id)
+		local entry = { userId = id, name = rec.n, username = rec.u, since = rec.t, level = rec.lv, online = false, status = "Not in this server" }
+		if other and sec(other) then
+			rec.n, rec.u = other.DisplayName, other.Name
+			rec.lv = other:GetAttribute("Level") or rec.lv
+			entry.name, entry.level = rec.n, rec.lv
+			entry.online = true
+			entry.status = visibleStatus(other)
+			entry.canLocate = sec(other).privacy.shareLocation == true and Social.areFriends(player, other)
+			entry.robloxFriend = isRobloxFriend(player, other)
+		end
+		table.insert(friends, entry)
+	end
+	table.sort(friends, function(a, b)
+		if a.online ~= b.online then
+			return a.online
+		end
+		return tostring(a.name):lower() < tostring(b.name):lower()
+	end)
+	-- Roblox friends here, and players here who blocked us (ids only, to hide them).
+	local robloxHere, hiddenIds = {}, {}
+	for _, other in Players:GetPlayers() do
+		if other ~= player then
+			if isRobloxFriend(player, other) then
+				table.insert(robloxHere, other.UserId)
+			end
+			local os_ = sec(other)
+			if os_ and os_.blocked[key(player.UserId)] then
+				table.insert(hiddenIds, other.UserId)
+			end
+		end
+	end
+	return {
+		friends = friends,
+		incoming = list(s.incoming),
+		outgoing = list(s.outgoing),
+		blocked = list(s.blocked),
+		muted = list(s.muted),
+		privacy = table.clone(s.privacy),
+		status = s.status,
+		profile = table.clone(s.profile),
+		titles = titlesFor(player),
+		robloxHere = robloxHere,
+		hiddenIds = hiddenIds,
+		maxFriends = SC.MAX_FRIENDS,
+		crossServer = store ~= nil,
+	}
+end
+
+---------------------------------------------------------------------------
+-- Overhead nametag (server-built so everyone sees it)
+---------------------------------------------------------------------------
+local tagCache: { [Player]: string } = {}
+
+local function hex(c: Color3): string
+	return string.format("#%02X%02X%02X", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+
+local function escape(text: string): string
+	return (text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"):gsub("'", "&apos;"))
+end
+
+local function buildTag(player: Player, character: Model)
+	local head = character:WaitForChild("Head", 10)
+	if not head or not head:IsA("BasePart") or character.Parent == nil then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+	local old = head:FindFirstChild("CityGrindTag")
+	if old then
+		old:Destroy()
+	end
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "CityGrindTag"
+	gui.Size = UDim2.fromOffset(240, 66)
+	gui.StudsOffset = Vector3.new(0, 2.7, 0)
+	gui.MaxDistance = 90
+	gui.LightInfluence = 0
+	gui.ResetOnSpawn = false
+	gui.PlayerToHideFrom = player -- you don't need your own name over your head
+	gui.Adornee = head
+
+	local function line(name: string, y: number, h: number, size: number, font: Enum.Font, color: Color3)
+		local l = Instance.new("TextLabel")
+		l.Name = name
+		l.BackgroundTransparency = 1
+		l.Position = UDim2.fromOffset(0, y)
+		l.Size = UDim2.new(1, 0, 0, h)
+		l.Font = font
+		l.TextSize = size
+		l.TextColor3 = color
+		l.TextStrokeTransparency = 0.35
+		l.RichText = true
+		l.Text = ""
+		l.Parent = gui
+		return l
+	end
+	line("StatusLine", 0, 16, 13, Enum.Font.GothamMedium, Color3.fromRGB(230, 230, 240))
+	line("NameLine", 16, 24, 20, Enum.Font.GothamBlack, Color3.new(1, 1, 1))
+	line("InfoLine", 40, 18, 14, Enum.Font.GothamBold, Color3.fromRGB(200, 200, 210))
+	gui.Parent = head
+	tagCache[player] = nil
+end
+
+local function refreshTag(player: Player)
+	local character = player.Character
+	local head = character and character:FindFirstChild("Head")
+	local gui = head and head:FindFirstChild("CityGrindTag")
+	if not gui then
+		return
+	end
+	local crew = crewOf(player)
+	local rank = tostring(player:GetAttribute("Rank") or "Nobody")
+	local rankColor = SC.RANK_COLORS[rank] or Color3.new(1, 1, 1)
+	local status = Social.statusOf(player)
+	local s = sec(player)
+	local title = s and s.profile.title or ""
+	local nameText = escape(player.DisplayName)
+	if crew and crew.tag and crew.tag ~= "" then
+		local c = if typeof(crew.color) == "Color3" then crew.color else Color3.new(1, 1, 1)
+		nameText = string.format('<font color="%s">[%s]</font> %s', hex(c), escape(tostring(crew.tag)), nameText)
+	end
+	local info = string.format('LV %d  ·  <font color="%s">%s</font>', tonumber(player:GetAttribute("Level")) or 1, hex(rankColor), escape(rank))
+	if title ~= "" and title ~= rank then
+		info ..= "  ·  " .. escape(title)
+	end
+	local statusText = if status ~= "" then ((SC.STATUS_ICONS[status] or "") .. " " .. escape(status)) else ""
+	local signature = nameText .. "|" .. info .. "|" .. statusText
+	if tagCache[player] == signature then
+		return
+	end
+	tagCache[player] = signature
+	local nameLine = gui:FindFirstChild("NameLine") :: TextLabel?
+	local infoLine = gui:FindFirstChild("InfoLine") :: TextLabel?
+	local statusLine = gui:FindFirstChild("StatusLine") :: TextLabel?
+	if nameLine and infoLine and statusLine then
+		nameLine.Text = nameText
+		infoLine.Text = info
+		statusLine.Text = statusText
+	end
+end
+
+---------------------------------------------------------------------------
+-- Emotes (spec 21, 96): wave, plus two-person emotes the other must accept
+---------------------------------------------------------------------------
+local armBusy: { [Motor6D]: boolean } = {}
+
+local function shoulderOf(character: Model): (Motor6D?, boolean)
+	local upper = character:FindFirstChild("RightUpperArm")
+	local m = upper and upper:FindFirstChild("RightShoulder")
+	if m and m:IsA("Motor6D") then
+		return m, true
+	end
+	local torso = character:FindFirstChild("Torso")
+	m = torso and torso:FindFirstChild("Right Shoulder")
+	if m and m:IsA("Motor6D") then
+		return m, false
+	end
+	return nil, false
+end
+
+-- Used only when no server Emotes module exists: raises the right arm on the
+-- server (Motor6D C0) so everyone sees it.
+local ARM_POSES = { Wave = 165, HighFive = 160, FistBump = 85, Handshake = 70 }
+local function fallbackArm(player: Player, kind: string)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local motor, r15 = shoulderOf(character)
+	if not motor or armBusy[motor] then
+		return
+	end
+	armBusy[motor] = true
+	local original = motor.C0
+	local function pose(deg: number): CFrame
+		local a = math.rad(deg)
+		return original * (if r15 then CFrame.Angles(a, 0, 0) else CFrame.Angles(0, 0, a))
+	end
+	local info = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local target = ARM_POSES[kind] or 90
+	TweenService:Create(motor, info, { C0 = pose(target) }):Play()
+	task.spawn(function()
+		task.wait(0.25)
+		if kind == "Wave" or kind == "Handshake" then
+			local swing = if kind == "Wave" then 20 else 15
+			for i = 1, 4 do
+				if not motor.Parent then
+					break
+				end
+				TweenService:Create(motor, TweenInfo.new(0.16), { C0 = pose(target + (if i % 2 == 1 then -swing else 0)) }):Play()
+				task.wait(0.17)
+			end
+		else
+			task.wait(0.7)
+		end
+		if motor.Parent then
+			local back = TweenService:Create(motor, info, { C0 = original })
+			back:Play()
+			back.Completed:Wait()
+		end
+		armBusy[motor] = nil
+	end)
+end
+
+-- Server Emotes (if present) does the real animation; otherwise the arm fallback.
+local function playEmote(players: { Player }, kind: string): (boolean, string?)
+	local Emotes = sibling("Emotes")
+	if Emotes then
+		local ok, played, reason
+		if #players == 2 and type(Emotes.playPaired) == "function" then
+			ok, played, reason = pcall(Emotes.playPaired, players[1], players[2], kind)
+		elseif #players == 1 and type(Emotes.play) == "function" then
+			ok, played, reason = pcall(Emotes.play, players[1], kind)
+		end
+		if ok then
+			return played == true, reason
+		end
+	end
+	for _, p in players do
+		fallbackArm(p, kind)
+	end
+	return true, nil
+end
+
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function seated(player: Player): boolean
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.SeatPart ~= nil
+end
+
+local function closeEnough(a: Player, b: Player, range: number): boolean
+	local ra, rb = rootOf(a), rootOf(b)
+	return ra ~= nil and rb ~= nil and (ra.Position - rb.Position).Magnitude <= range
+end
+
+local function faceEachOther(a: Player, b: Player)
+	local ra, rb = rootOf(a), rootOf(b)
+	if not ra or not rb then
+		return
+	end
+	for _, pair in { { a, ra, rb }, { b, rb, ra } } do
+		local p, me, other = pair[1], pair[2], pair[3]
+		if not seated(p) then
+			local look = Vector3.new(other.Position.X, me.Position.Y, other.Position.Z)
+			if (look - me.Position).Magnitude > 0.5 then
+				me.CFrame = CFrame.lookAt(me.Position, look)
+			end
+		end
+	end
+end
+
+local function onEmote(player: Player, action: any, arg1: any, arg2: any)
+	if type(action) ~= "string" then
+		return
+	end
+	if action == "solo" then
+		local kind = arg1
+		if type(kind) ~= "string" or not SC.EMOTES[kind] or not SC.EMOTES[kind].solo then
+			return
+		end
+		if not Net.allow(player, "SocialSolo", 2) or not Net.alive(player) then
+			return
+		end
+		local played, why = playEmote({ player }, kind)
+		if not played and why then
+			Net.notify(player, "EMOTE", why)
+		end
+	elseif action == "request" then
+		local target = validId(arg1) and Players:GetPlayerByUserId(arg1)
+		local kind = arg2
+		if not target or target == player or type(kind) ~= "string" or not SC.EMOTES[kind] or SC.EMOTES[kind].solo then
+			return
+		end
+		if not Net.allow(player, "SocialEmoteReq", 3) then
+			Net.notify(player, "SLOW DOWN", "Wait a moment before asking again.")
+			return
+		end
+		local allowed, reason = Social.allows(player, target, "interact")
+		if not allowed then
+			Net.notify(player, "CAN'T DO THAT", reason or "Not allowed.")
+			return
+		end
+		if not Net.alive(player) or not Net.alive(target) or not closeEnough(player, target, SC.EMOTE_RANGE) then
+			Net.notify(player, "GET CLOSER", "Stand next to " .. target.DisplayName .. " first.")
+			return
+		end
+		pendingEmotes[target] = pendingEmotes[target] or {}
+		pendingEmotes[target][player] = { kind = kind, t = os.clock() }
+		SocialEvent:FireClient(target, "EmoteRequest", player.UserId, kind, player.DisplayName)
+		Net.notify(player, SC.EMOTES[kind].label, "Waiting for " .. target.DisplayName .. " to accept...")
+	elseif action == "respond" then
+		local from = validId(arg1) and Players:GetPlayerByUserId(arg1)
+		local accept = arg2 == true
+		local pending = from and pendingEmotes[player] and pendingEmotes[player][from]
+		if not from or not pending then
+			return
+		end
+		pendingEmotes[player][from] = nil
+		local label = SC.EMOTES[pending.kind].label
+		if not accept then
+			Net.notify(from, label, player.DisplayName .. " passed this time.")
+			return
+		end
+		if os.clock() - pending.t > SC.EMOTE_REQUEST_SECONDS then
+			Net.notify(player, label, "That request expired.")
+			return
+		end
+		if Social.isBlocked(player, from) or not Net.alive(player) or not Net.alive(from) then
+			return
+		end
+		if not closeEnough(player, from, SC.EMOTE_RANGE) then
+			Net.notify(player, "GET CLOSER", "You moved too far from " .. from.DisplayName .. ".")
+			Net.notify(from, "GET CLOSER", "You moved too far from " .. player.DisplayName .. ".")
+			return
+		end
+		if not sibling("Emotes") then
+			faceEachOther(player, from)
+		end
+		local played, why = playEmote({ from, player }, pending.kind)
+		if not played then
+			Net.notify(player, label, why or "Couldn't do that right now.")
+			Net.notify(from, label, why or "Couldn't do that right now.")
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Remote: SocialAction(action, ...) -> (ok, message, extra?)
+---------------------------------------------------------------------------
+local function setPrivacy(player: Player, k: any, value: any): (boolean, string?)
+	local s = sec(player)
+	if not s or type(k) ~= "string" then
+		return false, "Not loaded."
+	end
+	if VALID_KINDS[k] then
+		if not table.find(SC.PRIVACY_VALUES, value) then
+			return false, "Invalid setting."
+		end
+	elseif k == "profile" then
+		if not table.find(SC.PROFILE_VISIBILITY, value) then
+			return false, "Invalid setting."
+		end
+	elseif k == "showStatus" or k == "shareLocation" then
+		if type(value) ~= "boolean" then
+			return false, "Invalid setting."
+		end
+	else
+		return false, "Invalid setting."
+	end
+	s.privacy[k] = value
+	changed(player)
+	return true, nil
+end
+
+local function cleanBio(text: string): string
+	text = text:gsub("[%c]", " "):gsub("%s+", " ")
+	text = text:match("^%s*(.-)%s*$") or ""
+	return text
+end
+
+local function setProfileField(player: Player, field: string, value: any): (boolean, string?)
+	local s = sec(player)
+	if not s then
+		return false, "Not loaded."
+	end
+	if field == "banner" then
+		if type(value) ~= "number" or value % 1 ~= 0 or not SC.BANNERS[value] then
+			return false, "Invalid colour."
+		end
+	elseif field == "title" then
+		if type(value) ~= "string" or not table.find(titlesFor(player), value) then
+			return false, "You haven't unlocked that title yet."
+		end
+	elseif field == "favorite" then
+		if not table.find(SC.FAVORITES, value) then
+			return false, "Invalid activity."
+		end
+	elseif field == "featured" then
+		if type(value) ~= "string" or not SC.FEATURED_BY_ID[value] then
+			return false, "Invalid stat."
+		end
+	elseif field == "bio" then
+		if type(value) ~= "string" then
+			return false, "Invalid bio."
+		end
+		value = cleanBio(value)
+		local len = utf8.len(value)
+		if not len or len > SC.BIO_MAX then
+			return false, "Bios are up to " .. SC.BIO_MAX .. " characters."
+		end
+		if value ~= "" then
+			local ok, filtered = pcall(function()
+				local result = TextService:FilterStringAsync(value, player.UserId, Enum.TextFilterContext.PublicChat)
+				return result:GetNonChatStringForBroadcastAsync()
+			end)
+			if not ok then
+				return false, "Couldn't check that bio right now. Try again soon."
+			end
+			filteredBios[player.UserId] = { raw = value, text = filtered }
+		end
+	else
+		return false, "Invalid field."
+	end
+	s.profile[field] = value
+	changed(player)
+	tagCache[player] = nil
+	return true, nil
+end
+
+local ACTIONS: { [string]: (Player, any, any) -> (boolean, string?, any) } = {}
+
+ACTIONS.request = function(player, id)
+	return sendRequest(player, id, nil)
+end
+ACTIONS.accept = function(player, id)
+	return acceptRequest(player, id)
+end
+ACTIONS.decline = function(player, id)
+	return dropRelation(player, id, "incoming")
+end
+ACTIONS.cancel = function(player, id)
+	return dropRelation(player, id, "outgoing")
+end
+ACTIONS.remove = function(player, id)
+	return dropRelation(player, id, "friends")
+end
+ACTIONS.block = block
+ACTIONS.unblock = unblock
+ACTIONS.mute = function(player, id)
+	return setMuted(player, id, true)
+end
+ACTIONS.unmute = function(player, id)
+	return setMuted(player, id, false)
+end
+
+-- Where a friend in this server is, if they share their location with friends.
+ACTIONS.locate = function(player, id)
+	local other = Players:GetPlayerByUserId(id)
+	local os_ = other and sec(other)
+	if not other or not os_ then
+		return false, "They aren't in this server."
+	end
+	if not Social.areFriends(player, other) or Social.isBlocked(player, other) then
+		return false, "Only friends can find each other."
+	end
+	if not os_.privacy.shareLocation then
+		return false, other.DisplayName .. " doesn't share their location."
+	end
+	local root = rootOf(other)
+	if not root then
+		return false, other.DisplayName .. " is respawning."
+	end
+	if (other:GetAttribute("Interior") or "") ~= "" then
+		return false, other.DisplayName .. " is inside somewhere. Try again when they're outside."
+	end
+	return true, nil, { name = other.DisplayName, position = root.Position }
+end
+
+-- What the interaction menu needs about a target.
+ACTIONS.query = function(player, id)
+	local other = Players:GetPlayerByUserId(id)
+	if not other or other == player then
+		return false, "They left."
+	end
+	local s = sec(player)
+	local allowed, reason = Social.allows(player, other, "interact")
+	return true, nil, {
+		relation = relationOf(player, id),
+		robloxFriend = isRobloxFriend(player, other),
+		blocked = s ~= nil and s.blocked[key(id)] ~= nil,
+		muted = s ~= nil and s.muted[key(id)] ~= nil,
+		canInteract = allowed,
+		reason = reason,
+		level = other:GetAttribute("Level") or 1,
+		status = Social.statusOf(other),
+	}
+end
+
+local STRING_ACTIONS: { [string]: (Player, any, any) -> (boolean, string?, any) } = {
+	privacy = setPrivacy,
+	status = function(player, choice)
+		local s = sec(player)
+		if not s then
+			return false, "Not loaded."
+		end
+		for _, st in SC.STATUSES do
+			if st.id == choice then
+				s.status = choice
+				changed(player)
+				return true, nil
+			end
+		end
+		return false, "Invalid status."
+	end,
+	profile = function(player, field, value)
+		if type(field) ~= "string" then
+			return false, "Invalid field."
+		end
+		return setProfileField(player, field, value)
+	end,
+	addByName = function(player, username)
+		if type(username) ~= "string" or #username < 3 or #username > 20 or not username:match("^[%w_]+$") then
+			return false, "Enter a Roblox username (letters, numbers, _)."
+		end
+		if not Net.allow(player, "SocialLookup", 3) then
+			return false, "Wait a moment before searching again."
+		end
+		local ok, userId = pcall(function()
+			return Players:GetUserIdFromNameAsync(username)
+		end)
+		if not ok or not validId(userId) then
+			return false, "No player called " .. username .. "."
+		end
+		return sendRequest(player, userId, username)
+	end,
+}
+
+local function onAction(player: Player, action: any, a: any, b: any)
+	if type(action) ~= "string" or not Net.allow(player, "SocialAction", 0.2) then
+		return false, "Slow down."
+	end
+	if not sec(player) then
+		return false, "Your data is still loading."
+	end
+	local id_fn = ACTIONS[action]
+	if id_fn then
+		if not validId(a) then
+			return false, "Invalid player."
+		end
+		return id_fn(player, a, b)
+	end
+	local fn = STRING_ACTIONS[action]
+	if fn then
+		return fn(player, a, b)
+	end
+	if action == "state" then
+		return true, nil, buildState(player)
+	end
+	return false, "Unknown action."
+end
+
+---------------------------------------------------------------------------
+-- Lifecycle
+---------------------------------------------------------------------------
+local function onCharacter(player: Player, character: Model)
+	task.spawn(function()
+		buildTag(player, character)
+		refreshTag(player)
+	end)
+end
+
+local function onPlayerAdded(player: Player)
+	player:SetAttribute("SocialStatus", "")
+	player.CharacterAdded:Connect(function(character)
+		onCharacter(player, character)
+	end)
+	if player.Character then
+		onCharacter(player, player.Character)
+	end
+	-- Roblox friendships with everyone already here
+	task.spawn(function()
+		for _, other in Players:GetPlayers() do
+			if other ~= player and player.Parent then
+				checkRobloxFriends(player, other)
+				queuePush(other)
+			end
+		end
+		queuePush(player)
+	end)
+end
+
+local function onLoaded(player: Player)
+	drainInbox(player)
+	local s = sec(player)
+	if not s or not player.Parent then
+		return
+	end
+	-- a title that is no longer unlocked (shouldn't happen) falls back
+	if not table.find(titlesFor(player), s.profile.title) then
+		s.profile.title = "Newcomer"
+	end
+	queuePush(player)
+	for _, other in Players:GetPlayers() do
+		if other ~= player and sec(other) and Social.areFriends(player, other) then
+			if s.privacy.showStatus then
+				Net.notify(other, "FRIEND ONLINE", player.DisplayName .. " is in the city.")
+			end
+			queuePush(other)
+		end
+	end
+end
+
+local function onPlayerRemoving(player: Player)
+	for _, other in Players:GetPlayers() do
+		if other ~= player then
+			robloxFriends[pairKey(player.UserId, other.UserId)] = nil
+			if pendingEmotes[other] then
+				pendingEmotes[other][player] = nil
+			end
+			local os_ = sec(other)
+			if os_ and os_.friends[key(player.UserId)] then
+				queuePush(other)
+			end
+		end
+	end
+	pendingEmotes[player] = nil
+	requestTimes[player] = nil
+	tagCache[player] = nil
+	draining[player] = nil
+	pushQueued[player] = nil
+end
+
+function Social.start(_city: Instance)
+	SocialAction = Net.remote("RemoteFunction", "SocialAction")
+	SocialProfile = Net.remote("RemoteFunction", "SocialProfile")
+	SocialEvent = Net.remote("RemoteEvent", "SocialEvent")
+	SocialEmote = Net.remote("RemoteEvent", "SocialEmote")
+
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(SC.DATASTORE_NAME)
+	end)
+	if ok then
+		store = result
+	else
+		warn("[CityGrind] Social DataStore unavailable; friend requests reach this server only:", result)
+	end
+
+	task.spawn(function()
+		local subscribed = pcall(function()
+			MessagingService:SubscribeAsync(SC.TOPIC, function(message)
+				local data = message and message.Data
+				local to = type(data) == "table" and data.to
+				local target = validId(to) and Players:GetPlayerByUserId(to)
+				if target and sec(target) then
+					task.spawn(drainInbox, target)
+				end
+			end)
+		end)
+		messagingOk = subscribed
+	end)
+
+	SocialAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+		local okCall, r1, r2, r3 = pcall(onAction, player, action, a, b)
+		if not okCall then
+			warn("[CityGrind] SocialAction failed:", r1)
+			return false, "Something went wrong."
+		end
+		return r1, r2, r3
+	end
+
+	SocialProfile.OnServerInvoke = function(player: Player, userId: any)
+		if not validId(userId) or not Net.allow(player, "SocialProfile", 0.3) then
+			return nil
+		end
+		local okCall, snap = pcall(profileSnapshot, player, userId)
+		return if okCall then snap else nil
+	end
+
+	SocialEmote.OnServerEvent:Connect(onEmote)
+
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	for _, player in Players:GetPlayers() do
+		task.spawn(onPlayerAdded, player)
+	end
+	Players.PlayerRemoving:Connect(onPlayerRemoving)
+	PlayerData.onLoaded(onLoaded)
+
+	-- Status attribute, nametag and voice mutes stay current.
+	-- Without MessagingService, check inboxes now and then for cross-server requests.
+	task.spawn(function()
+		while true do
+			task.wait(90)
+			if store and not messagingOk then
+				for _, player in Players:GetPlayers() do
+					task.spawn(drainInbox, player)
+					task.wait(1)
+				end
+			end
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(1.5)
+			for _, player in Players:GetPlayers() do
+				if sec(player) then
+					local status = Social.statusOf(player)
+					if player:GetAttribute("SocialStatus") ~= status then
+						player:SetAttribute("SocialStatus", status)
+					end
+					refreshTag(player)
+					refreshVoice(player)
+				end
+			end
+			-- expire stale emote requests
+			local now = os.clock()
+			for _, map in pendingEmotes do
+				for from, p in map do
+					if now - p.t > SC.EMOTE_REQUEST_SECONDS then
+						map[from] = nil
+					end
+				end
+			end
+		end
+	end)
+end
+
+return Social
+]=====])
 put(server, 'ModuleScript', 'Vehicles', [=====[
 -- CITY GRIND: vehicles (spec sections 11, 72, 77).
 -- Budget Wheels lot (190,0,85) shows every model with a sign and a "View" prompt
@@ -14106,7 +20856,7 @@ HUD.start()
 
 -- Phase 3 life systems. They start before the phone so their apps
 -- (Phone.addApp) land on the home screen.
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -15708,6 +22458,1267 @@ end
 
 return Basketball
 ]=====])
+put(client, 'ModuleScript', 'Crews', [=====[
+-- CITY GRIND: crews (sections 60, 61, 62). Client side: the "Crew" phone app.
+-- No crew: create form (name, tag, colour, logo), pending invites, leaderboard.
+-- In a crew: overview (logo, name, tag, level bar, rep), stats, announcement,
+-- weekly crew mission, members with role tools, invites, leaderboard, leave/disband.
+-- Every action goes to the server (CrewRequest) which validates and saves it.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local CrewsConfig = require(shared:WaitForChild("CrewsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Crews = {}
+
+local CREW_COLOR = Color3.fromRGB(200, 100, 255)
+local GOOD = Color3.fromRGB(60, 170, 90)
+
+local CrewRequest: RemoteFunction? = nil
+local CrewGet: RemoteFunction? = nil
+local gui: ScreenGui? = nil
+local invitePopup: Frame
+local inviteText: TextLabel
+local popupInvite: { crewId: string }? = nil
+
+-- create form state (kept between re-renders)
+local form = { name = "", tag = "", color = 6, logo = 1 }
+local busy = false
+local confirmKey: string? = nil -- the button waiting for a second tap
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function request(action: string, args: any?): boolean
+	if not CrewRequest or busy then
+		return false
+	end
+	busy = true
+	local ok, result = pcall(function()
+		return (CrewRequest :: RemoteFunction):InvokeServer(action, args)
+	end)
+	busy = false
+	if not ok or type(result) ~= "table" then
+		HUD.push("CREW", "Couldn't reach the crew service. Try again.")
+		return false
+	end
+	if type(result.message) == "string" and result.message ~= "" then
+		HUD.push("CREW", result.message)
+	end
+	Phone.refresh("Crew")
+	return result.ok == true
+end
+
+local function fetch(): any
+	if not CrewGet then
+		return nil
+	end
+	local ok, result = pcall(function()
+		return (CrewGet :: RemoteFunction):InvokeServer()
+	end)
+	return if ok then result else nil
+end
+
+local function formatNumber(n: number): string
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return formatted
+end
+
+local function timeLeft(seconds: number): string
+	seconds = math.max(0, seconds)
+	local d = math.floor(seconds / 86400)
+	local h = math.floor((seconds % 86400) / 3600)
+	if d > 0 then
+		return string.format("%dd %dh left", d, h)
+	end
+	return string.format("%dh %dm left", h, math.floor((seconds % 3600) / 60))
+end
+
+local function myRole(): string
+	local r = player:GetAttribute("CrewRole")
+	return if type(r) == "string" then r else ""
+end
+
+local function canInvite(): boolean
+	local r = myRole()
+	return r == "Leader" or r == "Officer"
+end
+
+-- A button that needs a second tap within 4 s to confirm.
+local function confirmButton(props: { [string]: any }, key: string, confirmText: string, fn: () -> ())
+	local b = UI.button(props)
+	local original = b.Text
+	if confirmKey == key then
+		b.Text = confirmText
+	end
+	b.Activated:Connect(function()
+		if confirmKey == key then
+			confirmKey = nil
+			fn()
+		else
+			confirmKey = key
+			b.Text = confirmText
+			task.delay(4, function()
+				if confirmKey == key then
+					confirmKey = nil
+					if b.Parent then
+						b.Text = original
+					end
+				end
+			end)
+		end
+	end)
+	return b
+end
+
+---------------------------------------------------------------------------
+-- Phone app
+---------------------------------------------------------------------------
+local function buildApp(content: ScrollingFrame)
+	local order = 0
+	local function nextOrder(): number
+		order += 1
+		return order
+	end
+	local function header(text: string)
+		UI.label({ Text = text, Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = nextOrder(), Parent = content })
+	end
+	local function note(text: string)
+		UI.label({ Text = text, TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 32), LayoutOrder = nextOrder(), Parent = content })
+	end
+
+	local function leaderboard(list: { any }, myId: string?)
+		header("TOP CREWS")
+		if #list == 0 then
+			note("No crews on the board yet. Be the first.")
+			return
+		end
+		for i, row in list do
+			local c = Phone.card(content, 42, nextOrder())
+			if row.id == myId then
+				UI.stroke(CREW_COLOR, 1.5, 0.2).Parent = c
+			end
+			UI.label({ Text = "#" .. i, Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = if i <= 3 then Color3.fromRGB(255, 205, 60) else colors.subtext, Size = UDim2.new(0, 28, 1, 0), Parent = c })
+			UI.label({ Text = tostring(row.logo), TextSize = 16, Position = UDim2.fromOffset(28, 0), Size = UDim2.new(0, 22, 1, 0), Parent = c })
+			UI.label({
+				Text = string.format("[%s] %s", tostring(row.tag), tostring(row.name)),
+				Font = UI.FONT_BOLD,
+				TextSize = 13,
+				TextColor3 = if typeof(row.color) == "Color3" then row.color else colors.text,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Position = UDim2.fromOffset(52, 0),
+				Size = UDim2.new(1, -130, 1, 0),
+				Parent = c,
+			})
+			UI.label({ Text = string.format("Lv %d · %s", row.level or 1, formatNumber(row.rep or 0)), TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.new(0, 80, 1, 0), Parent = c })
+		end
+	end
+
+	local function renderCreate(snap: any)
+		-- pending invites first
+		if #snap.invites > 0 then
+			header("CREW INVITES")
+			for _, inv in snap.invites do
+				local c = Phone.card(content, 84, nextOrder())
+				UI.label({ Text = string.format("[%s] %s", tostring(inv.tag), tostring(inv.name)), Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 18), Parent = c })
+				UI.label({ Text = "from " .. tostring(inv.by) .. " · " .. UI.timeAgo(inv.at or os.time()), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+				local join = UI.button({ Text = "JOIN", TextSize = 13, BackgroundColor3 = GOOD, Position = UDim2.fromOffset(0, 36), Size = UDim2.new(0.5, -4, 0, 28), Parent = c })
+				local decline = UI.button({ Text = "DECLINE", TextSize = 13, Position = UDim2.new(0.5, 4, 0, 36), Size = UDim2.new(0.5, -4, 0, 28), Parent = c })
+				join.Activated:Connect(function()
+					request("accept", { crewId = inv.crewId })
+				end)
+				decline.Activated:Connect(function()
+					request("decline", { crewId = inv.crewId })
+				end)
+			end
+		end
+
+		header("START A CREW")
+		local level = player:GetAttribute("Level") or 1
+		local cash = player:GetAttribute("Cash") or 0
+		local c = Phone.card(content, 418, nextOrder())
+		local reqColor = if level >= snap.minLevel and cash >= snap.fee then colors.subtext else colors.danger
+		UI.label({
+			Text = string.format("Costs %s · Level %d+ (you: Lv %d, %s)", UI.formatCash(snap.fee), snap.minLevel, level, UI.formatCash(cash)),
+			TextSize = 11,
+			TextWrapped = true,
+			TextColor3 = reqColor,
+			Size = UDim2.new(1, 0, 0, 28),
+			Parent = c,
+		})
+		local function box(y: number, placeholder: string, value: string, maxLen: number, onChange: (string) -> ()): TextBox
+			local tb = UI.new("TextBox", {
+				Text = value,
+				PlaceholderText = placeholder,
+				ClearTextOnFocus = false,
+				Font = UI.FONT,
+				TextSize = 14,
+				TextColor3 = colors.text,
+				PlaceholderColor3 = colors.subtext,
+				BackgroundColor3 = Color3.fromRGB(24, 24, 32),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Position = UDim2.fromOffset(0, y),
+				Size = UDim2.new(1, 0, 0, 32),
+				Parent = c,
+			}, { UI.corner(8), UI.padding(8) })
+			tb:GetPropertyChangedSignal("Text"):Connect(function()
+				if #tb.Text > maxLen then
+					tb.Text = tb.Text:sub(1, maxLen)
+				end
+				onChange(tb.Text)
+			end)
+			return tb
+		end
+		local preview: TextLabel
+		local function updatePreview()
+			local tag = string.upper(form.tag)
+			preview.Text = string.format("%s [%s] %s", CrewsConfig.LOGOS[form.logo], if tag ~= "" then tag else "TAG", if form.name ~= "" then form.name else "Crew name")
+			preview.TextColor3 = CrewsConfig.COLORS[form.color].color
+		end
+		box(32, "Crew name (3-20)", form.name, CrewsConfig.NAME_MAX, function(t)
+			form.name = t
+			updatePreview()
+		end)
+		box(70, "Tag (2-4 letters)", form.tag, CrewsConfig.TAG_MAX, function(t)
+			form.tag = t
+			updatePreview()
+		end)
+		UI.label({ Text = "COLOUR", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 110), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+		local swatches = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 126), Size = UDim2.new(1, 0, 0, 62), Parent = c }, {
+			UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(40, 28), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		})
+		local swatchButtons = {}
+		local function paintSwatches()
+			for i, b in swatchButtons do
+				local stroke = b:FindFirstChildOfClass("UIStroke") :: UIStroke
+				stroke.Transparency = if i == form.color then 0 else 1
+			end
+		end
+		for i, entry in CrewsConfig.COLORS do
+			local b = UI.button({ Text = "", BackgroundColor3 = entry.color, LayoutOrder = i, Parent = swatches }, { UI.stroke(Color3.new(1, 1, 1), 2, 1) })
+			b.Activated:Connect(function()
+				form.color = i
+				paintSwatches()
+				updatePreview()
+			end)
+			swatchButtons[i] = b
+		end
+		UI.label({ Text = "LOGO", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 194), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+		local logos = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 210), Size = UDim2.new(1, 0, 0, 76), Parent = c }, {
+			UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(34, 34), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		})
+		local logoButtons = {}
+		local function paintLogos()
+			for i, b in logoButtons do
+				b.BackgroundColor3 = if i == form.logo then Color3.fromRGB(80, 60, 110) else Color3.fromRGB(24, 24, 32)
+			end
+		end
+		for i, logo in CrewsConfig.LOGOS do
+			local b = UI.button({ Text = logo, TextSize = 18, LayoutOrder = i, Parent = logos })
+			b.Activated:Connect(function()
+				form.logo = i
+				paintLogos()
+				updatePreview()
+			end)
+			logoButtons[i] = b
+		end
+		preview = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 292), Size = UDim2.new(1, 0, 0, 24), Parent = c })
+		paintSwatches()
+		paintLogos()
+		updatePreview()
+		UI.label({ Text = "Names and tags are checked by Roblox's filter.", TextSize = 10, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 318), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+		local create = UI.button({ Text = "CREATE CREW · " .. UI.formatCash(snap.fee), TextSize = 14, BackgroundColor3 = CREW_COLOR, Position = UDim2.fromOffset(0, 340), Size = UDim2.new(1, 0, 0, 36), Parent = c })
+		create.Activated:Connect(function()
+			create.Text = "CREATING..."
+			if request("create", { name = form.name, tag = form.tag, color = form.color, logo = form.logo }) then
+				form.name, form.tag = "", ""
+			elseif create.Parent then
+				create.Text = "CREATE CREW · " .. UI.formatCash(snap.fee)
+			end
+		end)
+		if not snap.persistent then
+			UI.label({ Text = "Crew saving is offline here: crews last until the server closes.", TextSize = 10, TextWrapped = true, TextColor3 = colors.stamina, Position = UDim2.fromOffset(0, 380), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+		end
+	end
+
+	local function renderCrew(snap: any)
+		local crew = snap.crew
+		local rank = CrewsConfig.ROLE_RANK
+		local me = crew.myRole
+
+		-- Overview
+		local o = Phone.card(content, 120, nextOrder())
+		UI.stroke(crew.color, 2, 0.3).Parent = o
+		UI.label({ Text = tostring(crew.logo), TextSize = 40, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromOffset(52, 52), Parent = o })
+		UI.label({ Text = crew.name, Font = UI.FONT_BLACK, TextSize = 18, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(60, 2), Size = UDim2.new(1, -60, 0, 22), Parent = o })
+		UI.label({ Text = "[" .. crew.tag .. "]  ·  " .. me, Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = crew.color, Position = UDim2.fromOffset(60, 26), Size = UDim2.new(1, -60, 0, 16), Parent = o })
+		UI.label({ Text = "LEVEL " .. crew.level, Font = UI.FONT_BLACK, TextSize = 13, Position = UDim2.fromOffset(0, 60), Size = UDim2.new(0.5, 0, 0, 16), Parent = o })
+		UI.label({
+			Text = if crew.levelNext then string.format("%s / %s rep", formatNumber(crew.rep), formatNumber(crew.levelNext)) else formatNumber(crew.rep) .. " rep · MAX",
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Position = UDim2.new(0.4, 0, 0, 60),
+			Size = UDim2.new(0.6, 0, 0, 16),
+			Parent = o,
+		})
+		local _, setFill = UI.bar({ Position = UDim2.fromOffset(0, 80), Size = UDim2.new(1, 0, 0, 10), Parent = o }, crew.color)
+		if crew.levelNext then
+			setFill((crew.rep - crew.levelFloor) / math.max(1, crew.levelNext - crew.levelFloor))
+		else
+			setFill(1)
+		end
+
+		-- Stats
+		local s = Phone.card(content, 56, nextOrder())
+		local stats = {
+			{ "MEMBERS", crew.memberCount .. "/" .. crew.maxMembers },
+			{ "TOTAL WINS", formatNumber(crew.totalWins) },
+			{ "FOUNDED", if crew.createdAt > 0 then os.date("!%b %d", crew.createdAt) :: string else "-" },
+		}
+		for i, pair in stats do
+			UI.label({ Text = pair[1], Font = UI.FONT_BLACK, TextSize = 10, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new((i - 1) / 3, 0, 0, 0), Size = UDim2.new(1 / 3, 0, 0, 14), Parent = s })
+			UI.label({ Text = pair[2], Font = UI.FONT_BLACK, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new((i - 1) / 3, 0, 0, 14), Size = UDim2.new(1 / 3, 0, 0, 20), Parent = s })
+		end
+
+		-- Announcement
+		header("ANNOUNCEMENT")
+		local ann = crew.announcement
+		local canPost = rank[me] and rank[me] >= rank.Officer
+		local a = Phone.card(content, if canPost then 142 else 72, nextOrder())
+		UI.label({
+			Text = if ann then ann.text else "No announcement yet.",
+			TextSize = 13,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextColor3 = if ann then colors.text else colors.subtext,
+			Size = UDim2.new(1, 0, 0, 34),
+			Parent = a,
+		})
+		if ann then
+			UI.label({ Text = "- " .. tostring(ann.by) .. ", " .. UI.timeAgo(ann.at or os.time()), TextSize = 10, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 14), Parent = a })
+		end
+		if canPost then
+			local tb = UI.new("TextBox", {
+				Text = "",
+				PlaceholderText = "Write an announcement...",
+				ClearTextOnFocus = false,
+				MultiLine = false,
+				TextWrapped = true,
+				Font = UI.FONT,
+				TextSize = 13,
+				TextColor3 = colors.text,
+				PlaceholderColor3 = colors.subtext,
+				BackgroundColor3 = Color3.fromRGB(24, 24, 32),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Position = UDim2.fromOffset(0, 52),
+				Size = UDim2.new(1, 0, 0, 34),
+				Parent = a,
+			}, { UI.corner(8), UI.padding(6) })
+			tb:GetPropertyChangedSignal("Text"):Connect(function()
+				if #tb.Text > CrewsConfig.ANNOUNCE_MAX then
+					tb.Text = tb.Text:sub(1, CrewsConfig.ANNOUNCE_MAX)
+				end
+			end)
+			local post = UI.button({ Text = "POST", TextSize = 13, BackgroundColor3 = CREW_COLOR, Position = UDim2.fromOffset(0, 90), Size = UDim2.new(1, 0, 0, 28), Parent = a })
+			post.Activated:Connect(function()
+				if tb.Text:match("%S") then
+					request("announce", { text = tb.Text })
+				end
+			end)
+		end
+
+		-- Mission
+		header("WEEKLY CREW MISSION")
+		local mission = crew.mission
+		local m = Phone.card(content, 78, nextOrder())
+		UI.label({ Text = (if mission.done then "✅ " else "🎯 ") .. mission.title, Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 18), Parent = m })
+		local _, setMission = UI.bar({ Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 10), Parent = m }, if mission.done then GOOD else colors.stamina)
+		setMission(mission.progress / math.max(1, mission.goal))
+		UI.label({ Text = string.format("%s / %s · reward %s crew rep", formatNumber(mission.progress), formatNumber(mission.goal), formatNumber(mission.reward)), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 0, 14), Parent = m })
+		UI.label({ Text = timeLeft(mission.endsAt - os.time()), TextSize = 10, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 52), Size = UDim2.new(1, 0, 0, 12), Parent = m })
+
+		-- Members
+		header(string.format("MEMBERS  %d/%d", crew.memberCount, crew.maxMembers))
+		for _, member in crew.members do
+			local isMe = member.userId == player.UserId
+			local tools = {}
+			if not isMe then
+				if me == "Leader" then
+					if member.role == "Member" then
+						table.insert(tools, { "PROMOTE", "promote", nil })
+					elseif member.role == "Officer" then
+						table.insert(tools, { "DEMOTE", "demote", nil })
+					end
+					table.insert(tools, { "LEADER", "transfer", "SURE?" })
+					table.insert(tools, { "KICK", "kick", "SURE?" })
+				elseif me == "Officer" and member.role == "Member" then
+					table.insert(tools, { "KICK", "kick", "SURE?" })
+				end
+			end
+			local c = Phone.card(content, if #tools > 0 then 78 else 46, nextOrder())
+			UI.new("Frame", {
+				BackgroundColor3 = if member.online then GOOD else Color3.fromRGB(90, 90, 100),
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.fromOffset(0, 11),
+				Size = UDim2.fromOffset(8, 8),
+				Parent = c,
+			}, { UI.new("UICorner", { CornerRadius = UDim.new(0.5, 0) }) })
+			UI.label({ Text = member.name .. (if isMe then " (you)" else ""), Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(14, 2), Size = UDim2.new(1, -100, 0, 18), Parent = c })
+			UI.label({
+				Text = member.role .. " · " .. formatNumber(member.wins or 0) .. " W",
+				TextSize = 11,
+				TextColor3 = if member.role == "Leader" then Color3.fromRGB(255, 205, 60) elseif member.role == "Officer" then crew.color else colors.subtext,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, 0, 0, 2),
+				Size = UDim2.fromOffset(100, 18),
+				Parent = c,
+			})
+			UI.label({
+				Text = if member.here then "Online · this server" elseif member.online then "Online" else ("Last seen " .. UI.timeAgo(if member.seen > 0 then member.seen else os.time())),
+				TextSize = 10,
+				TextColor3 = colors.subtext,
+				Position = UDim2.fromOffset(14, 20),
+				Size = UDim2.new(1, -14, 0, 12),
+				Parent = c,
+			})
+			for i, tool in tools do
+				local w = 1 / #tools
+				local props = {
+					Text = tool[1],
+					TextSize = 11,
+					BackgroundColor3 = if tool[2] == "kick" then colors.danger else Color3.fromRGB(50, 50, 64),
+					Position = UDim2.new((i - 1) * w, if i > 1 then 3 else 0, 0, 40),
+					Size = UDim2.new(w, -3, 0, 26),
+					Parent = c,
+				}
+				local function run()
+					request(tool[2], { userId = member.userId })
+				end
+				if tool[3] then
+					confirmButton(props, tool[2] .. member.userId, tool[3], run)
+				else
+					UI.button(props).Activated:Connect(run)
+				end
+			end
+		end
+
+		-- Invite people in this server
+		if canInvite() then
+			header("INVITE PLAYERS IN THIS SERVER")
+			local any = false
+			for _, other in Players:GetPlayers() do
+				local theirCrew = other:GetAttribute("CrewId")
+				if other ~= player and (theirCrew == nil or theirCrew == "") and other:GetAttribute("DataLoaded") then
+					any = true
+					local row = Phone.card(content, 40, nextOrder())
+					UI.label({ Text = other.DisplayName, Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -70, 1, 0), Parent = row })
+					local inv = UI.button({ Text = "INVITE", TextSize = 12, BackgroundColor3 = CREW_COLOR, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(62, 26), Parent = row })
+					inv.Activated:Connect(function()
+						inv.Text = "..."
+						if not request("invite", { target = other }) and inv.Parent then
+							inv.Text = "INVITE"
+						end
+					end)
+				end
+			end
+			if not any then
+				note("Everyone here is already in a crew.")
+			end
+		end
+
+		leaderboard(snap.leaderboard, crew.id)
+
+		-- Leave / disband
+		local f = Phone.card(content, 36, nextOrder())
+		f.BackgroundTransparency = 1
+		if me == "Leader" then
+			confirmButton({ Text = "LEAVE", TextSize = 13, BackgroundColor3 = colors.danger, Size = UDim2.new(0.5, -4, 1, 0), Parent = f }, "leave", "TAP AGAIN", function()
+				request("leave")
+			end)
+			confirmButton({ Text = "DISBAND CREW", TextSize = 13, BackgroundColor3 = Color3.fromRGB(120, 40, 40), Position = UDim2.new(0.5, 4, 0, 0), Size = UDim2.new(0.5, -4, 1, 0), Parent = f }, "disband", "DISBAND?", function()
+				request("disband")
+			end)
+		else
+			confirmButton({ Text = "LEAVE CREW", TextSize = 13, BackgroundColor3 = colors.danger, Size = UDim2.fromScale(1, 1), Parent = f }, "leave", "TAP AGAIN TO LEAVE", function()
+				request("leave")
+			end)
+		end
+	end
+
+	local renderToken = 0
+	local function render()
+		renderToken += 1
+		local token = renderToken
+		local snap = fetch()
+		if snap == nil then
+			-- the server rate-limits reads; ask again in a moment
+			task.wait(0.6)
+			if token ~= renderToken then
+				return
+			end
+			snap = fetch()
+		end
+		if token ~= renderToken then
+			return -- a newer refresh is on its way
+		end
+		Phone.clear(content)
+		order = 0
+		if type(snap) ~= "table" or not snap.loaded then
+			note("Loading your crew...")
+			return
+		end
+		if snap.crew then
+			renderCrew(snap)
+		else
+			renderCreate(snap)
+			leaderboard(snap.leaderboard, nil)
+		end
+	end
+	return render
+end
+
+---------------------------------------------------------------------------
+-- Invite prompt (used when there's no Messages app)
+---------------------------------------------------------------------------
+local function buildPopup()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindCrews",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 6,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	invitePopup = UI.new("Frame", {
+		Name = "CrewInvite",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -350),
+		Size = UDim2.fromOffset(330, 92),
+		BackgroundColor3 = colors.panel,
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.stroke(CREW_COLOR, 1.5, 0.2), UI.padding(10) })
+	inviteText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 34), Parent = invitePopup })
+	local yes = UI.button({ Text = "JOIN CREW", TextSize = 14, BackgroundColor3 = GOOD, Position = UDim2.new(0, 0, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = invitePopup })
+	local later = UI.button({ Text = "LATER", TextSize = 14, Position = UDim2.new(0.5, 4, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = invitePopup })
+	yes.Activated:Connect(function()
+		local inv = popupInvite
+		popupInvite = nil
+		invitePopup.Visible = false
+		if inv then
+			request("accept", { crewId = inv.crewId })
+		end
+	end)
+	later.Activated:Connect(function()
+		-- the invite stays in the Crew app for a few days
+		popupInvite = nil
+		invitePopup.Visible = false
+	end)
+end
+
+local function showInvite(data: any)
+	if type(data) ~= "table" or type(data.crewId) ~= "string" then
+		return
+	end
+	popupInvite = { crewId = data.crewId }
+	inviteText.Text = string.format("🛡️ %s invited you to [%s] %s", tostring(data.by), tostring(data.tag), tostring(data.name))
+	invitePopup.Visible = true
+	local mine = popupInvite
+	task.delay(45, function()
+		if popupInvite == mine then
+			popupInvite = nil
+			invitePopup.Visible = false
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Social menu
+---------------------------------------------------------------------------
+local function addMenuActions()
+	local module = script.Parent:FindFirstChild("Social")
+	if not module then
+		return
+	end
+	local ok, Social = pcall(require, module)
+	if not ok or type(Social) ~= "table" or type(Social.addMenuAction) ~= "function" then
+		return
+	end
+	Social.addMenuAction({
+		id = "CrewInvite",
+		label = "INVITE TO CREW",
+		order = 21,
+		visible = function(target: Player)
+			local theirs = target:GetAttribute("CrewId")
+			return canInvite() and (theirs == nil or theirs == "")
+		end,
+		run = function(target: Player)
+			task.spawn(request, "invite", { target = target })
+		end,
+	})
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Crews.start()
+	Phone.addApp({ id = "Crew", label = "Crew", icon = "🛡️", color = CREW_COLOR }, function(content)
+		return buildApp(content)
+	end)
+
+	task.spawn(function()
+		buildPopup()
+		local remotes = shared:WaitForChild("Remotes")
+		CrewRequest = remotes:WaitForChild("CrewRequest") :: RemoteFunction
+		CrewGet = remotes:WaitForChild("CrewGet") :: RemoteFunction
+		local CrewEvent = remotes:WaitForChild("CrewEvent") :: RemoteEvent
+		CrewEvent.OnClientEvent:Connect(function(kind: any, data: any)
+			if kind == "changed" then
+				Phone.refresh("Crew")
+			elseif kind == "invite" then
+				showInvite(data)
+				Phone.refresh("Crew")
+			end
+		end)
+	end)
+
+	task.spawn(addMenuActions)
+end
+
+return Crews
+]=====])
+put(client, 'ModuleScript', 'Emotes', [=====[
+-- CITY GRIND: emote wheel (sections 31, 95). Client side.
+-- "." (period) / gamepad DPad-Right / on-screen EMOTE button opens a radial wheel
+-- with your 8 equipped emotes. Click / tap a slot, press 1-8, or hold "." and
+-- release over a slot. Gamepad: point the right stick, press A. EDIT lets you
+-- choose which emotes sit in the 8 slots (saved on the server).
+-- The server plays every emote so everyone sees it; moving or jumping stops
+-- looping emotes. Paired emotes (High Five, Fist Bump, Handshake) ask the
+-- nearest player (or the player you opened the wheel on) to accept.
+--
+-- API: Emotes.play(name, target: Player?) · Emotes.stop() · Emotes.open(target: Player?) · Emotes.close()
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local EmotesConfig = require(shared:WaitForChild("EmotesConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Emotes = {}
+
+local WHEEL_ACTION = "CityEmoteWheel"
+local RADIUS = 125
+local SLOT_SIZE = 74
+local PAIRED_COLOR = Color3.fromRGB(90, 170, 255)
+
+local remotes: Instance? = nil
+local EmoteAction: RemoteEvent? = nil
+local gui: ScreenGui? = nil
+local wheel: Frame
+local backdrop: TextButton
+local slotButtons: { TextButton } = {}
+local centerLabel: TextLabel
+local centerSub: TextLabel
+local editPanel: Frame
+local editSlotButtons: { TextButton } = {}
+local editGrid: ScrollingFrame
+local pairCard: Frame
+local pairText: TextLabel
+
+local isOpen = false
+local hovered: number? = nil
+local pairTarget: Player? = nil -- set when the wheel was opened from a player's menu
+local openedAt = 0
+local editSlot = 1
+local pairRequestId: string? = nil
+local pairToken = 0
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function equipped(): { string }
+	local raw = player:GetAttribute("EmoteSlots")
+	local list = {}
+	if type(raw) == "string" and raw ~= "" then
+		for id in raw:gmatch("[^,]+") do
+			table.insert(list, id)
+		end
+	end
+	for i = 1, EmotesConfig.SLOTS do
+		if not list[i] or not EmotesConfig.BY_ID[list[i]] then
+			list[i] = EmotesConfig.DEFAULT_SLOTS[i]
+		end
+	end
+	return list
+end
+
+local function myRoot(): BasePart?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function nearestPlayer(): Player?
+	local root = myRoot()
+	if not root then
+		return nil
+	end
+	local best, bestScore = nil, math.huge
+	for _, other in Players:GetPlayers() do
+		if other ~= player then
+			local character = other.Character
+			local r = character and character:FindFirstChild("HumanoidRootPart")
+			if r and r:IsA("BasePart") then
+				local offset = r.Position - root.Position
+				local dist = offset.Magnitude
+				if dist <= EmotesConfig.PAIR_RANGE then
+					-- prefer whoever you're facing
+					local facing = if dist > 0.1 then root.CFrame.LookVector:Dot(offset.Unit) else 1
+					local score = dist - facing * 4
+					if score < bestScore then
+						best, bestScore = other, score
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function send(...)
+	if EmoteAction then
+		EmoteAction:FireServer(...)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+-- Plays an emote by id or name ("Wave", "high five", "Dance"...). Paired emotes
+-- need a partner: `target`, or else the nearest player in range.
+function Emotes.play(name: string, target: Player?): boolean
+	local emote = EmotesConfig.find(name)
+	if not emote then
+		return false
+	end
+	if emote.paired then
+		local partner = target or nearestPlayer()
+		if not partner then
+			HUD.push(emote.name:upper(), "Stand next to someone to " .. emote.name:lower() .. ".")
+			return false
+		end
+		send("pairRequest", partner, emote.id)
+		return true
+	end
+	send("play", emote.id)
+	return true
+end
+
+function Emotes.stop()
+	send("stop")
+end
+
+---------------------------------------------------------------------------
+-- Wheel
+---------------------------------------------------------------------------
+local function slotAngle(i: number): number
+	return math.rad(-90 + (i - 1) * 360 / EmotesConfig.SLOTS)
+end
+
+local function refreshWheel()
+	local list = equipped()
+	for i, button in slotButtons do
+		local emote = EmotesConfig.BY_ID[list[i]]
+		local icon = button:FindFirstChild("Icon") :: TextLabel
+		local label = button:FindFirstChild("Name") :: TextLabel
+		local key = button:FindFirstChild("Key") :: TextLabel
+		icon.Text = emote.icon
+		label.Text = emote.name
+		key.Text = tostring(i)
+		local stroke = button:FindFirstChildOfClass("UIStroke") :: UIStroke
+		stroke.Color = if emote.paired then PAIRED_COLOR else colors.accent
+		local selected = hovered == i
+		button.BackgroundColor3 = if selected then Color3.fromRGB(60, 60, 78) else colors.panel
+		stroke.Transparency = if selected then 0 else 0.6
+	end
+	local h = hovered and EmotesConfig.BY_ID[list[hovered]]
+	if h then
+		centerLabel.Text = h.name
+		centerSub.Text = if h.paired then (if pairTarget then "with " .. pairTarget.DisplayName else "with nearest player") elseif h.loop then "loops · move to stop" else h.category
+	else
+		centerLabel.Text = "EMOTES"
+		centerSub.Text = if pairTarget then "Paired emotes: " .. pairTarget.DisplayName else (if player:GetAttribute("Emote") ~= "" and player:GetAttribute("Emote") ~= nil then "tap STOP to end" else "pick one")
+	end
+end
+
+local function setHovered(i: number?)
+	if hovered ~= i then
+		hovered = i
+		refreshWheel()
+	end
+end
+
+function Emotes.close()
+	if not isOpen then
+		return
+	end
+	isOpen = false
+	hovered = nil
+	wheel.Visible = false
+	editPanel.Visible = false
+	backdrop.Visible = false
+	ContextActionService:UnbindAction("CityEmoteWheelKeys")
+end
+
+local function choose(i: number)
+	local id = equipped()[i]
+	local target = pairTarget
+	Emotes.close()
+	if id then
+		Emotes.play(id, target)
+	end
+end
+
+function Emotes.open(target: Player?)
+	if not gui then
+		return
+	end
+	pairTarget = target
+	isOpen = true
+	openedAt = os.clock()
+	hovered = nil
+	editPanel.Visible = false
+	wheel.Visible = true
+	backdrop.Visible = true
+	-- shrink to fit small (phone) screens
+	local camera = Workspace.CurrentCamera
+	local viewport = if camera then camera.ViewportSize else Vector2.new(1000, 800)
+	local fit = math.clamp((math.min(viewport.X, viewport.Y) - 30) / wheel.Size.X.Offset, 0.5, 1)
+	local scale = wheel:FindFirstChildOfClass("UIScale") :: UIScale
+	scale.Scale = fit * 0.85
+	TweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back), { Scale = fit }):Play()
+	refreshWheel()
+	-- 1-8 pick a slot, A picks the highlighted one, B / Esc closes
+	local keys = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five, Enum.KeyCode.Six, Enum.KeyCode.Seven, Enum.KeyCode.Eight }
+	ContextActionService:BindActionAtPriority("CityEmoteWheelKeys", function(_, state, input)
+		if state ~= Enum.UserInputState.Begin then
+			return Enum.ContextActionResult.Sink
+		end
+		local index = table.find(keys, input.KeyCode)
+		if index then
+			choose(index)
+		elseif input.KeyCode == Enum.KeyCode.ButtonA then
+			if hovered then
+				choose(hovered)
+			end
+		else
+			Emotes.close()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.ButtonA, Enum.KeyCode.ButtonB, Enum.KeyCode.Escape, table.unpack(keys))
+end
+
+local function toggle()
+	if isOpen then
+		Emotes.close()
+	else
+		Emotes.open(nil)
+	end
+end
+
+local function onWheelKey(_, state: Enum.UserInputState, input: InputObject)
+	if state == Enum.UserInputState.Begin then
+		if UserInputService:GetFocusedTextBox() then
+			return Enum.ContextActionResult.Pass
+		end
+		toggle()
+	elseif state == Enum.UserInputState.End and isOpen and input.UserInputType == Enum.UserInputType.Keyboard then
+		-- hold-and-release: pick whatever the mouse is pointing at
+		if os.clock() - openedAt > 0.3 and hovered then
+			choose(hovered)
+		end
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function hoverFromVector(v: Vector2, deadzone: number)
+	if v.Magnitude < deadzone then
+		return nil
+	end
+	local angle = math.deg(math.atan2(v.Y, v.X)) + 90 -- 0 = up, clockwise
+	local step = 360 / EmotesConfig.SLOTS
+	return (math.floor(((angle + step / 2) % 360) / step)) + 1
+end
+
+---------------------------------------------------------------------------
+-- Edit panel
+---------------------------------------------------------------------------
+local function refreshEdit()
+	local list = equipped()
+	for i, button in editSlotButtons do
+		local emote = EmotesConfig.BY_ID[list[i]]
+		button.Text = emote.icon
+		local stroke = button:FindFirstChildOfClass("UIStroke") :: UIStroke
+		stroke.Transparency = if i == editSlot then 0 else 0.8
+		button.BackgroundColor3 = if i == editSlot then Color3.fromRGB(70, 50, 40) else colors.panelLight
+	end
+	for _, child in editGrid:GetChildren() do
+		if child:IsA("TextButton") then
+			local id = child:GetAttribute("EmoteId")
+			local slot = table.find(list, id)
+			local tagLabel = child:FindFirstChild("Slot") :: TextLabel
+			tagLabel.Text = if slot then "#" .. slot else ""
+			child.BackgroundColor3 = if slot == editSlot then Color3.fromRGB(70, 50, 40) else colors.panelLight
+		end
+	end
+end
+
+local function openEdit()
+	editSlot = hovered or 1
+	wheel.Visible = false
+	editPanel.Visible = true
+	refreshEdit()
+end
+
+---------------------------------------------------------------------------
+-- Paired request prompt (someone asked you)
+---------------------------------------------------------------------------
+local function respondPair(accept: boolean)
+	if pairRequestId then
+		send("pairRespond", pairRequestId, accept)
+	end
+	pairRequestId = nil
+	pairCard.Visible = false
+	ContextActionService:UnbindAction("CityEmotePairRespond")
+end
+
+local function showPairPrompt(data: any)
+	if type(data) ~= "table" or type(data.id) ~= "string" then
+		return
+	end
+	local emote = EmotesConfig.BY_ID[data.emote]
+	if not emote then
+		return
+	end
+	pairRequestId = data.id
+	pairToken += 1
+	local token = pairToken
+	pairText.Text = string.format("%s %s wants a %s!", emote.icon, tostring(data.fromName), emote.name:upper())
+	pairCard.Visible = true
+	-- Enter / gamepad Y accepts, Backspace / gamepad B declines (Social uses keyboard Y for its own requests)
+	ContextActionService:BindActionAtPriority("CityEmotePairRespond", function(_, state, input)
+		if state == Enum.UserInputState.Begin then
+			respondPair(input.KeyCode == Enum.KeyCode.Return or input.KeyCode == Enum.KeyCode.ButtonY)
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Return, Enum.KeyCode.ButtonY, Enum.KeyCode.Backspace)
+	task.delay(tonumber(data.seconds) or EmotesConfig.PAIR_REQUEST_SECONDS, function()
+		if token == pairToken and pairCard.Visible then
+			pairRequestId = nil
+			pairCard.Visible = false
+			ContextActionService:UnbindAction("CityEmotePairRespond")
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Build UI
+---------------------------------------------------------------------------
+local function buildUI()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindEmotes",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 8,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+
+	-- Wheel
+	local size = (RADIUS + SLOT_SIZE) * 2
+	wheel = UI.new("Frame", {
+		Name = "Wheel",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(size, size),
+		Visible = false,
+		Parent = gui,
+	}, { UI.new("UIScale", { Scale = 1 }) })
+	local ring = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(RADIUS * 2 + SLOT_SIZE + 16, RADIUS * 2 + SLOT_SIZE + 16),
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.45,
+		Parent = wheel,
+	}, { UI.new("UICorner", { CornerRadius = UDim.new(0.5, 0) }) })
+	-- clicking anywhere outside the wheel closes it
+	backdrop = UI.new("TextButton", {
+		Name = "Backdrop",
+		Text = "",
+		AutoButtonColor = false,
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.7,
+		Size = UDim2.fromScale(1, 1),
+		Visible = false,
+		ZIndex = 0,
+		Parent = gui,
+	})
+	backdrop.Activated:Connect(function()
+		Emotes.close()
+	end)
+	ring.Active = true -- clicks on the ring don't close the wheel
+
+	local center = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(150, 150),
+		BackgroundColor3 = colors.panel,
+		Parent = wheel,
+	}, { UI.new("UICorner", { CornerRadius = UDim.new(0.5, 0) }), UI.stroke(colors.accent, 2, 0.4) })
+	centerLabel = UI.label({ Text = "EMOTES", Font = UI.FONT_BLACK, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 20), Parent = center })
+	centerSub = UI.label({ Text = "", TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(10, 46), Size = UDim2.new(1, -20, 0, 28), Parent = center })
+	local stopButton = UI.button({ Text = "STOP", TextSize = 13, BackgroundColor3 = colors.danger, Position = UDim2.new(0.5, -58, 0, 84), Size = UDim2.fromOffset(54, 28), Parent = center })
+	stopButton.Activated:Connect(function()
+		Emotes.stop()
+		Emotes.close()
+	end)
+	local editButton = UI.button({ Text = "EDIT", TextSize = 13, Position = UDim2.new(0.5, 4, 0, 84), Size = UDim2.fromOffset(54, 28), Parent = center })
+	editButton.Activated:Connect(openEdit)
+
+	for i = 1, EmotesConfig.SLOTS do
+		local a = slotAngle(i)
+		local button = UI.button({
+			Name = "Slot" .. i,
+			Text = "",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, math.cos(a) * RADIUS, 0.5, math.sin(a) * RADIUS),
+			Size = UDim2.fromOffset(SLOT_SIZE, SLOT_SIZE),
+			BackgroundColor3 = colors.panel,
+			AutoButtonColor = false,
+			Parent = wheel,
+		}, { UI.stroke(colors.accent, 2, 0.6) })
+		UI.corner(SLOT_SIZE // 2).Parent = button
+		UI.label({ Name = "Icon", Text = "", TextSize = 28, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 0, 32), Parent = button })
+		UI.label({ Name = "Name", Text = "", Font = UI.FONT_BOLD, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(4, 42), Size = UDim2.new(1, -8, 0, 14), Parent = button })
+		UI.label({ Name = "Key", Text = "", TextSize = 10, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 56), Size = UDim2.new(1, 0, 0, 12), Parent = button })
+		button.MouseEnter:Connect(function()
+			setHovered(i)
+		end)
+		button.Activated:Connect(function()
+			choose(i)
+		end)
+		slotButtons[i] = button
+	end
+
+	-- Edit panel
+	editPanel = UI.new("Frame", {
+		Name = "EditEmotes",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(420, 430),
+		BackgroundColor3 = colors.panel,
+		Active = true,
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(colors.accent, 1.5, 0.4), UI.padding(14), UI.new("UISizeConstraint", { MaxSize = Vector2.new(420, 430) }) })
+	UI.label({ Text = "EQUIP EMOTES", Font = UI.FONT_BLACK, TextSize = 18, Size = UDim2.new(1, -80, 0, 22), Parent = editPanel })
+	UI.label({ Text = "Pick a slot, then an emote.", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 16), Parent = editPanel })
+	local done = UI.button({ Text = "DONE", TextSize = 13, BackgroundColor3 = colors.accent, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(70, 30), Parent = editPanel })
+	done.Activated:Connect(function()
+		editPanel.Visible = false
+		wheel.Visible = isOpen
+		backdrop.Visible = isOpen
+		refreshWheel()
+	end)
+	local slotRow = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 46), Size = UDim2.new(1, 0, 0, 44), Parent = editPanel }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	for i = 1, EmotesConfig.SLOTS do
+		local b = UI.button({ Text = "", TextSize = 22, Size = UDim2.fromOffset(42, 42), LayoutOrder = i, Parent = slotRow }, { UI.stroke(colors.accent, 2, 0.8) })
+		b.Activated:Connect(function()
+			editSlot = i
+			refreshEdit()
+		end)
+		editSlotButtons[i] = b
+	end
+	editGrid = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 100),
+		Size = UDim2.new(1, 0, 1, -100),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 4,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = editPanel,
+	}, { UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(92, 70), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+	for order, emote in EmotesConfig.LIST do
+		local b = UI.button({ Text = "", LayoutOrder = order, Parent = editGrid })
+		b:SetAttribute("EmoteId", emote.id)
+		UI.label({ Text = emote.icon, TextSize = 24, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 6), Size = UDim2.new(1, 0, 0, 30), Parent = b })
+		UI.label({ Text = emote.name, Font = UI.FONT_BOLD, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(4, 38), Size = UDim2.new(1, -8, 0, 14), Parent = b })
+		UI.label({ Text = if emote.paired then "PAIRED" else emote.category:upper(), TextSize = 9, TextColor3 = if emote.paired then PAIRED_COLOR else colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 53), Size = UDim2.new(1, 0, 0, 12), Parent = b })
+		UI.label({ Name = "Slot", Text = "", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.accent, Position = UDim2.fromOffset(6, 4), Size = UDim2.fromOffset(24, 12), Parent = b })
+		b.Activated:Connect(function()
+			send("equip", editSlot, emote.id)
+			editSlot = editSlot % EmotesConfig.SLOTS + 1
+		end)
+	end
+
+	-- Paired request card
+	pairCard = UI.new("Frame", {
+		Name = "PairRequest",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -150),
+		Size = UDim2.fromOffset(330, 92),
+		BackgroundColor3 = colors.panel,
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.stroke(PAIRED_COLOR, 1.5, 0.2), UI.padding(10) })
+	pairText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 34), Parent = pairCard })
+	local yes = UI.button({ Text = "ACCEPT", TextSize = 14, BackgroundColor3 = Color3.fromRGB(60, 170, 90), Position = UDim2.new(0, 0, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = pairCard })
+	local no = UI.button({ Text = "NO THANKS", TextSize = 14, Position = UDim2.new(0.5, 4, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = pairCard })
+	yes.Activated:Connect(function()
+		respondPair(true)
+	end)
+	no.Activated:Connect(function()
+		respondPair(false)
+	end)
+	if UserInputService.KeyboardEnabled then
+		yes.Text = "ACCEPT (Enter)"
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function hookCharacter(character: Model)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if not humanoid or not humanoid:IsA("Humanoid") then
+		return
+	end
+	-- moving or jumping stops a looping emote right away (the server checks too)
+	humanoid:GetPropertyChangedSignal("MoveDirection"):Connect(function()
+		local current = player:GetAttribute("Emote")
+		if humanoid.MoveDirection.Magnitude > 0.1 and type(current) == "string" and current ~= "" then
+			local emote = EmotesConfig.BY_ID[current]
+			if emote and not emote.paired then
+				send("stop")
+			end
+		end
+	end)
+	humanoid.Jumping:Connect(function(active)
+		local current = player:GetAttribute("Emote")
+		if active and type(current) == "string" and current ~= "" then
+			send("stop")
+		end
+	end)
+end
+
+local function addMenuActions()
+	local module = script.Parent:FindFirstChild("Social")
+	if not module then
+		return
+	end
+	local ok, Social = pcall(require, module)
+	if not ok or type(Social) ~= "table" or type(Social.addMenuAction) ~= "function" then
+		return
+	end
+	Social.addMenuAction({
+		id = "Emotes",
+		label = "EMOTES",
+		order = 30,
+		run = function(target: Player)
+			Emotes.open(target)
+		end,
+	})
+end
+
+function Emotes.start()
+	task.spawn(function()
+		remotes = shared:WaitForChild("Remotes")
+		EmoteAction = (remotes :: Instance):WaitForChild("EmoteAction") :: RemoteEvent
+		local EmoteEvent = (remotes :: Instance):WaitForChild("EmoteEvent") :: RemoteEvent
+		EmoteEvent.OnClientEvent:Connect(function(kind: any, data: any)
+			if kind == "pairPrompt" then
+				showPairPrompt(data)
+			end
+		end)
+	end)
+
+	task.spawn(function()
+		buildUI()
+		player:GetAttributeChangedSignal("EmoteSlots"):Connect(function()
+			if isOpen then
+				refreshWheel()
+			end
+			if editPanel.Visible then
+				refreshEdit()
+			end
+		end)
+
+		ContextActionService:BindAction(WHEEL_ACTION, onWheelKey, true, Enum.KeyCode.Period, Enum.KeyCode.DPadRight)
+		ContextActionService:SetTitle(WHEEL_ACTION, "Emote")
+		ContextActionService:SetPosition(WHEEL_ACTION, UDim2.new(1, -230, 1, -160))
+
+		-- mouse / right-stick highlighting while the wheel is open
+		UserInputService.InputChanged:Connect(function(input)
+			if not isOpen or not wheel.Visible then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement then
+				local c = wheel.AbsolutePosition + wheel.AbsoluteSize / 2
+				local scale = (wheel:FindFirstChildOfClass("UIScale") :: UIScale).Scale
+				local p = Vector2.new(input.Position.X, input.Position.Y) - c
+				if p.Magnitude > 60 * scale and p.Magnitude < (RADIUS + SLOT_SIZE) * scale then
+					setHovered(hoverFromVector(p, 60 * scale))
+				end
+			elseif input.KeyCode == Enum.KeyCode.Thumbstick2 or input.KeyCode == Enum.KeyCode.Thumbstick1 then
+				local v = Vector2.new(input.Position.X, -input.Position.Y)
+				local i = hoverFromVector(v, 0.5)
+				if i then
+					setHovered(i)
+				end
+			end
+		end)
+	end)
+
+	if player.Character then
+		task.spawn(hookCharacter, player.Character)
+	end
+	player.CharacterAdded:Connect(function(character)
+		Emotes.close()
+		hookCharacter(character)
+	end)
+
+	task.spawn(addMenuActions)
+end
+
+return Emotes
+]=====])
 put(client, 'ModuleScript', 'Gym', [=====[
 -- CITY GRIND: Iron Box Gym client (sections 56, 69, 110, 120).
 -- Draws the rep meter while you train, sends button presses (with the server
@@ -16705,7 +24716,7 @@ local function buildControlsHint()
 		return
 	end
 	UI.label({
-		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal",
+		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal · T Player menu · . Emotes",
 		TextSize = 13,
 		TextColor3 = colors.subtext,
 		TextStrokeTransparency = 0.6,
@@ -17361,6 +25372,1208 @@ end
 
 return Jobs
 ]=====])
+put(client, 'ModuleScript', 'Messages', [=====[
+-- CITY GRIND: the phone's Messages app (sections 17, 18, 36, 46, 48, 109).
+-- Conversation list, chat bubbles, emoji quick-picker, invite cards with
+-- ACCEPT / DECLINE, group chats (create, rename, members, mute, leave) and
+-- Contacts. Everything is decided by the server (Messages.luau): this module
+-- only shows what it's sent and asks it to do things. Blocked / muted players'
+-- messages are hidden here too (Social.isBlocked / Social.isMuted).
+-- Also adds SEND MESSAGE / INVITE TO BASKETBALL / INVITE TO MY PLACE to the
+-- player interaction menu (Social.addMenuAction).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Cfg = require(shared:WaitForChild("MessagesConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Messages = {}
+
+local APP_ID = "Messages"
+local BLUE = Color3.fromRGB(40, 130, 255)
+local GREEN = Color3.fromRGB(60, 190, 100)
+local BUBBLE_MAX = 178
+
+local Request: RemoteFunction? = nil
+local convos: { [string]: any } = {} -- conversation id -> summary from the server
+
+-- UI state
+local content: ScrollingFrame -- the app's scrolling list (list / contacts / pickers / settings)
+local appFrame: Frame
+local chatView: Frame
+local chatTitle: TextLabel
+local chatAction: TextButton
+local chatDelete: TextButton
+local msgList: ScrollingFrame
+local composer: Frame
+local readOnlyNote: TextLabel
+local input: TextBox
+local banner: TextLabel
+local view = "list" -- list | contacts | new | newgroup | chat | settings | add
+local currentId: string? = nil
+local currentSummary: any = nil
+local currentMsgs: { any } = {}
+local inviteCards: { [string]: (string) -> () } = {}
+local pendingChat: string? = nil
+local iconBadge: TextLabel? = nil
+local renderQueued = false
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local socialModule: any = nil
+local function social(): any?
+	if socialModule == nil then
+		local m = script.Parent:FindFirstChild("Social")
+		if not m then
+			return nil
+		end
+		local ok, result = pcall(require, m)
+		socialModule = if ok then result else false
+	end
+	return socialModule or nil
+end
+
+-- Hidden = you blocked/muted them or they blocked you.
+local function hidden(userId: number?): boolean
+	if not userId or userId == 0 or userId == player.UserId then
+		return false
+	end
+	local S = social()
+	if not S then
+		return false
+	end
+	for _, fnName in { "isBlocked", "isMuted" } do
+		local fn = S[fnName]
+		if type(fn) == "function" then
+			local ok, result = pcall(fn, userId)
+			if ok and result then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function request(action: string, payload: any?): (boolean, string?, any)
+	if not Request then
+		return false, "Messages are still loading.", nil
+	end
+	local ok, success, message, result = pcall(function()
+		return (Request :: RemoteFunction):InvokeServer(action, payload)
+	end)
+	if not ok then
+		return false, "Couldn't reach the server.", nil
+	end
+	return success == true, message, result
+end
+
+-- Short feedback: a banner in the app when it's on screen, otherwise a notification.
+local function say(text: string?)
+	if not text or text == "" then
+		return
+	end
+	if banner and Phone.isOpen() and Phone.currentPage() == APP_ID then
+		banner.Text = text
+		banner.Visible = true
+		local stamp = os.clock()
+		banner:SetAttribute("Stamp", stamp)
+		task.delay(3, function()
+			if banner:GetAttribute("Stamp") == stamp then
+				banner.Visible = false
+			end
+		end)
+	else
+		HUD.push("MESSAGES", text)
+	end
+end
+
+local function textHeight(text: string, size: number, width: number, font: Enum.Font?): Vector2
+	local ok, bounds = pcall(function()
+		return TextService:GetTextSize(text, size, font or UI.FONT, Vector2.new(width, 10000))
+	end)
+	return if ok then bounds else Vector2.new(width, size * 2)
+end
+
+local function serverNow(): number
+	return Workspace:GetServerTimeNow()
+end
+
+local function ago(t: number): string
+	local diff = math.max(0, serverNow() - t)
+	if diff < 60 then
+		return "now"
+	elseif diff < 3600 then
+		return math.floor(diff / 60) .. "m"
+	elseif diff < 86400 then
+		return math.floor(diff / 3600) .. "h"
+	end
+	return math.floor(diff / 86400) .. "d"
+end
+
+local function limitBox(box: TextBox, maxChars: number)
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		local text = box.Text
+		local length = utf8.len(text)
+		if length and length > maxChars then
+			box.Text = text:sub(1, (utf8.offset(text, maxChars + 1) or (#text + 1)) - 1)
+		end
+	end)
+end
+
+local function smallButton(parent: Instance, text: string, color: Color3, x: UDim, y: number, w: number, h: number): TextButton
+	return UI.button({ Text = text, TextSize = 12, BackgroundColor3 = color, Position = UDim2.new(x, UDim.new(0, y)), Size = UDim2.fromOffset(w, h), Parent = parent })
+end
+
+local function totalUnread(): number
+	local n = 0
+	for _, c in convos do
+		if not c.muted and not (c.kind == "dm" and hidden(c.with)) then
+			n += c.unread or 0
+		end
+	end
+	return n
+end
+
+local function updateBadge()
+	if iconBadge then
+		local n = totalUnread()
+		iconBadge.Visible = n > 0
+		iconBadge.Text = if n > 9 then "9+" else tostring(n)
+	end
+end
+
+local function header(order: number, text: string, back: (() -> ())?)
+	local row = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 30), LayoutOrder = order, Parent = content })
+	if back then
+		local b = UI.button({ Text = "‹ Back", TextSize = 14, BackgroundTransparency = 1, TextColor3 = colors.xp, Size = UDim2.fromOffset(60, 30), Parent = row })
+		b.Activated:Connect(back)
+	end
+	UI.label({ Text = text, Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, Size = UDim2.fromScale(1, 1), Parent = row })
+end
+
+local function iconCircle(parent: Instance, emoji: string, color: Color3, size: number)
+	return UI.label({ Text = emoji, TextSize = math.floor(size * 0.55), TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0, BackgroundColor3 = color, Size = UDim2.fromOffset(size, size), Parent = parent }, { UI.corner(math.floor(size / 2)) })
+end
+
+---------------------------------------------------------------------------
+-- Views (forward declared)
+---------------------------------------------------------------------------
+local showList: () -> ()
+local openChat: (string) -> ()
+local showSettings: (string, any?) -> ()
+
+local function showContentView(name: string)
+	view = name
+	chatView.Visible = false
+	content.Visible = true
+	Phone.clear(content)
+	content.CanvasPosition = Vector2.zero
+end
+
+-- Conversation list
+showList = function()
+	showContentView("list")
+	currentId = nil
+	local tabs = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 32), LayoutOrder = 1, Parent = content }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local function tab(text: string, order: number, color: Color3, fn: () -> ())
+		local b = UI.button({ Text = text, TextSize = 12, BackgroundColor3 = color, Size = UDim2.new(0.25, -5, 1, 0), LayoutOrder = order, Parent = tabs })
+		b.Activated:Connect(fn)
+	end
+	tab("CHATS", 1, colors.accent, showList)
+	tab("CONTACTS", 2, colors.panelLight, function()
+		Messages.showContacts()
+	end)
+	tab("+ NEW", 3, BLUE, function()
+		Messages.showPicker()
+	end)
+	tab("+ GROUP", 4, GREEN, function()
+		Messages.showNewGroup()
+	end)
+
+	local list = {}
+	for _, c in convos do
+		if not (c.kind == "dm" and hidden(c.with)) then
+			table.insert(list, c)
+		end
+	end
+	table.sort(list, function(a, b)
+		return (a.t or 0) > (b.t or 0)
+	end)
+	if #list == 0 then
+		UI.label({ Text = "No messages yet.\nTap + NEW to text someone, or + GROUP to start a group chat.", TextWrapped = true, TextColor3 = colors.subtext, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -30, 0, 60), LayoutOrder = 2, Parent = content })
+	end
+	for i, c in list do
+		local row = UI.new("TextButton", {
+			Text = "",
+			AutoButtonColor = true,
+			BackgroundColor3 = colors.panelLight,
+			Size = UDim2.new(1, -20, 0, 58),
+			LayoutOrder = 10 + i,
+			Parent = content,
+		}, { UI.corner(14) })
+		local circle = iconCircle(row, c.icon or "💬", c.color or BLUE, 38)
+		circle.Position = UDim2.fromOffset(10, 10)
+		local unread = c.unread or 0
+		UI.label({ Text = c.title or "Chat", Font = if unread > 0 then UI.FONT_BLACK else UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(56, 9), Size = UDim2.new(1, -110, 0, 18), Parent = row })
+		UI.label({ Text = (if c.muted then "🔕 " else "") .. (c.preview or ""), TextSize = 12, TextColor3 = if unread > 0 then colors.text else colors.subtext, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(56, 30), Size = UDim2.new(1, -96, 0, 16), Parent = row })
+		UI.label({ Text = if (c.t or 0) > 0 then ago(c.t) else "", TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10), Size = UDim2.fromOffset(40, 14), Parent = row })
+		if unread > 0 then
+			UI.label({ Text = if unread > 9 then "9+" else tostring(unread), Font = UI.FONT_BLACK, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0, BackgroundColor3 = if c.muted then colors.subtext else Color3.fromRGB(255, 50, 50), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 30), Size = UDim2.fromOffset(20, 18), Parent = row }, { UI.corner(9) })
+		end
+		row.Activated:Connect(function()
+			openChat(c.id)
+		end)
+	end
+	updateBadge()
+end
+
+local function queueRender()
+	if renderQueued then
+		return
+	end
+	renderQueued = true
+	task.defer(function()
+		renderQueued = false
+		if Phone.isOpen() and Phone.currentPage() == APP_ID and view == "list" then
+			showList()
+		end
+		updateBadge()
+	end)
+end
+
+-- Contacts (friends + online status)
+function Messages.showContacts()
+	showContentView("contacts")
+	header(1, "CONTACTS", showList)
+	local loading = UI.label({ Text = "Loading...", TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 24), LayoutOrder = 2, Parent = content })
+	local ok, message, list = request("Contacts")
+	if view ~= "contacts" then
+		return
+	end
+	loading:Destroy()
+	if not ok or type(list) ~= "table" then
+		say(message or "Couldn't load contacts.")
+		return
+	end
+	if #list == 0 then
+		UI.label({ Text = "No friends yet. Open a player's menu (click them) and tap ADD FRIEND.", TextWrapped = true, TextColor3 = colors.subtext, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -30, 0, 50), LayoutOrder = 2, Parent = content })
+	end
+	local rank = { here = 1, online = 2, offline = 3 }
+	table.sort(list, function(a, b)
+		if rank[a.status] ~= rank[b.status] then
+			return (rank[a.status] or 4) < (rank[b.status] or 4)
+		end
+		return tostring(a.name) < tostring(b.name)
+	end)
+	for i, c in list do
+		local row = Phone.card(content, 52, 10 + i)
+		UI.label({ Text = c.name, Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -110, 0, 16), Parent = row })
+		local statusText, statusColor = "Offline", colors.subtext
+		if c.status == "here" then
+			statusText, statusColor = "● In this server", colors.cash
+		elseif c.status == "online" then
+			statusText, statusColor = "● Online", colors.xp
+		end
+		UI.label({ Text = statusText, TextSize = 11, TextColor3 = statusColor, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -110, 0, 14), Parent = row })
+		local text = smallButton(row, "TEXT", BLUE, UDim.new(1, -104), 0, 50, 28)
+		text.Activated:Connect(function()
+			openChat("d" .. c.id)
+		end)
+		local S = social()
+		if S and type(S.openProfile) == "function" then
+			local profile = smallButton(row, "👤", colors.panel, UDim.new(1, -48), 0, 48, 28)
+			profile.Activated:Connect(function()
+				pcall(S.openProfile, c.id)
+			end)
+		end
+	end
+end
+
+-- Pick someone to text (friends + players here)
+function Messages.showPicker()
+	showContentView("new")
+	header(1, "NEW MESSAGE", showList)
+	local ok, message, list = request("Pick")
+	if view ~= "new" then
+		return
+	end
+	if not ok or type(list) ~= "table" then
+		say(message or "Couldn't load people.")
+		return
+	end
+	if #list == 0 then
+		UI.label({ Text = "Nobody to text yet. Make some friends around the city!", TextWrapped = true, TextColor3 = colors.subtext, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -30, 0, 40), LayoutOrder = 2, Parent = content })
+	end
+	for i, c in list do
+		if not hidden(c.id) then
+			local row = UI.new("TextButton", { Text = "", BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, -20, 0, 44), LayoutOrder = 10 + i, Parent = content }, { UI.corner(12), UI.padding(10) })
+			UI.label({ Text = c.name, Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -100, 1, 0), Parent = row })
+			UI.label({
+				Text = (if c.friend then "Friend · " else "") .. (if c.status == "here" then "Here" elseif c.status == "online" then "Online" else "Offline"),
+				TextSize = 11,
+				TextColor3 = if c.status == "offline" then colors.subtext else colors.cash,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.fromScale(1, 0),
+				Size = UDim2.new(0, 100, 1, 0),
+				Parent = row,
+			})
+			row.Activated:Connect(function()
+				openChat("d" .. c.id)
+			end)
+		end
+	end
+end
+
+-- Checklist of people (for new group / add members). Returns the selected set.
+local function peopleChecklist(list: { any }, startOrder: number, exclude: { [number]: boolean }): { [number]: boolean }
+	local selected: { [number]: boolean } = {}
+	local shown = 0
+	for i, c in list do
+		if not exclude[c.id] and not hidden(c.id) then
+			shown += 1
+			local row = UI.new("TextButton", { Text = "", BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, -20, 0, 40), LayoutOrder = startOrder + i, Parent = content }, { UI.corner(12), UI.padding(10) })
+			local box = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0, BackgroundColor3 = colors.panel, Size = UDim2.fromOffset(20, 20), Parent = row }, { UI.corner(6) })
+			UI.label({ Text = c.name .. (if c.status == "here" then "  · here" else ""), TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -30, 1, 0), Parent = row })
+			row.Activated:Connect(function()
+				selected[c.id] = if selected[c.id] then nil else true :: any
+				box.Text = if selected[c.id] then "✓" else ""
+				box.BackgroundColor3 = if selected[c.id] then GREEN else colors.panel
+			end)
+		end
+	end
+	if shown == 0 then
+		UI.label({ Text = "No friends or players here to add.", TextColor3 = colors.subtext, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -30, 0, 30), LayoutOrder = startOrder + 1, Parent = content })
+	end
+	return selected
+end
+
+local function selectedIds(set: { [number]: boolean }): { number }
+	local ids = {}
+	for id in set do
+		table.insert(ids, id)
+	end
+	return ids
+end
+
+-- Icon + colour pickers. onPick(iconIndex?, colorIndex?)
+local function stylePickers(order: number, icon: number, color: number, onPick: (number?, number?) -> ())
+	local iconCard = Phone.card(content, 80, order)
+	UI.label({ Text = "ICON", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 12), Parent = iconCard })
+	local iconRow = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 1, -16), Parent = iconCard }, {
+		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(32, 22), CellPadding = UDim2.fromOffset(4, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local iconButtons = {}
+	for i, emoji in Cfg.GROUP_ICONS do
+		local b = UI.button({ Text = emoji, TextSize = 14, Font = UI.FONT, BackgroundColor3 = if i == icon then colors.accent else colors.panel, LayoutOrder = i, Parent = iconRow })
+		iconButtons[i] = b
+		b.Activated:Connect(function()
+			for j, other in iconButtons do
+				other.BackgroundColor3 = if j == i then colors.accent else colors.panel
+			end
+			onPick(i, nil)
+		end)
+	end
+	local colorCard = Phone.card(content, 52, order + 1)
+	UI.label({ Text = "COLOR", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 12), Parent = colorCard })
+	local colorRow = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 22), Parent = colorCard }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local swatches = {}
+	for i, c in Cfg.GROUP_COLORS do
+		local b = UI.button({ Text = if i == color then "✓" else "", TextSize = 13, BackgroundColor3 = c, Size = UDim2.fromOffset(24, 22), LayoutOrder = i, Parent = colorRow })
+		swatches[i] = b
+		b.Activated:Connect(function()
+			for j, other in swatches do
+				other.Text = if j == i then "✓" else ""
+			end
+			onPick(nil, i)
+		end)
+	end
+end
+
+local function textField(parent: Instance, placeholder: string, maxChars: number, y: number, width: UDim): TextBox
+	local box = UI.new("TextBox", {
+		Text = "",
+		PlaceholderText = placeholder,
+		PlaceholderColor3 = colors.subtext,
+		ClearTextOnFocus = false,
+		Font = UI.FONT,
+		TextSize = 14,
+		TextColor3 = colors.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundColor3 = colors.panel,
+		Position = UDim2.fromOffset(0, y),
+		Size = UDim2.new(width, UDim.new(0, 30)),
+		Parent = parent,
+	}, { UI.corner(8), UI.padding(6) })
+	limitBox(box, maxChars)
+	return box
+end
+
+-- New group: name, icon, colour, members
+function Messages.showNewGroup()
+	showContentView("newgroup")
+	header(1, "NEW GROUP", showList)
+	local nameCard = Phone.card(content, 58, 2)
+	UI.label({ Text = "GROUP NAME", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 12), Parent = nameCard })
+	local nameBox = textField(nameCard, "e.g. Court Squad", Cfg.GROUP_NAME_MAX, 16, UDim.new(1, 0))
+	local icon, color = 1, 1
+	stylePickers(3, icon, color, function(i, c)
+		icon = i or icon
+		color = c or color
+	end)
+	UI.label({ Text = "MEMBERS (up to " .. (Cfg.GROUP_MAX_MEMBERS - 1) .. ")", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 14), LayoutOrder = 6, Parent = content })
+	local create = UI.button({ Text = "CREATE GROUP", TextSize = 14, BackgroundColor3 = GREEN, Size = UDim2.new(1, -20, 0, 38), LayoutOrder = 900, Parent = content })
+	local ok, message, list = request("Pick")
+	if view ~= "newgroup" then
+		return
+	end
+	if not ok or type(list) ~= "table" then
+		say(message or "Couldn't load people.")
+		list = {}
+	end
+	local selected = peopleChecklist(list, 10, {})
+	local busy = false
+	create.Activated:Connect(function()
+		if busy then
+			return
+		end
+		local ids = selectedIds(selected)
+		if #ids == 0 then
+			say("Pick at least one person.")
+			return
+		end
+		if nameBox.Text:match("^%s*$") then
+			say("Give the group a name.")
+			return
+		end
+		busy = true
+		create.Text = "CREATING..."
+		local okCreate, msg, summary = request("CreateGroup", { name = nameBox.Text, icon = icon, color = color, members = ids })
+		busy = false
+		create.Text = "CREATE GROUP"
+		if okCreate and type(summary) == "table" then
+			convos[summary.id] = summary
+			openChat(summary.id)
+		else
+			say(msg or "Couldn't create the group.")
+		end
+	end)
+end
+
+-- Group settings
+showSettings = function(gid: string, info: any?)
+	showContentView("settings")
+	header(1, "GROUP SETTINGS", function()
+		openChat(gid)
+	end)
+	if not info then
+		local ok, message, result = request("Group", { id = gid, cmd = "Info" })
+		if view ~= "settings" then
+			return
+		end
+		if not ok then
+			say(message or "Couldn't load the group.")
+			return
+		end
+		info = result
+	end
+	if type(info) ~= "table" then
+		return
+	end
+	local admin = info.myRole == "owner" or info.myRole == "admin"
+	local function run(cmd: string, extra: { [string]: any }?)
+		local payload = extra or {}
+		payload.id = gid
+		payload.cmd = cmd
+		local ok, message, result = request("Group", payload)
+		say(message)
+		if ok and type(result) == "table" and view == "settings" then
+			showSettings(gid, result)
+		end
+		return ok
+	end
+
+	local top = Phone.card(content, 64, 2)
+	local circle = iconCircle(top, Cfg.GROUP_ICONS[info.icon] or "💬", Cfg.GROUP_COLORS[info.color] or BLUE, 40)
+	circle.Position = UDim2.fromOffset(0, 0)
+	UI.label({ Text = info.name, Font = UI.FONT_BLACK, TextSize = 15, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(48, 2), Size = UDim2.new(1, -48, 0, 18), Parent = top })
+	UI.label({ Text = #info.members .. "/" .. Cfg.GROUP_MAX_MEMBERS .. " members · you're " .. tostring(info.myRole), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(48, 22), Size = UDim2.new(1, -48, 0, 14), Parent = top })
+
+	local muteCard = Phone.card(content, 46, 3)
+	UI.label({ Text = if info.muted then "🔕 Notifications off" else "🔔 Notifications on", TextSize = 13, Size = UDim2.new(1, -80, 1, 0), Parent = muteCard })
+	local mute = smallButton(muteCard, if info.muted then "UNMUTE" else "MUTE", colors.panel, UDim.new(1, -76), -3, 76, 28)
+	mute.Activated:Connect(function()
+		run("Mute", { on = not info.muted })
+	end)
+
+	if admin then
+		local renameCard = Phone.card(content, 58, 4)
+		UI.label({ Text = "RENAME", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 12), Parent = renameCard })
+		local box = textField(renameCard, info.name, Cfg.GROUP_NAME_MAX, 16, UDim.new(1, -64))
+		local save = smallButton(renameCard, "SAVE", BLUE, UDim.new(1, -58), 16, 58, 30)
+		save.Activated:Connect(function()
+			if not box.Text:match("^%s*$") then
+				run("Rename", { name = box.Text })
+			end
+		end)
+		stylePickers(5, info.icon, info.color, function(i, c)
+			run("Style", { icon = i, color = c })
+		end)
+	end
+
+	UI.label({ Text = "MEMBERS", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 14), LayoutOrder = 10, Parent = content })
+	local roleRank = { owner = 1, admin = 2, member = 3 }
+	table.sort(info.members, function(a, b)
+		if a.role ~= b.role then
+			return (roleRank[a.role] or 4) < (roleRank[b.role] or 4)
+		end
+		return tostring(a.name) < tostring(b.name)
+	end)
+	for i, m in info.members do
+		local row = Phone.card(content, 44, 10 + i)
+		local me = m.id == player.UserId
+		UI.label({ Text = m.name .. (if me then " (you)" else ""), Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -120, 0, 16), Parent = row })
+		UI.label({ Text = (if m.role == "owner" then "👑 Owner" elseif m.role == "admin" then "⭐ Admin" else "Member") .. (if m.here then " · here" else ""), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -120, 0, 12), Parent = row })
+		if not me and m.role ~= "owner" then
+			if info.myRole == "owner" then
+				local promote = smallButton(row, if m.role == "admin" then "UNADMIN" else "ADMIN", colors.panel, UDim.new(1, -118), -2, 58, 24)
+				promote.Activated:Connect(function()
+					run("Admin", { userId = m.id, on = m.role ~= "admin" })
+				end)
+			end
+			if admin and (m.role == "member" or info.myRole == "owner") then
+				local remove = smallButton(row, "REMOVE", colors.danger, UDim.new(1, -58), -2, 58, 24)
+				remove.Activated:Connect(function()
+					run("Remove", { userId = m.id })
+				end)
+			end
+		end
+	end
+
+	if admin and #info.members < Cfg.GROUP_MAX_MEMBERS then
+		local add = UI.button({ Text = "+ ADD PEOPLE", TextSize = 13, BackgroundColor3 = GREEN, Size = UDim2.new(1, -20, 0, 36), LayoutOrder = 200, Parent = content })
+		add.Activated:Connect(function()
+			Messages.showAddMembers(gid, info)
+		end)
+	end
+	local leave = UI.button({ Text = "LEAVE GROUP", TextSize = 13, BackgroundColor3 = colors.danger, Size = UDim2.new(1, -20, 0, 36), LayoutOrder = 201, Parent = content })
+	local armed = false
+	leave.Activated:Connect(function()
+		if not armed then
+			armed = true
+			leave.Text = "TAP AGAIN TO LEAVE"
+			task.delay(3, function()
+				armed = false
+				if leave.Parent then
+					leave.Text = "LEAVE GROUP"
+				end
+			end)
+			return
+		end
+		local ok, message = request("Group", { id = gid, cmd = "Leave" })
+		say(message)
+		if ok then
+			convos[gid] = nil
+			showList()
+		end
+	end)
+end
+
+function Messages.showAddMembers(gid: string, info: any)
+	showContentView("add")
+	header(1, "ADD PEOPLE", function()
+		showSettings(gid, info)
+	end)
+	local add = UI.button({ Text = "ADD TO GROUP", TextSize = 14, BackgroundColor3 = GREEN, Size = UDim2.new(1, -20, 0, 38), LayoutOrder = 900, Parent = content })
+	local ok, message, list = request("Pick")
+	if view ~= "add" then
+		return
+	end
+	if not ok or type(list) ~= "table" then
+		say(message or "Couldn't load people.")
+		list = {}
+	end
+	local exclude = {}
+	for _, m in info.members do
+		exclude[m.id] = true
+	end
+	local selected = peopleChecklist(list, 10, exclude)
+	add.Activated:Connect(function()
+		local ids = selectedIds(selected)
+		if #ids == 0 then
+			say("Pick at least one person.")
+			return
+		end
+		local okAdd, msg, result = request("Group", { id = gid, cmd = "Add", userIds = ids })
+		say(msg or (if okAdd then "Added." else nil))
+		if okAdd then
+			showSettings(gid, result)
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Chat view
+---------------------------------------------------------------------------
+local function scrollToBottom()
+	task.defer(function()
+		msgList.CanvasPosition = Vector2.new(0, math.max(0, msgList.AbsoluteCanvasSize.Y - msgList.AbsoluteWindowSize.Y))
+	end)
+end
+
+local function inviteCard(row: Frame, msg: any, mine: boolean): number
+	local inv = msg.invite
+	local style = Cfg.INVITE_STYLE[inv.kind] or Cfg.INVITE_STYLE.event
+	local forMe = inv.to == player.UserId
+	local cardFrame = UI.new("Frame", {
+		BackgroundColor3 = colors.panel,
+		AnchorPoint = Vector2.new(if mine then 1 else 0, 0),
+		Position = UDim2.fromScale(if mine then 1 else 0, 0),
+		Size = UDim2.fromOffset(206, 104),
+		Parent = row,
+	}, { UI.corner(14), UI.stroke(style.color, 1.5), UI.padding(10) })
+	UI.label({ Text = inv.icon .. "  " .. inv.title, Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = style.color, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 16), Parent = cardFrame })
+	UI.label({ Text = (if mine then "You invited them" else msg.name .. " invited you") .. (if inv.sub then " · " .. inv.sub else ""), TextSize = 11, TextColor3 = colors.subtext, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), Parent = cardFrame })
+	local status = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 12, Position = UDim2.fromOffset(0, 36), Size = UDim2.new(1, 0, 0, 14), Parent = cardFrame })
+	local accept = smallButton(cardFrame, "ACCEPT", GREEN, UDim.new(0, 0), 54, 88, 30)
+	local decline = smallButton(cardFrame, "DECLINE", colors.danger, UDim.new(0.5, 4), 54, 88, 30)
+	local current = inv.state
+
+	local function update(state: string)
+		current = state
+		inv.state = state
+		local expired = state == "pending" and serverNow() > inv.expires
+		local open = state == "pending" and not expired
+		accept.Visible = open and forMe
+		decline.Visible = open and forMe
+		if state == "accepted" then
+			status.Text, status.TextColor3 = "✅ Accepted", colors.cash
+		elseif state == "declined" then
+			status.Text, status.TextColor3 = "Declined", colors.subtext
+		elseif not open then
+			status.Text, status.TextColor3 = "Expired", colors.subtext
+		elseif forMe then
+			status.Text, status.TextColor3 = "Expires in " .. math.max(1, math.ceil((inv.expires - serverNow()) / 60)) .. " min", colors.text
+		else
+			status.Text, status.TextColor3 = "Waiting for a reply…", colors.text
+		end
+		cardFrame.Size = UDim2.fromOffset(206, if open and forMe then 104 else 70)
+	end
+	update(current)
+	inviteCards[msg.id] = update
+
+	local busy = false
+	local function answer(yes: boolean)
+		if busy then
+			return
+		end
+		busy = true
+		local ok, message = request("Respond", { id = inv.id, accept = yes })
+		busy = false
+		say(message or (if ok then nil else "That didn't work."))
+	end
+	accept.Activated:Connect(function()
+		answer(true)
+	end)
+	decline.Activated:Connect(function()
+		answer(false)
+	end)
+	-- keep the countdown honest while it's on screen
+	task.spawn(function()
+		while cardFrame.Parent and current == "pending" do
+			task.wait(20)
+			if cardFrame.Parent and current == "pending" then
+				update(current)
+			end
+		end
+	end)
+	return if inv.state == "pending" and forMe then 104 else 70
+end
+
+local nextOrder = 0
+local function renderMsg(msg: any)
+	if msg.from ~= player.UserId and hidden(msg.from) then
+		return
+	end
+	nextOrder += 1
+	local mine = msg.from == player.UserId
+	local row = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -16, 0, 20), LayoutOrder = nextOrder, Parent = msgList })
+
+	if msg.kind == "system" and (not currentSummary or currentSummary.kind == "group") then
+		-- group notices ("X joined") are centred grey lines
+		local bounds = textHeight(msg.text, 11, 220)
+		UI.label({ Text = msg.text, TextWrapped = true, TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, bounds.Y + 4), Parent = row })
+		row.Size = UDim2.new(1, -16, 0, bounds.Y + 6)
+		return
+	end
+	if msg.kind == "invite" and msg.invite then
+		local h = inviteCard(row, msg, mine)
+		row.Size = UDim2.new(1, -16, 0, h)
+		return
+	end
+
+	local showName = not mine and currentSummary and currentSummary.kind == "group"
+	local text = tostring(msg.text)
+	local bounds = textHeight(text, 14, BUBBLE_MAX)
+	local w, h = math.max(bounds.X + 4, 24), bounds.Y + 2
+	local y = 0
+	if showName then
+		UI.label({ Text = msg.name, Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(4, 0), Size = UDim2.new(1, 0, 0, 13), Parent = row })
+		y = 14
+	end
+	local bubble = UI.new("Frame", {
+		BackgroundColor3 = if mine then BLUE elseif msg.kind == "system" then Color3.fromRGB(70, 50, 30) else colors.panelLight,
+		AnchorPoint = Vector2.new(if mine then 1 else 0, 0),
+		Position = UDim2.new(if mine then 1 else 0, 0, 0, y),
+		Size = UDim2.fromOffset(w + 20, h + 14),
+		Parent = row,
+	}, { UI.corner(14) })
+	UI.label({ Text = text, TextWrapped = true, TextSize = 14, Position = UDim2.fromOffset(10, 7), Size = UDim2.fromOffset(w + 2, h), Parent = bubble })
+	UI.label({ Text = ago(msg.t), TextSize = 10, TextColor3 = colors.subtext, TextXAlignment = if mine then Enum.TextXAlignment.Right else Enum.TextXAlignment.Left, Position = UDim2.fromOffset(4, y + h + 15), Size = UDim2.new(1, -8, 0, 11), Parent = row })
+	row.Size = UDim2.new(1, -16, 0, y + h + 28)
+end
+
+local function renderChat()
+	Phone.clear(msgList)
+	table.clear(inviteCards)
+	nextOrder = 0
+	for _, msg in currentMsgs do
+		renderMsg(msg)
+	end
+	if #currentMsgs == 0 then
+		nextOrder += 1
+		UI.label({ Text = "Say what's up 👋", TextColor3 = colors.subtext, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 30), LayoutOrder = 0, Name = "Empty", Parent = msgList })
+	end
+	scrollToBottom()
+end
+
+local function setChatHeader(summary: any)
+	currentSummary = summary
+	chatTitle.Text = (summary.icon or "💬") .. "  " .. (summary.title or "Chat")
+	local canReply = summary.canReply ~= false
+	composer.Visible = canReply
+	readOnlyNote.Visible = not canReply
+	readOnlyNote.Text = (summary.title or "They") .. " can't get replies here."
+	msgList.Size = UDim2.new(1, 0, 1, if canReply then -114 else -66)
+	chatAction.Visible = summary.kind == "group" or (summary.kind == "dm" and social() ~= nil)
+	chatAction.Text = if summary.kind == "group" then "⚙" else "👤"
+	chatDelete.Visible = summary.kind ~= "group"
+	chatDelete.Text = "🗑"
+end
+
+openChat = function(convId: string)
+	pendingChat = nil
+	view = "chat"
+	content.Visible = false
+	chatView.Visible = true
+	currentId = convId
+	currentMsgs = {}
+	local cached = convos[convId]
+	if cached then
+		setChatHeader(cached)
+	else
+		setChatHeader({ id = convId, kind = "dm", title = "...", icon = "👤", canReply = true })
+	end
+	Phone.clear(msgList)
+	local ok, message, result = request("Open", convId)
+	if currentId ~= convId or view ~= "chat" then
+		return
+	end
+	if not ok or type(result) ~= "table" then
+		say(message or "Couldn't open that chat.")
+		showList()
+		return
+	end
+	if result.summary then
+		if convos[convId] then
+			convos[convId] = result.summary
+		end
+		setChatHeader(result.summary)
+	end
+	currentMsgs = result.msgs or {}
+	renderChat()
+	updateBadge()
+end
+
+local sending = false
+local function sendCurrent()
+	if sending or not currentId or not currentSummary or currentSummary.canReply == false then
+		return
+	end
+	local text = input.Text
+	if text:match("^%s*$") then
+		return
+	end
+	sending = true
+	local convId = currentId
+	local ok, message = request("Send", { to = convId, text = text })
+	sending = false
+	if ok then
+		if input.Text == text then
+			input.Text = ""
+		end
+	else
+		say(message or "Message not sent.")
+	end
+end
+
+local function buildChatView(frame: Frame)
+	chatView = UI.new("Frame", { Name = "Chat", BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 76), Size = UDim2.new(1, 0, 1, -100), Visible = false, Parent = frame })
+	local top = UI.new("Frame", { BackgroundColor3 = colors.panel, Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -16, 0, 36), Parent = chatView }, { UI.corner(12) })
+	local back = UI.button({ Text = "‹", TextSize = 22, BackgroundTransparency = 1, TextColor3 = colors.xp, Size = UDim2.fromOffset(30, 36), Parent = top })
+	back.Activated:Connect(function()
+		showList()
+	end)
+	chatTitle = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(32, 0), Size = UDim2.new(1, -110, 1, 0), Parent = top })
+	chatAction = UI.button({ Text = "⚙", TextSize = 16, Font = UI.FONT, BackgroundColor3 = colors.panelLight, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -4, 0.5, 0), Size = UDim2.fromOffset(34, 28), Parent = top })
+	chatAction.Activated:Connect(function()
+		if not currentSummary or not currentId then
+			return
+		end
+		if currentSummary.kind == "group" then
+			showSettings(currentId, nil)
+		elseif currentSummary.with then
+			local S = social()
+			if S and type(S.openProfile) == "function" then
+				pcall(S.openProfile, currentSummary.with)
+			end
+		end
+	end)
+	chatDelete = UI.button({ Text = "🗑", TextSize = 14, Font = UI.FONT, BackgroundColor3 = colors.panelLight, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -42, 0.5, 0), Size = UDim2.fromOffset(34, 28), Parent = top })
+	local armedAt = 0
+	chatDelete.Activated:Connect(function()
+		if not currentId or not convos[currentId] then
+			showList()
+			return
+		end
+		if os.clock() - armedAt > 3 then
+			armedAt = os.clock()
+			say("Tap 🗑 again to delete this chat.")
+			return
+		end
+		local id = currentId
+		local ok, message = request("Delete", id)
+		if ok then
+			convos[id] = nil
+			showList()
+		else
+			say(message or "Couldn't delete.")
+		end
+	end)
+
+	msgList = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 42),
+		Size = UDim2.new(1, 0, 1, -114),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = chatView,
+	}, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+		UI.new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 6) }),
+	})
+
+	readOnlyNote = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 22), Visible = false, Parent = chatView })
+
+	composer = UI.new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 70), Parent = chatView })
+	local emojiRow = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(8, 0),
+		Size = UDim2.new(1, -16, 0, 28),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollBarThickness = 0,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		Parent = composer,
+	}, { UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }) })
+	input = UI.new("TextBox", {
+		Text = "",
+		PlaceholderText = "Message",
+		PlaceholderColor3 = colors.subtext,
+		ClearTextOnFocus = false,
+		TextWrapped = true,
+		Font = UI.FONT,
+		TextSize = 14,
+		TextColor3 = colors.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundColor3 = colors.panelLight,
+		Position = UDim2.fromOffset(8, 32),
+		Size = UDim2.new(1, -78, 0, 36),
+		Parent = composer,
+	}, { UI.corner(18), UI.padding(8) })
+	limitBox(input, Cfg.MAX_LENGTH)
+	for i, emoji in Cfg.EMOJI do
+		local b = UI.button({ Text = emoji, TextSize = 16, Font = UI.FONT, BackgroundColor3 = colors.panelLight, Size = UDim2.fromOffset(30, 26), LayoutOrder = i, Parent = emojiRow })
+		b.Activated:Connect(function()
+			input.Text ..= emoji
+		end)
+	end
+	local send = UI.button({ Text = "SEND", TextSize = 13, BackgroundColor3 = BLUE, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 32), Size = UDim2.fromOffset(62, 36), Parent = composer })
+	send.Activated:Connect(sendCurrent)
+	input.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			sendCurrent()
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Server events
+---------------------------------------------------------------------------
+local function viewing(convId: string): boolean
+	return view == "chat" and currentId == convId and Phone.isOpen() and Phone.currentPage() == APP_ID
+end
+
+local function onMsg(summary: any, msg: any)
+	if type(msg) ~= "table" then
+		return
+	end
+	local convId = if type(summary) == "table" then summary.id else nil
+	if not convId then
+		return
+	end
+	convos[convId] = summary
+	local mine = msg.from == player.UserId
+	local isHidden = not mine and hidden(msg.from)
+	if viewing(convId) then
+		local empty = msgList:FindFirstChild("Empty")
+		if empty then
+			empty:Destroy()
+		end
+		table.insert(currentMsgs, msg)
+		renderMsg(msg)
+		scrollToBottom()
+		if not mine then
+			task.spawn(function()
+				local ok, _, fresh = request("Read", convId)
+				if ok and type(fresh) == "table" then
+					convos[convId] = fresh
+				end
+				updateBadge()
+			end)
+		end
+	elseif not mine and not isHidden and not summary.muted then
+		if msg.kind == "invite" and msg.invite then
+			HUD.push("INVITE FROM " .. string.upper(msg.name), msg.invite.icon .. " " .. msg.invite.title .. " — open Messages to answer.")
+		elseif summary.kind == "group" then
+			HUD.push(summary.icon .. " " .. summary.title, (if msg.kind == "text" then msg.name .. ": " else "") .. msg.text)
+		else
+			HUD.push((summary.icon or "💬") .. " " .. msg.name, msg.text)
+		end
+	end
+	if view == "chat" and currentId == convId then
+		currentSummary = summary
+	end
+	queueRender()
+end
+
+local function onEvent(kind: string, a: any, b: any, c: any)
+	if kind == "State" then
+		table.clear(convos)
+		for _, s in (if type(a) == "table" then a else {}) do
+			convos[s.id] = s
+		end
+		queueRender()
+	elseif kind == "Msg" then
+		onMsg(a, b)
+	elseif kind == "Summary" and type(a) == "table" then
+		convos[a.id] = a
+		if view == "chat" and currentId == a.id then
+			setChatHeader(a)
+		end
+		queueRender()
+	elseif kind == "InviteState" then
+		if currentId == a then
+			for _, m in currentMsgs do
+				if m.id == b and m.invite then
+					m.invite.state = c
+				end
+			end
+			local update = inviteCards[b]
+			if update then
+				update(c)
+			end
+		end
+	elseif kind == "Removed" then
+		convos[a] = nil
+		if currentId == a and (view == "chat" or view == "settings" or view == "add") then
+			showList()
+		end
+		queueRender()
+	elseif kind == "Gps" and type(a) == "string" and typeof(b) == "Vector3" then
+		Phone.setGPS(a, b)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Interaction menu + public helpers
+---------------------------------------------------------------------------
+-- Opens the phone straight into a chat with this user.
+function Messages.openChatWith(userId: number)
+	pendingChat = "d" .. userId
+	if Phone.isOpen() and Phone.currentPage() == APP_ID then
+		openChat(pendingChat :: string)
+		return
+	end
+	Phone.setOpen(true) -- re-runs the app's open function if Messages was the last page
+	if Phone.currentPage() ~= APP_ID then
+		Phone.showPage(APP_ID) -- its open function picks up pendingChat
+	end
+end
+
+local function invite(target: Player, kind: string)
+	local ok, message = request("Invite", { userId = target.UserId, kind = kind })
+	HUD.push(if ok then "INVITE SENT" else "INVITE", message or (if ok then "Sent." else "Couldn't send the invite."))
+end
+
+local function registerMenu(S: any)
+	if type(S) ~= "table" or type(S.addMenuAction) ~= "function" then
+		return
+	end
+	S.addMenuAction({
+		id = "messages_send",
+		label = "SEND MESSAGE",
+		order = 20,
+		run = function(target: Player)
+			Messages.openChatWith(target.UserId)
+		end,
+	})
+	S.addMenuAction({
+		id = "messages_invite_ball",
+		label = "INVITE TO BASKETBALL",
+		order = 21,
+		run = function(target: Player)
+			invite(target, "basketball")
+		end,
+	})
+	S.addMenuAction({
+		id = "messages_invite_home",
+		label = "INVITE TO MY PLACE",
+		order = 22,
+		run = function(target: Player)
+			invite(target, "apartment")
+		end,
+	})
+end
+
+-- Unread count badge on the home-screen icon (Phone builds the icon after start()).
+local function attachIconBadge()
+	local playerGui = player:WaitForChild("PlayerGui")
+	local phoneGui = playerGui:WaitForChild("CityGrindPhone", 60)
+	local apps = phoneGui and phoneGui:WaitForChild("Phone", 10)
+	apps = apps and apps:WaitForChild("Screen", 10)
+	apps = apps and apps:WaitForChild("Home", 10)
+	apps = apps and apps:WaitForChild("Apps", 10)
+	local cell = apps and apps:WaitForChild(APP_ID, 10)
+	local button = cell and cell:FindFirstChild("Icon")
+	if not button then
+		return
+	end
+	iconBadge = UI.new("TextLabel", {
+		Text = "0",
+		Font = UI.FONT_BLACK,
+		TextSize = 12,
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundColor3 = Color3.fromRGB(255, 50, 50),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(1, -2, 0, 2),
+		Size = UDim2.fromOffset(20, 20),
+		Visible = false,
+		ZIndex = 3,
+		Parent = button,
+	}, { UI.corner(10) })
+	updateBadge()
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Messages.start()
+	Phone.addApp({ id = APP_ID, label = "Messages", icon = "💬", color = Color3.fromRGB(60, 200, 90) }, function(list: ScrollingFrame, frame: Frame)
+		content = list
+		appFrame = frame
+		buildChatView(frame)
+		banner = UI.label({
+			Text = "",
+			TextWrapped = true,
+			Font = UI.FONT_BOLD,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			BackgroundTransparency = 0.05,
+			BackgroundColor3 = colors.panel,
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 1, -30),
+			Size = UDim2.new(1, -24, 0, 34),
+			Visible = false,
+			ZIndex = 10,
+			Parent = appFrame,
+		}, { UI.corner(10), UI.stroke(colors.accent, 1, 0.3) })
+		return function()
+			if pendingChat then
+				openChat(pendingChat)
+			elseif view == "chat" and currentId then
+				openChat(currentId)
+			elseif view == "list" then
+				showList()
+			end
+		end
+	end)
+
+	-- Interaction menu entries (Social may load before or after us)
+	local socialScript = script.Parent:FindFirstChild("Social")
+	if socialScript then
+		local S = social()
+		registerMenu(S)
+		if S and typeof(S.changed) == "Instance" and S.changed:IsA("BindableEvent") then
+			S.changed.Event:Connect(queueRender)
+		end
+	else
+		task.spawn(function()
+			local found = script.Parent:WaitForChild("Social", 30)
+			if found then
+				local S = social()
+				registerMenu(S)
+				if S and typeof(S.changed) == "Instance" and S.changed:IsA("BindableEvent") then
+					S.changed.Event:Connect(queueRender)
+				end
+			end
+		end)
+	end
+
+	task.spawn(function()
+		local remotes = shared:WaitForChild("Remotes")
+		Request = remotes:WaitForChild("MessagesRequest") :: RemoteFunction
+		local Event = remotes:WaitForChild("MessagesEvent") :: RemoteEvent
+		Event.OnClientEvent:Connect(onEvent)
+		local ok, _, list = request("GetState")
+		if ok and type(list) == "table" then
+			for _, s in list do
+				convos[s.id] = convos[s.id] or s
+			end
+			queueRender()
+		end
+	end)
+	task.spawn(attachIconBadge)
+end
+
+return Messages
+]=====])
 put(client, 'ModuleScript', 'Movement', [=====[
 -- CITY GRIND: sprint, stamina, crouch and slide (section 12).
 -- PC: Shift sprint, C crouch (C while sprinting = slide).
@@ -17553,6 +26766,614 @@ function Movement.start()
 end
 
 return Movement
+]=====])
+put(client, 'ModuleScript', 'Party', [=====[
+-- CITY GRIND: parties (section 93). Client side.
+-- * Compact party panel on the left edge of the HUD (members, distance, leader tools).
+-- * Markers over party members' heads (only party members see them), with distance.
+-- * "Party" phone app: create, invite players in the server, manage members,
+--   set a destination (GPS for everyone), travel together, queue basketball.
+-- * Invite prompt when the Messages app isn't there to show invite cards.
+-- * "INVITE TO PARTY" in the player interaction menu (Social.addMenuAction).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Party = {}
+
+local PARTY_COLOR = Color3.fromRGB(90, 170, 255)
+local LEADER_COLOR = Color3.fromRGB(255, 205, 60)
+local STUDS_PER_METRE = 3.57
+
+type Member = { userId: number, name: string, username: string, leader: boolean }
+type State = { id: string, leaderId: number, members: { Member }, max: number }
+
+local state: State? = nil
+local PartyAction: RemoteEvent? = nil
+local gui: ScreenGui? = nil
+local panel: Frame
+local panelTitle: TextLabel
+local memberList: Frame
+local leaderRow: Frame
+local memberRow: Frame
+local selectedUserId: number? = nil
+local markers: { [number]: BillboardGui } = {}
+local invitePopup: Frame
+local inviteText: TextLabel
+local pendingInvite: { partyId: string, fromName: string }? = nil
+local collapsed = false
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function act(action: string, arg: any?)
+	if PartyAction then
+		PartyAction:FireServer(action, arg)
+	end
+end
+
+local function isLeader(): boolean
+	return state ~= nil and state.leaderId == player.UserId
+end
+
+local function inParty(userId: number): boolean
+	if not state then
+		return false
+	end
+	for _, m in state.members do
+		if m.userId == userId then
+			return true
+		end
+	end
+	return false
+end
+
+local function rootOf(p: Player?): BasePart?
+	local character = p and p.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function distanceTo(p: Player?): number?
+	local a, b = rootOf(player), rootOf(p)
+	if not a or not b then
+		return nil
+	end
+	return (a.Position - b.Position).Magnitude / STUDS_PER_METRE
+end
+
+local function distanceText(p: Player?): string
+	if not p then
+		return "away"
+	end
+	local interior = p:GetAttribute("Interior")
+	if type(interior) == "string" and interior ~= "" then
+		return "inside"
+	end
+	local d = distanceTo(p)
+	if not d then
+		return "-"
+	end
+	return if d < 1000 then string.format("%dm", math.floor(d)) else string.format("%.1fkm", d / 1000)
+end
+
+---------------------------------------------------------------------------
+-- Markers over party members (visible only to you, because they're in your PlayerGui)
+---------------------------------------------------------------------------
+local function clearMarkers()
+	for id, marker in markers do
+		marker:Destroy()
+		markers[id] = nil
+	end
+end
+
+local function updateMarkers()
+	if not gui then
+		return
+	end
+	local wanted: { [number]: boolean } = {}
+	if state then
+		for _, m in state.members do
+			if m.userId ~= player.UserId then
+				wanted[m.userId] = true
+			end
+		end
+	end
+	for id, marker in markers do
+		if not wanted[id] then
+			marker:Destroy()
+			markers[id] = nil
+		end
+	end
+	for id in wanted do
+		local other = Players:GetPlayerByUserId(id)
+		local character = other and other.Character
+		local head = character and character:FindFirstChild("Head")
+		local marker = markers[id]
+		if not marker then
+			marker = UI.new("BillboardGui", {
+				Name = "PartyMarker",
+				AlwaysOnTop = true,
+				LightInfluence = 0,
+				Size = UDim2.fromOffset(140, 40),
+				StudsOffset = Vector3.new(0, 3.4, 0),
+				ResetOnSpawn = false,
+				Parent = gui,
+			})
+			UI.label({ Name = "Name", Text = "", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = PARTY_COLOR, TextStrokeTransparency = 0.3, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 18), Parent = marker })
+			UI.label({ Name = "Dist", Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextStrokeTransparency = 0.4, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), Parent = marker })
+			markers[id] = marker
+		end
+		local member = nil
+		for _, m in (state :: State).members do
+			if m.userId == id then
+				member = m
+			end
+		end
+		marker.Adornee = if head and head:IsA("BasePart") then head else nil
+		marker.Enabled = marker.Adornee ~= nil
+		local nameLabel = marker:FindFirstChild("Name") :: TextLabel
+		nameLabel.Text = (if member and member.leader then "👑 " else "◆ ") .. (if member then member.name else "")
+		nameLabel.TextColor3 = if member and member.leader then LEADER_COLOR else PARTY_COLOR
+		local d = distanceTo(other)
+		local distLabel = marker:FindFirstChild("Dist") :: TextLabel
+		distLabel.Text = if d then string.format("%dm", math.floor(d)) else ""
+		-- don't clutter the screen with a marker on someone right next to you
+		if d and d < 4 then
+			marker.Enabled = false
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- HUD panel
+---------------------------------------------------------------------------
+local function smallButton(parent: Instance, text: string, color: Color3?, order: number, fn: () -> ()): TextButton
+	local b = UI.button({ Text = text, TextSize = 11, BackgroundColor3 = color or colors.panelLight, Size = UDim2.new(0, 56, 1, 0), LayoutOrder = order, Parent = parent })
+	b.Activated:Connect(fn)
+	return b
+end
+
+local function openApp()
+	Phone.setOpen(true)
+	Phone.showPage("Party")
+end
+
+local function rebuildPanel()
+	if not gui then
+		return
+	end
+	panel.Visible = state ~= nil
+	if not state then
+		return
+	end
+	panelTitle.Text = string.format("%s PARTY  %d/%d", if collapsed then "▸" else "▾", #state.members, state.max)
+	memberList.Visible = not collapsed
+	for _, child in memberList:GetChildren() do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+	for i, m in state.members do
+		local row = UI.button({
+			Name = "Member",
+			Text = "",
+			AutoButtonColor = isLeader() and m.userId ~= player.UserId,
+			BackgroundColor3 = if selectedUserId == m.userId then Color3.fromRGB(50, 50, 66) else colors.panelLight,
+			BackgroundTransparency = 0.1,
+			Size = UDim2.new(1, 0, 0, if selectedUserId == m.userId then 52 else 26),
+			LayoutOrder = i,
+			Parent = memberList,
+		})
+		row:SetAttribute("UserId", m.userId)
+		local nameLabel = UI.label({
+			Text = (if m.leader then "👑 " else "") .. m.name .. (if m.userId == player.UserId then " (you)" else ""),
+			Font = UI.FONT_BOLD,
+			TextSize = 12,
+			TextColor3 = if m.leader then LEADER_COLOR else colors.text,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Position = UDim2.fromOffset(8, 0),
+			Size = UDim2.new(1, -60, 0, 26),
+			Parent = row,
+		})
+		nameLabel.Name = "NameLabel"
+		UI.label({
+			Name = "Dist",
+			Text = if m.userId == player.UserId then "" else distanceText(Players:GetPlayerByUserId(m.userId)),
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -8, 0, 0),
+			Size = UDim2.fromOffset(50, 26),
+			Parent = row,
+		})
+		if isLeader() and m.userId ~= player.UserId then
+			row.Activated:Connect(function()
+				selectedUserId = if selectedUserId == m.userId then nil else m.userId
+				rebuildPanel()
+			end)
+			if selectedUserId == m.userId then
+				local tools = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(6, 26), Size = UDim2.new(1, -12, 0, 22), Parent = row }, {
+					UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+				})
+				local target = Players:GetPlayerByUserId(m.userId)
+				smallButton(tools, "LEADER", LEADER_COLOR, 1, function()
+					if target then
+						act("promote", target)
+					end
+					selectedUserId = nil
+				end).TextColor3 = Color3.new(0.1, 0.1, 0.1)
+				smallButton(tools, "KICK", colors.danger, 2, function()
+					if target then
+						act("kick", target)
+					end
+					selectedUserId = nil
+				end)
+			end
+		end
+	end
+	leaderRow.Visible = not collapsed and isLeader()
+	memberRow.Visible = not collapsed
+end
+
+local function refreshDistances()
+	if not state or collapsed then
+		return
+	end
+	for _, row in memberList:GetChildren() do
+		local id = row:GetAttribute("UserId")
+		local dist = row:FindFirstChild("Dist")
+		if type(id) == "number" and dist and dist:IsA("TextLabel") and id ~= player.UserId then
+			dist.Text = distanceText(Players:GetPlayerByUserId(id))
+		end
+	end
+end
+
+local function buildPanel()
+	panel = UI.new("Frame", {
+		Name = "PartyPanel",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.1,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.42, 0),
+		Size = UDim2.fromOffset(196, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Visible = false,
+		Parent = gui,
+	}, {
+		UI.corner(12),
+		UI.stroke(PARTY_COLOR, 1.5, 0.35),
+		UI.padding(8),
+		UI.new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local header = UI.button({ Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = 0, Parent = panel })
+	panelTitle = UI.label({ Text = "PARTY", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = PARTY_COLOR, Size = UDim2.fromScale(1, 1), Parent = header })
+	header.Activated:Connect(function()
+		collapsed = not collapsed
+		rebuildPanel()
+	end)
+	memberList = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 1, Parent = panel }, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	leaderRow = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 2, Parent = panel }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	smallButton(leaderRow, "📍 GO TO", nil, 1, openApp).Size = UDim2.new(0.333, -3, 1, 0)
+	smallButton(leaderRow, "🧭 TO ME", nil, 2, function()
+		act("travel")
+	end).Size = UDim2.new(0.333, -3, 1, 0)
+	smallButton(leaderRow, "🏀 HOOPS", nil, 3, function()
+		act("hoops")
+	end).Size = UDim2.new(0.333, -3, 1, 0)
+	memberRow = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), LayoutOrder = 3, Parent = panel }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	smallButton(memberRow, "+ INVITE", PARTY_COLOR, 1, openApp).Size = UDim2.new(0.5, -2, 1, 0)
+	smallButton(memberRow, "LEAVE", colors.danger, 2, function()
+		act("leave")
+	end).Size = UDim2.new(0.5, -2, 1, 0)
+end
+
+---------------------------------------------------------------------------
+-- Invite prompt (used when there's no Messages app)
+---------------------------------------------------------------------------
+local function buildInvitePopup()
+	invitePopup = UI.new("Frame", {
+		Name = "PartyInvite",
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -250),
+		Size = UDim2.fromOffset(320, 92),
+		BackgroundColor3 = colors.panel,
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.stroke(PARTY_COLOR, 1.5, 0.2), UI.padding(10) })
+	inviteText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 34), Parent = invitePopup })
+	local yes = UI.button({ Text = "JOIN", TextSize = 14, BackgroundColor3 = Color3.fromRGB(60, 170, 90), Position = UDim2.new(0, 0, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = invitePopup })
+	local no = UI.button({ Text = "DECLINE", TextSize = 14, Position = UDim2.new(0.5, 4, 1, -34), Size = UDim2.new(0.5, -4, 0, 34), Parent = invitePopup })
+	yes.Activated:Connect(function()
+		if pendingInvite then
+			act("accept", pendingInvite.partyId)
+		end
+		pendingInvite = nil
+		invitePopup.Visible = false
+		Phone.refresh("Party")
+	end)
+	no.Activated:Connect(function()
+		if pendingInvite then
+			act("decline", pendingInvite.partyId)
+		end
+		pendingInvite = nil
+		invitePopup.Visible = false
+		Phone.refresh("Party")
+	end)
+end
+
+local function showInvite(data: any)
+	if type(data) ~= "table" or type(data.partyId) ~= "string" then
+		return
+	end
+	pendingInvite = { partyId = data.partyId, fromName = tostring(data.fromName) }
+	inviteText.Text = "🎉 " .. tostring(data.fromName) .. " invited you to their party"
+	invitePopup.Visible = true
+	local mine = pendingInvite
+	task.delay(60, function()
+		if pendingInvite == mine then
+			invitePopup.Visible = false
+		end
+	end)
+	Phone.refresh("Party")
+end
+
+---------------------------------------------------------------------------
+-- Phone app
+---------------------------------------------------------------------------
+local function buildApp(content: ScrollingFrame)
+	local function header(text: string, order: number)
+		UI.label({ Text = text, Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = order, Parent = content })
+	end
+	local function note(text: string, order: number)
+		UI.label({ Text = text, TextSize = 13, TextWrapped = true, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 34), LayoutOrder = order, Parent = content })
+	end
+
+	local function render()
+		Phone.clear(content)
+		local order = 0
+		local function nextOrder(): number
+			order += 1
+			return order
+		end
+
+		if pendingInvite and not state then
+			local c = Phone.card(content, 86, nextOrder())
+			UI.label({ Text = "🎉 " .. pendingInvite.fromName .. " invited you", Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 18), Parent = c })
+			local join = UI.button({ Text = "JOIN", TextSize = 13, BackgroundColor3 = Color3.fromRGB(60, 170, 90), Position = UDim2.fromOffset(0, 28), Size = UDim2.new(0.5, -4, 0, 32), Parent = c })
+			local decline = UI.button({ Text = "DECLINE", TextSize = 13, Position = UDim2.new(0.5, 4, 0, 28), Size = UDim2.new(0.5, -4, 0, 32), Parent = c })
+			local invite = pendingInvite
+			join.Activated:Connect(function()
+				act("accept", invite.partyId)
+				pendingInvite = nil
+				invitePopup.Visible = false
+			end)
+			decline.Activated:Connect(function()
+				act("decline", invite.partyId)
+				pendingInvite = nil
+				invitePopup.Visible = false
+				render()
+			end)
+		end
+
+		if not state then
+			local c = Phone.card(content, 110, nextOrder())
+			UI.label({ Text = "No party yet", Font = UI.FONT_BLACK, TextSize = 16, Size = UDim2.new(1, 0, 0, 20), Parent = c })
+			UI.label({ Text = "Team up with up to 6 people: shared GPS, markers over your crew and quick hoops runs.", TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 34), Parent = c })
+			local create = UI.button({ Text = "CREATE PARTY", TextSize = 14, BackgroundColor3 = PARTY_COLOR, Position = UDim2.fromOffset(0, 58), Size = UDim2.new(1, 0, 0, 30), Parent = c })
+			create.Activated:Connect(function()
+				act("create")
+			end)
+		else
+			local s = state :: State
+			header(string.format("MEMBERS  %d/%d", #s.members, s.max), nextOrder())
+			for _, m in s.members do
+				local other = Players:GetPlayerByUserId(m.userId)
+				local showTools = isLeader() and m.userId ~= player.UserId
+				local c = Phone.card(content, if showTools then 76 else 44, nextOrder())
+				UI.label({ Text = (if m.leader then "👑 " else "") .. m.name, Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = if m.leader then LEADER_COLOR else colors.text, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -60, 0, 20), Parent = c })
+				UI.label({ Text = if m.userId == player.UserId then "you" else distanceText(other), TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(60, 20), Parent = c })
+				if showTools and other then
+					local promote = UI.button({ Text = "MAKE LEADER", TextSize = 11, Position = UDim2.fromOffset(0, 26), Size = UDim2.new(0.5, -4, 0, 26), Parent = c })
+					local kick = UI.button({ Text = "KICK", TextSize = 11, BackgroundColor3 = colors.danger, Position = UDim2.new(0.5, 4, 0, 26), Size = UDim2.new(0.5, -4, 0, 26), Parent = c })
+					promote.Activated:Connect(function()
+						act("promote", other)
+					end)
+					kick.Activated:Connect(function()
+						act("kick", other)
+					end)
+				end
+			end
+
+			if isLeader() then
+				header("LEAD THE PARTY", nextOrder())
+				local c = Phone.card(content, 84, nextOrder())
+				local travel = UI.button({ Text = "🧭 TRAVEL TOGETHER", TextSize = 12, Size = UDim2.new(1, 0, 0, 28), Parent = c })
+				local hoops = UI.button({ Text = "🏀 QUEUE BASKETBALL (nearest court)", TextSize = 12, BackgroundColor3 = Color3.fromRGB(200, 100, 30), Position = UDim2.fromOffset(0, 32), Size = UDim2.new(1, 0, 0, 28), Parent = c })
+				travel.Activated:Connect(function()
+					act("travel")
+				end)
+				hoops.Activated:Connect(function()
+					act("hoops")
+				end)
+
+				header("SET DESTINATION (GPS FOR EVERYONE)", nextOrder())
+				local city = Workspace:FindFirstChild("City")
+				local points = city and city:FindFirstChild("MapPoints")
+				local list = if points then points:GetChildren() else {}
+				local root = rootOf(player)
+				table.sort(list, function(a, b)
+					if root and a:IsA("BasePart") and b:IsA("BasePart") then
+						return (a.Position - root.Position).Magnitude < (b.Position - root.Position).Magnitude
+					end
+					return a.Name < b.Name
+				end)
+				for _, point in list do
+					if point:IsA("BasePart") then
+						local row = Phone.card(content, 40, nextOrder())
+						UI.label({ Text = point.Name, Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -60, 1, 0), Parent = row })
+						local go = UI.button({ Text = "SET", TextSize = 12, BackgroundColor3 = PARTY_COLOR, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(52, 26), Parent = row })
+						go.Activated:Connect(function()
+							act("destination", point.Name)
+						end)
+					end
+				end
+				if #list == 0 then
+					note("No places on the map yet.", nextOrder())
+				end
+			end
+		end
+
+		-- invite players in this server
+		header("INVITE PLAYERS IN THIS SERVER", nextOrder())
+		local any = false
+		local others = Players:GetPlayers()
+		table.sort(others, function(a, b)
+			return (distanceTo(a) or math.huge) < (distanceTo(b) or math.huge)
+		end)
+		for _, other in others do
+			if other ~= player and not inParty(other.UserId) then
+				any = true
+				local row = Phone.card(content, 40, nextOrder())
+				UI.label({ Text = other.DisplayName, Font = UI.FONT_BOLD, TextSize = 13, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -120, 1, 0), Parent = row })
+				UI.label({ Text = distanceText(other), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.new(1, -116, 0, 0), Size = UDim2.new(0, 50, 1, 0), Parent = row })
+				local inv = UI.button({ Text = "INVITE", TextSize = 12, BackgroundColor3 = PARTY_COLOR, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(62, 26), Parent = row })
+				inv.Activated:Connect(function()
+					act("invite", other)
+					inv.Text = "SENT"
+					inv.AutoButtonColor = false
+				end)
+			end
+		end
+		if not any then
+			note("Nobody else to invite right now.", nextOrder())
+		end
+
+		if state then
+			local c = Phone.card(content, 36, nextOrder())
+			c.BackgroundTransparency = 1
+			local leave = UI.button({ Text = "LEAVE PARTY", TextSize = 13, BackgroundColor3 = colors.danger, Size = UDim2.new(if isLeader() then 0.5 else 1, if isLeader() then -4 else 0, 1, 0), Parent = c })
+			leave.Activated:Connect(function()
+				act("leave")
+			end)
+			if isLeader() then
+				local disband = UI.button({ Text = "DISBAND", TextSize = 13, BackgroundColor3 = Color3.fromRGB(120, 40, 40), Position = UDim2.new(0.5, 4, 0, 0), Size = UDim2.new(0.5, -4, 1, 0), Parent = c })
+				disband.Activated:Connect(function()
+					act("disband")
+				end)
+			end
+		end
+	end
+	return render
+end
+
+---------------------------------------------------------------------------
+-- Social menu
+---------------------------------------------------------------------------
+local function addMenuActions()
+	local module = script.Parent:FindFirstChild("Social")
+	if not module then
+		return
+	end
+	local ok, Social = pcall(require, module)
+	if not ok or type(Social) ~= "table" or type(Social.addMenuAction) ~= "function" then
+		return
+	end
+	Social.addMenuAction({
+		id = "PartyInvite",
+		label = "INVITE TO PARTY",
+		order = 20,
+		visible = function(target: Player)
+			if inParty(target.UserId) then
+				return false
+			end
+			return not state or #state.members < state.max
+		end,
+		run = function(target: Player)
+			act("invite", target)
+		end,
+	})
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Party.start()
+	Phone.addApp({ id = "Party", label = "Party", icon = "🎉", color = PARTY_COLOR }, function(content)
+		return buildApp(content)
+	end)
+
+	task.spawn(function()
+		gui = UI.new("ScreenGui", {
+			Name = "CityGrindParty",
+			ResetOnSpawn = false,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+			DisplayOrder = 3,
+			Parent = player:WaitForChild("PlayerGui"),
+		})
+		buildPanel()
+		buildInvitePopup()
+
+		local remotes = shared:WaitForChild("Remotes")
+		PartyAction = remotes:WaitForChild("PartyAction") :: RemoteEvent
+		local PartyEvent = remotes:WaitForChild("PartyEvent") :: RemoteEvent
+		PartyEvent.OnClientEvent:Connect(function(kind: any, a: any, b: any, c: any)
+			if kind == "state" then
+				state = if type(a) == "table" then a else nil
+				if state and selectedUserId and not inParty(selectedUserId) then
+					selectedUserId = nil
+				end
+				if state then
+					pendingInvite = nil
+					invitePopup.Visible = false
+				end
+				rebuildPanel()
+				updateMarkers()
+				Phone.refresh("Party")
+			elseif kind == "invite" then
+				showInvite(a)
+			elseif kind == "gps" then
+				if type(a) == "string" and typeof(b) == "Vector3" then
+					Phone.setGPS(a, b)
+					if type(c) == "string" then
+						HUD.push("PARTY", c)
+					end
+				end
+			end
+		end)
+
+		-- distances and markers tick
+		while true do
+			task.wait(0.5)
+			if state then
+				updateMarkers()
+				refreshDistances()
+			elseif next(markers) then
+				clearMarkers()
+			end
+		end
+	end)
+
+	task.spawn(addMenuActions)
+end
+
+return Party
 ]=====])
 put(client, 'ModuleScript', 'Phone', [=====[
 -- CITY GRIND: the phone (sections 15, 16). P / DPad-Up / on-screen button.
@@ -19649,6 +29470,1462 @@ function Shops.start()
 end
 
 return Shops
+]=====])
+put(client, 'ModuleScript', 'Social', [=====[
+-- CITY GRIND: social client (spec 21, 28, 29, 44-47, 96, 97, 101).
+-- * Player interaction menu: a "•••" prompt over anyone within 10 studs (key T,
+--   gamepad DPad-Down, tap on touch) opens VIEW PROFILE / friend / emotes / other
+--   modules' actions (Social.addMenuAction) / MUTE / BLOCK / REPORT.
+-- * Profile cards (Social.openProfile(userId)).
+-- * "Friends" phone app: friends + status, requests, nearby players, your status and
+--   profile customization, privacy settings with block / mute lists.
+-- * Hides the nametag and prompt of anyone you blocked or who blocked you.
+-- The server decides everything; this file only asks and draws.
+
+local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local SC = require(shared:WaitForChild("SocialConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Social = {}
+
+-- Fired whenever friends / requests / block / mute lists change.
+Social.changed = Instance.new("BindableEvent")
+
+type MenuAction = {
+	id: string,
+	label: string,
+	order: number,
+	visible: ((target: Player) -> boolean)?,
+	run: (target: Player) -> (),
+}
+local menuActions: { MenuAction } = {}
+
+local remotes: Instance? = nil
+local SocialAction: RemoteFunction? = nil
+local SocialProfile: RemoteFunction? = nil
+local SocialEmote: RemoteEvent? = nil
+
+local state: any = nil
+local blockedSet: { [number]: boolean } = {}
+local hiddenSet: { [number]: boolean } = {}
+local mutedSet: { [number]: boolean } = {}
+local friendSet: { [number]: boolean } = {}
+
+local gui: ScreenGui
+local GOOD = Color3.fromRGB(50, 170, 90)
+local BLUE = Color3.fromRGB(40, 120, 220)
+local DIM = Color3.fromRGB(60, 60, 72)
+
+---------------------------------------------------------------------------
+-- Server calls
+---------------------------------------------------------------------------
+local function act(action: string, a: any?, b: any?): (boolean, string?, any)
+	if not SocialAction then
+		return false, "Still connecting...", nil
+	end
+	local ok, success, message, extra = pcall(function()
+		return (SocialAction :: RemoteFunction):InvokeServer(action, a, b)
+	end)
+	if not ok then
+		return false, "Couldn't reach the server.", nil
+	end
+	return success == true, message, extra
+end
+
+-- Runs an action and shows the server's answer as a toast.
+local function actToast(title: string, action: string, a: any?, b: any?): boolean
+	local ok, message = act(action, a, b)
+	if message then
+		HUD.push(if ok then title else "CAN'T DO THAT", message)
+	elseif not ok then
+		HUD.push("CAN'T DO THAT", "Try again in a moment.")
+	end
+	return ok
+end
+
+local function applyState(newState: any)
+	if type(newState) ~= "table" then
+		return
+	end
+	state = newState
+	table.clear(blockedSet)
+	table.clear(mutedSet)
+	table.clear(friendSet)
+	table.clear(hiddenSet)
+	for _, b in state.blocked or {} do
+		blockedSet[b.userId] = true
+	end
+	for _, m in state.muted or {} do
+		mutedSet[m.userId] = true
+	end
+	for _, f in state.friends or {} do
+		friendSet[f.userId] = true
+	end
+	for _, id in state.hiddenIds or {} do
+		hiddenSet[id] = true
+	end
+	Social.changed:Fire()
+end
+
+local function fetchState()
+	local ok, _, s = act("state")
+	if ok then
+		applyState(s)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Public client API
+---------------------------------------------------------------------------
+-- True if you blocked this user or they blocked you.
+function Social.isBlocked(userId: number): boolean
+	return blockedSet[userId] == true or hiddenSet[userId] == true
+end
+
+function Social.isMuted(userId: number): boolean
+	return mutedSet[userId] == true or blockedSet[userId] == true
+end
+
+function Social.isFriend(userId: number): boolean
+	return friendSet[userId] == true
+end
+
+-- Other modules add buttons to the player interaction menu. Works before or after start().
+function Social.addMenuAction(action: MenuAction)
+	assert(type(action) == "table" and type(action.id) == "string" and type(action.run) == "function", "bad menu action")
+	for i, existing in menuActions do
+		if existing.id == action.id then
+			table.remove(menuActions, i)
+			break
+		end
+	end
+	table.insert(menuActions, {
+		id = action.id,
+		label = tostring(action.label or action.id),
+		order = tonumber(action.order) or 50,
+		visible = action.visible,
+		run = action.run,
+	})
+	table.sort(menuActions, function(a, b)
+		return a.order < b.order
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Small UI helpers
+---------------------------------------------------------------------------
+local function modal(name: string, width: number, height: number): Frame
+	local frame = UI.new("Frame", {
+		Name = name,
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.03,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(width, height),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(Color3.fromRGB(70, 70, 85), 1.5) })
+	UI.new("UISizeConstraint", { MaxSize = Vector2.new(width, height), Parent = frame })
+	return frame
+end
+
+local function selectFirst(container: Instance)
+	if UserInputService.GamepadEnabled then
+		for _, d in container:GetDescendants() do
+			if d:IsA("GuiButton") and d.Visible then
+				GuiService.SelectedObject = d
+				return
+			end
+		end
+	end
+end
+
+local function statusText(status: string?): string
+	if not status or status == "" then
+		return ""
+	end
+	local icon = SC.STATUS_ICONS[status]
+	return if icon and icon ~= "" then icon .. " " .. status else status
+end
+
+local function statusColor(status: string): Color3
+	if status == "Not in this server" then
+		return colors.subtext
+	elseif status == "Do Not Disturb" or status == "Busy" then
+		return colors.danger
+	end
+	return colors.cash
+end
+
+local function myRoot(): BasePart?
+	local c = player.Character
+	local r = c and c:FindFirstChild("HumanoidRootPart")
+	return if r and r:IsA("BasePart") then r else nil
+end
+
+local function distanceTo(other: Player): number
+	local mine = myRoot()
+	local c = other.Character
+	local r = c and c:FindFirstChild("HumanoidRootPart")
+	if not mine or not r or not r:IsA("BasePart") then
+		return math.huge
+	end
+	return (mine.Position - r.Position).Magnitude
+end
+
+---------------------------------------------------------------------------
+-- Report panel (spec 101): Roblox's own report flow
+---------------------------------------------------------------------------
+local reportFrame: Frame
+local reportBody: TextLabel
+local reportBlock: TextButton
+local reportTarget: Player? = nil
+local blockPlayer: (Player) -> ()
+
+local function buildReport()
+	reportFrame = modal("Report", 300, 236)
+	UI.padding(14).Parent = reportFrame
+	UI.label({ Text = "REPORT A PLAYER", Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = colors.danger, Size = UDim2.new(1, 0, 0, 20), Parent = reportFrame })
+	reportBody = UI.label({
+		Text = "",
+		TextSize = 14,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Position = UDim2.fromOffset(0, 26),
+		Size = UDim2.new(1, 0, 0, 120),
+		Parent = reportFrame,
+	})
+	reportBlock = UI.button({ Text = "BLOCK THEM TOO", TextSize = 14, BackgroundColor3 = colors.danger, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(0.5, -4, 0, 38), Parent = reportFrame })
+	local done = UI.button({ Text = "GOT IT", TextSize = 14, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0), Size = UDim2.new(0.5, -4, 0, 38), Parent = reportFrame })
+	done.Activated:Connect(function()
+		reportFrame.Visible = false
+	end)
+	reportBlock.Activated:Connect(function()
+		local target = reportTarget
+		reportFrame.Visible = false
+		if target and target.Parent then
+			blockPlayer(target)
+		end
+	end)
+end
+
+local function openReport(target: Player)
+	reportTarget = target
+	local menuKey = if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then "the ☰ Roblox button (top-left)" else "the Roblox menu (Esc)"
+	reportBody.Text = string.format(
+		"Reports go straight to Roblox's moderators.\n\nOpen %s → Report, then choose %s (@%s) and what happened.",
+		menuKey,
+		target.DisplayName,
+		target.Name
+	)
+	reportBlock.Visible = not blockedSet[target.UserId]
+	reportFrame.Visible = true
+	selectFirst(reportFrame)
+end
+
+---------------------------------------------------------------------------
+-- Block / mute helpers (also offer Roblox's own block prompt)
+---------------------------------------------------------------------------
+blockPlayer = function(target: Player)
+	if actToast("BLOCKED", "block", target.UserId) then
+		fetchState()
+		pcall(function()
+			StarterGui:SetCore("PromptBlockPlayer", target)
+		end)
+	end
+end
+
+local function unblockUser(userId: number)
+	if actToast("UNBLOCKED", "unblock", userId) then
+		fetchState()
+		local target = Players:GetPlayerByUserId(userId)
+		if target then
+			pcall(function()
+				StarterGui:SetCore("PromptUnblockPlayer", target)
+			end)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Profile card (spec 28, 29)
+---------------------------------------------------------------------------
+local profileFrame: Frame
+local profileBody: ScrollingFrame
+local profileBanner: Frame
+local profileAvatar: ImageLabel
+local profileName: TextLabel
+local profileSub: TextLabel
+local profileButtons: Frame
+local profileToken = 0
+local openFriendsTab: (string) -> ()
+
+local function buildProfileCard()
+	profileFrame = modal("Profile", 330, 540)
+	profileBanner = UI.new("Frame", { BackgroundColor3 = SC.BANNERS[1], Size = UDim2.new(1, 0, 0, 96), Parent = profileFrame }, { UI.corner(16) })
+	-- square off the banner's bottom corners
+	UI.new("Frame", { BackgroundColor3 = SC.BANNERS[1], Name = "Fill", Position = UDim2.new(0, 0, 1, -16), Size = UDim2.new(1, 0, 0, 16), Parent = profileBanner })
+	profileAvatar = UI.new("ImageLabel", { BackgroundColor3 = colors.panelLight, Position = UDim2.fromOffset(14, 14), Size = UDim2.fromOffset(68, 68), ZIndex = 2, Parent = profileFrame }, { UI.corner(34), UI.stroke(Color3.new(1, 1, 1), 2) })
+	profileName = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 20, TextStrokeTransparency = 0.6, Position = UDim2.fromOffset(92, 18), Size = UDim2.new(1, -140, 0, 24), TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2, Parent = profileFrame })
+	profileSub = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, TextStrokeTransparency = 0.7, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(92, 44), Size = UDim2.new(1, -104, 0, 40), ZIndex = 2, Parent = profileFrame })
+	local close = UI.button({ Text = "✕", TextSize = 16, BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.5, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10), Size = UDim2.fromOffset(32, 32), ZIndex = 3, Parent = profileFrame })
+	close.Activated:Connect(function()
+		profileFrame.Visible = false
+	end)
+	profileBody = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 104),
+		Size = UDim2.new(1, 0, 1, -158),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		Parent = profileFrame,
+	}, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+		UI.new("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 8) }),
+	})
+	profileButtons = UI.new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 12, 1, -10), Size = UDim2.new(1, -24, 0, 40), Parent = profileFrame }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+end
+
+local function statRow(parent: Instance, order: number, entries: { { string } }, title: string?)
+	local height = if title then 80 else 62
+	local row = Phone.card(parent, height, order)
+	local y = 0
+	if title then
+		UI.label({ Text = title, Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = row })
+		y = 16
+	end
+	for i, entry in entries do
+		local x = (i - 1) / #entries
+		UI.label({ Text = entry[2], Font = UI.FONT_BLACK, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.new(x, 0, 0, y), Size = UDim2.new(1 / #entries, 0, 0, 20), Parent = row })
+		UI.label({ Text = entry[1], TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new(x, 0, 0, y + 22), Size = UDim2.new(1 / #entries, 0, 0, 14), Parent = row })
+	end
+end
+
+local function infoLine(parent: Instance, order: number, label: string, value: string, color: Color3?)
+	local row = Phone.card(parent, 40, order)
+	UI.label({ Text = label, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(0.42, 0, 1, 0), Parent = row })
+	UI.label({ Text = value, Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = color or colors.text, TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromScale(0.42, 0), Size = UDim2.new(0.58, 0, 1, 0), Parent = row })
+end
+
+local function profileButton(text: string, color: Color3, fn: () -> ())
+	local b = UI.button({ Text = text, TextSize = 13, BackgroundColor3 = color, Size = UDim2.fromOffset(96, 38), Parent = profileButtons })
+	b.Activated:Connect(fn)
+	return b
+end
+
+local function setBanner(color: Color3)
+	profileBanner.BackgroundColor3 = color
+	local fill = profileBanner:FindFirstChild("Fill")
+	if fill and fill:IsA("Frame") then
+		fill.BackgroundColor3 = color
+	end
+end
+
+function Social.openProfile(userId: number)
+	if type(userId) ~= "number" or not profileFrame then
+		return
+	end
+	profileToken += 1
+	local token = profileToken
+	Phone.clear(profileBody)
+	Phone.clear(profileButtons)
+	setBanner(SC.BANNERS[8])
+	profileName.Text = "Loading..."
+	profileSub.Text = ""
+	profileAvatar.Image = ""
+	profileFrame.Visible = true
+	task.spawn(function()
+		local ok, image = pcall(function()
+			return Players:GetUserThumbnailAsync(userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+		end)
+		if ok and token == profileToken then
+			profileAvatar.Image = image
+		end
+	end)
+	local ok, p = pcall(function()
+		return if SocialProfile then (SocialProfile :: RemoteFunction):InvokeServer(userId) else nil
+	end)
+	if token ~= profileToken then
+		return
+	end
+	if not ok or type(p) ~= "table" then
+		profileName.Text = "Profile unavailable"
+		profileSub.Text = "Try again in a moment."
+		profileButton("CLOSE", DIM, function()
+			profileFrame.Visible = false
+		end)
+		return
+	end
+
+	setBanner(SC.BANNERS[p.banner or 0] or SC.BANNERS[1])
+	profileName.Text = tostring(p.name)
+	local sub = "@" .. tostring(p.username or "")
+	if p.level then
+		sub ..= "  ·  LV " .. p.level
+	end
+	if p.title and p.title ~= "" then
+		sub ..= "\n" .. tostring(p.title)
+	end
+	profileSub.Text = sub
+
+	local order = 0
+	local function nextOrder(): number
+		order += 1
+		return order
+	end
+	local badges = {}
+	if p.relation == "friends" then
+		table.insert(badges, "🤝 Friend")
+	end
+	if p.robloxFriend then
+		table.insert(badges, "⭐ Roblox friend")
+	end
+	if p.status and p.status ~= "" then
+		table.insert(badges, statusText(p.status))
+	end
+	if #badges > 0 then
+		UI.label({ Text = table.concat(badges, "   "), Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.cash, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -20, 0, 18), LayoutOrder = nextOrder(), Parent = profileBody })
+	end
+
+	if p.note then
+		local c = Phone.card(profileBody, 50, nextOrder())
+		UI.label({ Text = tostring(p.note), TextSize = 14, TextWrapped = true, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Parent = c })
+	end
+
+	if not p.limited and p.online then
+		local rankColor = SC.RANK_COLORS[p.rank] or colors.text
+		statRow(profileBody, nextOrder(), {
+			{ "Rank", tostring(p.rank) },
+			{ "Reputation", tostring(p.reputation) },
+			{ "Fame", tostring(p.fame) },
+			{ "Friends", tostring(p.friendCount or 0) },
+		})
+		if p.featured then
+			local f = Phone.card(profileBody, 66, nextOrder())
+			f.BackgroundColor3 = (SC.BANNERS[p.banner or 0] or SC.BANNERS[1]):Lerp(colors.panelLight, 0.6)
+			UI.label({ Text = "FEATURED · " .. string.upper(tostring(p.featured.label)), Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = f })
+			UI.label({ Text = tostring(p.featured.value), Font = UI.FONT_BLACK, TextSize = 22, Position = UDim2.fromOffset(0, 14), Size = UDim2.new(1, 0, 0, 24), Parent = f })
+		end
+		local bb = p.basketball or {}
+		statRow(profileBody, nextOrder(), {
+			{ "W - L", string.format("%d-%d", bb.wins or 0, bb.losses or 0) },
+			{ "Points", tostring(bb.points or 0) },
+			{ "3PT", tostring(bb.threes or 0) },
+			{ "Dunks", tostring(bb.dunks or 0) },
+		}, "BASKETBALL")
+		infoLine(profileBody, nextOrder(), "Reputation rank", tostring(p.rank), rankColor)
+		if p.crew then
+			local crewColor = if typeof(p.crew.color) == "Color3" then p.crew.color else colors.text
+			infoLine(profileBody, nextOrder(), "Crew", string.format("[%s] %s", tostring(p.crew.tag), tostring(p.crew.name)), crewColor)
+		else
+			infoLine(profileBody, nextOrder(), "Crew", "No crew")
+		end
+		infoLine(profileBody, nextOrder(), "Home", tostring(p.homeTier))
+		infoLine(profileBody, nextOrder(), "Favourite activity", if p.favorite == "None" then "—" else tostring(p.favorite))
+		if p.bio and p.bio ~= "" then
+			local bioCard = Phone.card(profileBody, 70, nextOrder())
+			bioCard.AutomaticSize = Enum.AutomaticSize.Y
+			UI.label({ Text = "BIO", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = bioCard })
+			UI.label({ Text = tostring(p.bio), TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, AutomaticSize = Enum.AutomaticSize.Y, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 18), Parent = bioCard })
+		end
+	end
+
+	-- Buttons (all real)
+	if p.self then
+		profileButton("EDIT", BLUE, function()
+			profileFrame.Visible = false
+			openFriendsTab("Me")
+		end)
+	elseif not p.blocked then
+		if p.relation == "none" then
+			profileButton("ADD FRIEND", GOOD, function()
+				if actToast("FRIENDS", "request", userId) then
+					Social.openProfile(userId)
+				end
+			end)
+		elseif p.relation == "incoming" then
+			profileButton("ACCEPT", GOOD, function()
+				if actToast("FRIENDS", "accept", userId) then
+					Social.openProfile(userId)
+				end
+			end)
+		elseif p.relation == "outgoing" then
+			profileButton("CANCEL REQ", DIM, function()
+				if actToast("FRIENDS", "cancel", userId) then
+					Social.openProfile(userId)
+				end
+			end)
+		end
+	else
+		profileButton("UNBLOCK", DIM, function()
+			unblockUser(userId)
+			Social.openProfile(userId)
+		end)
+	end
+	profileButton("CLOSE", DIM, function()
+		profileFrame.Visible = false
+	end)
+	selectFirst(profileButtons)
+end
+
+---------------------------------------------------------------------------
+-- Two-person emote request card
+---------------------------------------------------------------------------
+local emoteCard: Frame
+local emoteText: TextLabel
+local emoteFrom = 0
+local emoteToken = 0
+
+local function respondEmote(accept: boolean)
+	emoteCard.Visible = false
+	if emoteFrom ~= 0 and SocialEmote then
+		SocialEmote:FireServer("respond", emoteFrom, accept)
+	end
+	emoteFrom = 0
+	ContextActionService:UnbindAction("SocialEmoteAccept")
+end
+
+local function buildEmoteCard()
+	emoteCard = UI.new("Frame", {
+		Name = "EmoteRequest",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.05,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 140),
+		Size = UDim2.fromOffset(300, 96),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.stroke(colors.accent, 1.5, 0.2), UI.padding(10) })
+	emoteText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 15, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 36), Parent = emoteCard })
+	local yes = UI.button({ Text = "ACCEPT", TextSize = 14, BackgroundColor3 = GOOD, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(0.5, -4, 0, 34), Parent = emoteCard })
+	local no = UI.button({ Text = "DECLINE", TextSize = 14, BackgroundColor3 = DIM, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0), Size = UDim2.new(0.5, -4, 0, 34), Parent = emoteCard })
+	yes.Activated:Connect(function()
+		respondEmote(true)
+	end)
+	no.Activated:Connect(function()
+		respondEmote(false)
+	end)
+end
+
+local function showEmoteRequest(fromUserId: number, kind: string, fromName: string)
+	if Social.isBlocked(fromUserId) then
+		if SocialEmote then
+			SocialEmote:FireServer("respond", fromUserId, false)
+		end
+		return
+	end
+	local emote = SC.EMOTES[kind]
+	if not emote then
+		return
+	end
+	emoteFrom = fromUserId
+	emoteToken += 1
+	local token = emoteToken
+	emoteText.Text = string.format("%s wants a %s!", fromName, emote.label)
+	emoteCard.Visible = true
+	-- Y (keyboard) / ButtonY (gamepad) accepts without the mouse
+	ContextActionService:BindAction("SocialEmoteAccept", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			respondEmote(true)
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.Y, Enum.KeyCode.ButtonY)
+	task.delay(SC.EMOTE_REQUEST_SECONDS, function()
+		if token == emoteToken and emoteCard.Visible then
+			emoteCard.Visible = false
+			emoteFrom = 0
+			ContextActionService:UnbindAction("SocialEmoteAccept")
+		end
+	end)
+end
+
+local function doEmote(target: Player?, kind: string)
+	if kind == "Wave" then
+		local EmotesModule = script.Parent:FindFirstChild("Emotes")
+		if EmotesModule then
+			local ok = pcall(function()
+				require(EmotesModule).play("Wave")
+			end)
+			if ok then
+				return
+			end
+		end
+		if SocialEmote then
+			SocialEmote:FireServer("solo", "Wave")
+		end
+	elseif target and SocialEmote then
+		SocialEmote:FireServer("request", target.UserId, kind)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Player interaction menu (spec 21, 96)
+---------------------------------------------------------------------------
+local menuFrame: Frame
+local menuTitle: TextLabel
+local menuSub: TextLabel
+local menuList: ScrollingFrame
+local menuTarget: Player? = nil
+local menuToken = 0
+
+local function closeMenu()
+	menuTarget = nil
+	menuToken += 1
+	if menuFrame then
+		menuFrame.Visible = false
+	end
+	ContextActionService:UnbindAction("SocialMenuClose")
+end
+
+local function buildMenu()
+	menuFrame = UI.new("Frame", {
+		Name = "InteractMenu",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.04,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, -170, 0.5, 0),
+		Size = UDim2.fromOffset(250, 420),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(Color3.fromRGB(70, 70, 85), 1.5), UI.padding(12) })
+	menuTitle = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 18, Size = UDim2.new(1, -36, 0, 22), TextTruncate = Enum.TextTruncate.AtEnd, Parent = menuFrame })
+	menuSub = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 30), Parent = menuFrame })
+	local close = UI.button({ Text = "✕", TextSize = 15, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(30, 30), Parent = menuFrame })
+	close.Activated:Connect(closeMenu)
+	menuList = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 56),
+		Size = UDim2.new(1, 0, 1, -56),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		Parent = menuFrame,
+	}, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+end
+
+local function menuButton(order: number, text: string, color: Color3?, fn: () -> ()): TextButton
+	local b = UI.button({ Text = text, TextSize = 14, BackgroundColor3 = color or colors.panelLight, Size = UDim2.new(1, -6, 0, 36), LayoutOrder = order, Parent = menuList })
+	b.Activated:Connect(fn)
+	return b
+end
+
+function Social.openMenu(target: Player)
+	if not menuFrame or not target or target == player or not target.Parent then
+		return
+	end
+	menuToken += 1
+	local token = menuToken
+	menuTarget = target
+	Phone.clear(menuList)
+	menuTitle.Text = target.DisplayName
+	menuSub.Text = "@" .. target.Name .. "  ·  loading..."
+	menuFrame.Visible = true
+	ContextActionService:BindAction("SocialMenuClose", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			closeMenu()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.ButtonB)
+
+	local ok, _, info = act("query", target.UserId)
+	if token ~= menuToken then
+		return
+	end
+	if not ok or type(info) ~= "table" then
+		menuSub.Text = "They left the area."
+		return
+	end
+	local subParts = { "@" .. target.Name, "LV " .. tostring(info.level) }
+	if info.robloxFriend then
+		table.insert(subParts, "⭐ Roblox friend")
+	end
+	if info.relation == "friends" then
+		table.insert(subParts, "🤝 Friend")
+	end
+	if info.status and info.status ~= "" then
+		table.insert(subParts, statusText(info.status))
+	end
+	menuSub.Text = table.concat(subParts, "  ·  ")
+
+	local userId = target.UserId
+	local function reopen()
+		if menuTarget == target then
+			Social.openMenu(target)
+		end
+	end
+
+	menuButton(10, "VIEW PROFILE", BLUE, function()
+		closeMenu()
+		Social.openProfile(userId)
+	end)
+
+	if not info.blocked then
+		if info.relation == "friends" then
+			local armed = false
+			local removeBtn: TextButton
+			removeBtn = menuButton(20, "REMOVE FRIEND", DIM, function()
+				if not armed then
+					armed = true
+					removeBtn.Text = "TAP AGAIN TO REMOVE"
+					removeBtn.BackgroundColor3 = colors.danger
+					return
+				end
+				actToast("FRIENDS", "remove", userId)
+				reopen()
+			end)
+		elseif info.relation == "incoming" then
+			menuButton(20, "ACCEPT FRIEND REQUEST", GOOD, function()
+				actToast("FRIENDS", "accept", userId)
+				reopen()
+			end)
+		elseif info.relation == "outgoing" then
+			menuButton(20, "CANCEL FRIEND REQUEST", DIM, function()
+				actToast("FRIENDS", "cancel", userId)
+				reopen()
+			end)
+		elseif info.canInteract then
+			menuButton(20, "ADD FRIEND", GOOD, function()
+				actToast("FRIENDS", "request", userId)
+				reopen()
+			end)
+		end
+	end
+
+	if info.canInteract then
+		local near = distanceTo(target) <= SC.EMOTE_RANGE
+		menuButton(30, "👋 WAVE", nil, function()
+			closeMenu()
+			doEmote(target, "Wave")
+		end)
+		if near then
+			for i, kind in { "HighFive", "FistBump", "Handshake" } do
+				menuButton(30 + i, (if kind == "HighFive" then "✋ " elseif kind == "FistBump" then "👊 " else "🤝 ") .. SC.EMOTES[kind].label, nil, function()
+					closeMenu()
+					doEmote(target, kind)
+				end)
+			end
+		end
+		-- actions added by other systems (messages, invites...)
+		for _, action in menuActions do
+			local visible = true
+			if action.visible then
+				local okVisible, result = pcall(action.visible, target)
+				visible = okVisible and result ~= false
+			end
+			if visible then
+				menuButton(100 + action.order, action.label, nil, function()
+					closeMenu()
+					local okRun, err = pcall(action.run, target)
+					if not okRun then
+						warn("[CityGrind] menu action " .. action.id .. " failed:", err)
+					end
+				end)
+			end
+		end
+	elseif info.reason and not info.blocked then
+		UI.label({ Text = tostring(info.reason), TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Size = UDim2.new(1, -6, 0, 30), LayoutOrder = 25, Parent = menuList })
+	end
+
+	menuButton(900, if info.muted then "🔊 UNMUTE" else "🔇 MUTE", DIM, function()
+		actToast("MUTE", if info.muted then "unmute" else "mute", userId)
+		fetchState()
+		reopen()
+	end)
+	menuButton(901, if info.blocked then "UNBLOCK" else "⛔ BLOCK", colors.danger, function()
+		if info.blocked then
+			unblockUser(userId)
+		else
+			blockPlayer(target)
+		end
+		reopen()
+	end)
+	menuButton(902, "🚩 REPORT", DIM, function()
+		closeMenu()
+		openReport(target)
+	end)
+	selectFirst(menuList)
+end
+
+---------------------------------------------------------------------------
+-- "•••" prompts over nearby players + hiding blocked players
+---------------------------------------------------------------------------
+local prompts: { [Player]: ProximityPrompt } = {}
+
+local function attachPrompt(other: Player, character: Model)
+	local root = character:WaitForChild("HumanoidRootPart", 10)
+	if not root or not other.Parent then
+		return
+	end
+	local old = prompts[other]
+	if old then
+		old:Destroy()
+	end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "CityGrindSocialPrompt"
+	prompt.ActionText = "•••"
+	prompt.ObjectText = other.DisplayName
+	prompt.KeyboardKeyCode = Enum.KeyCode.T
+	prompt.GamepadKeyCode = Enum.KeyCode.DPadDown
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = SC.INTERACT_RANGE
+	prompt.RequiresLineOfSight = false
+	prompt.UIOffset = Vector2.new(0, 40)
+	prompt.Enabled = not Social.isBlocked(other.UserId)
+	prompt.Triggered:Connect(function()
+		Social.openMenu(other)
+	end)
+	prompt.Parent = root
+	prompts[other] = prompt
+end
+
+local function watchPlayer(other: Player)
+	if other == player then
+		return
+	end
+	other.CharacterAdded:Connect(function(character)
+		task.spawn(attachPrompt, other, character)
+	end)
+	if other.Character then
+		task.spawn(attachPrompt, other, other.Character)
+	end
+end
+
+-- Blocked players: no prompt, no nametag. Busy (driving / in a game): no prompts.
+local function refreshVisibility()
+	local busy = (player:GetAttribute("Driving") or "") ~= "" or player:GetAttribute("InGame") ~= nil
+	for _, other in Players:GetPlayers() do
+		if other ~= player then
+			local hidden = Social.isBlocked(other.UserId)
+			local prompt = prompts[other]
+			if prompt and prompt.Parent then
+				prompt.Enabled = not hidden and not busy
+			end
+			local head = other.Character and other.Character:FindFirstChild("Head")
+			local tag = head and head:FindFirstChild("CityGrindTag")
+			if tag and tag:IsA("BillboardGui") then
+				tag.Enabled = not hidden
+			end
+		end
+	end
+	if menuTarget and Social.isBlocked(menuTarget.UserId) then
+		-- keep the menu open so UNBLOCK stays reachable for our own blocks
+		if hiddenSet[menuTarget.UserId] then
+			closeMenu()
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Friends phone app (spec 46, 47, 44, 97)
+---------------------------------------------------------------------------
+local TABS = { "Friends", "Requests", "Nearby", "Me", "Privacy" }
+local currentTab = "Friends"
+local appContent: ScrollingFrame? = nil
+local renderApp: () -> ()
+
+openFriendsTab = function(tab: string)
+	currentTab = tab
+	Phone.setOpen(true)
+	Phone.showPage("Friends")
+end
+
+local function sectionLabel(parent: Instance, order: number, text: string)
+	UI.label({ Text = text, Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = order, Parent = parent })
+end
+
+local function smallButton(parent: Instance, text: string, color: Color3, x: number, width: number, fn: () -> ()): TextButton
+	local b = UI.button({ Text = text, TextSize = 12, BackgroundColor3 = color, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -x, 1, 0), Size = UDim2.fromOffset(width, 26), Parent = parent })
+	b.Activated:Connect(fn)
+	return b
+end
+
+local function emptyNote(parent: Instance, order: number, text: string)
+	UI.label({ Text = text, TextSize = 13, TextWrapped = true, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -20, 0, 40), LayoutOrder = order, Parent = parent })
+end
+
+local function rerender()
+	if Phone.isOpen() and Phone.currentPage() == "Friends" then
+		renderApp()
+	end
+end
+
+local function renderTabs(content: ScrollingFrame)
+	local bar = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -16, 0, 30), LayoutOrder = 0, Parent = content }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local incoming = state and #state.incoming or 0
+	for i, tab in TABS do
+		local text = if tab == "Requests" and incoming > 0 then "Req (" .. incoming .. ")" else (if tab == "Requests" then "Req" else tab)
+		local b = UI.button({
+			Text = text,
+			TextSize = 11,
+			BackgroundColor3 = if tab == currentTab then colors.accent else colors.panelLight,
+			Size = UDim2.new(1 / #TABS, -3, 1, 0),
+			LayoutOrder = i,
+			Parent = bar,
+		})
+		b.Activated:Connect(function()
+			currentTab = tab
+			renderApp()
+		end)
+	end
+end
+
+local function renderFriends(content: ScrollingFrame)
+	local friends = state.friends
+	local online = 0
+	for _, f in friends do
+		if f.online then
+			online += 1
+		end
+	end
+	sectionLabel(content, 1, string.format("FRIENDS  %d/%d  ·  %d HERE", #friends, state.maxFriends or SC.MAX_FRIENDS, online))
+
+	-- add by username (reaches players on other servers / offline when DataStores work)
+	local addCard = Phone.card(content, 74, 2)
+	UI.label({ Text = "Add by Roblox username", TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = addCard })
+	local box = UI.new("TextBox", {
+		Text = "",
+		PlaceholderText = "username",
+		ClearTextOnFocus = false,
+		Font = UI.FONT,
+		TextSize = 14,
+		TextColor3 = colors.text,
+		PlaceholderColor3 = colors.subtext,
+		BackgroundColor3 = colors.panel,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.fromOffset(0, 20),
+		Size = UDim2.new(1, -66, 0, 28),
+		Parent = addCard,
+	}, { UI.corner(8), UI.new("UIPadding", { PaddingLeft = UDim.new(0, 8) }) })
+	local addBtn = UI.button({ Text = "ADD", TextSize = 13, BackgroundColor3 = GOOD, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 20), Size = UDim2.fromOffset(58, 28), Parent = addCard })
+	addBtn.Activated:Connect(function()
+		local name = box.Text:gsub("^%s+", ""):gsub("%s+$", "")
+		if name == "" then
+			return
+		end
+		if actToast("FRIENDS", "addByName", name) then
+			box.Text = ""
+		end
+	end)
+
+	if #friends == 0 then
+		emptyNote(content, 3, "No friends yet. Walk up to someone and press ••• (T) to add them, or use Nearby.")
+	end
+	for i, f in friends do
+		local row = Phone.card(content, 76, 10 + i)
+		local name = tostring(f.name) .. (if f.robloxFriend then "  ⭐" else "")
+		UI.label({ Text = name, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -40, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		local lvl = if f.level then "  ·  LV " .. f.level else ""
+		UI.label({ Text = (if f.online then "● " else "○ ") .. statusText(f.status) .. lvl, TextSize = 12, TextColor3 = statusColor(f.status), Position = UDim2.fromOffset(0, 17), Size = UDim2.new(1, 0, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		local userId = f.userId
+		local x = 0
+		local armed = false
+		local removeBtn: TextButton
+		removeBtn = smallButton(row, "✕", DIM, x, 30, function()
+			if not armed then
+				armed = true
+				removeBtn.Text = "Sure?"
+				removeBtn.Size = UDim2.fromOffset(50, 26)
+				removeBtn.BackgroundColor3 = colors.danger
+				return
+			end
+			actToast("FRIENDS", "remove", userId)
+		end)
+		x += 56
+		smallButton(row, "Profile", BLUE, x, 58, function()
+			Social.openProfile(userId)
+		end)
+		x += 62
+		if f.online and f.canLocate then
+			smallButton(row, "GPS", Color3.fromRGB(240, 150, 40), x, 44, function()
+				local ok, message, info = act("locate", userId)
+				if ok and type(info) == "table" and typeof(info.position) == "Vector3" then
+					Phone.setGPS(tostring(info.name), info.position)
+				else
+					HUD.push("GPS", message or "Couldn't find them.")
+				end
+			end)
+			x += 48
+		end
+		local target = if f.online then Players:GetPlayerByUserId(userId) else nil
+		if target then
+			smallButton(row, "•••", DIM, x, 40, function()
+				Social.openMenu(target)
+			end)
+		end
+	end
+
+	-- Roblox friends here who aren't in-game friends yet
+	local order = 500
+	local shown = false
+	for _, id in state.robloxHere or {} do
+		local other = Players:GetPlayerByUserId(id)
+		if other and not friendSet[id] and not Social.isBlocked(id) then
+			if not shown then
+				sectionLabel(content, order, "ROBLOX FRIENDS IN THIS SERVER")
+				shown = true
+			end
+			order += 1
+			local row = Phone.card(content, 48, order)
+			UI.label({ Text = "⭐ " .. other.DisplayName, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -70, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+			local add = smallButton(row, "Add", GOOD, 0, 52, function()
+				actToast("FRIENDS", "request", id)
+			end)
+			add.AnchorPoint = Vector2.new(1, 0.5)
+			add.Position = UDim2.new(1, 0, 0.5, 0)
+		end
+	end
+end
+
+local function renderRequests(content: ScrollingFrame)
+	sectionLabel(content, 1, "INCOMING")
+	if #state.incoming == 0 then
+		emptyNote(content, 2, "No friend requests right now.")
+	end
+	for i, r in state.incoming do
+		local row = Phone.card(content, 76, 2 + i)
+		UI.label({ Text = tostring(r.name), Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		UI.label({ Text = "@" .. tostring(r.username or "") .. (if r.t then "  ·  " .. UI.timeAgo(r.t) else ""), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 14), Parent = row })
+		local userId = r.userId
+		smallButton(row, "Accept", GOOD, 0, 62, function()
+			actToast("FRIENDS", "accept", userId)
+		end)
+		smallButton(row, "Decline", DIM, 66, 62, function()
+			actToast("FRIENDS", "decline", userId)
+		end)
+		smallButton(row, "Profile", BLUE, 132, 58, function()
+			Social.openProfile(userId)
+		end)
+	end
+	sectionLabel(content, 200, "SENT")
+	if #state.outgoing == 0 then
+		emptyNote(content, 201, "You haven't sent any requests.")
+	end
+	for i, r in state.outgoing do
+		local row = Phone.card(content, 48, 201 + i)
+		UI.label({ Text = tostring(r.name), Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -80, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		UI.label({ Text = if r.t then "sent " .. UI.timeAgo(r.t) else "", TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -80, 0, 14), Parent = row })
+		local userId = r.userId
+		local b = smallButton(row, "Cancel", DIM, 0, 62, function()
+			actToast("FRIENDS", "cancel", userId)
+		end)
+		b.AnchorPoint = Vector2.new(1, 0.5)
+		b.Position = UDim2.new(1, 0, 0.5, 0)
+	end
+end
+
+local function renderNearby(content: ScrollingFrame)
+	local others = {}
+	for _, other in Players:GetPlayers() do
+		if other ~= player and not hiddenSet[other.UserId] then
+			table.insert(others, { player = other, dist = distanceTo(other) })
+		end
+	end
+	table.sort(others, function(a, b)
+		return a.dist < b.dist
+	end)
+	sectionLabel(content, 1, "PLAYERS IN THIS SERVER (" .. #others .. ")")
+	if #others == 0 then
+		emptyNote(content, 2, "Nobody else is in this city right now.")
+	end
+	local pending = {}
+	for _, r in state.outgoing do
+		pending[r.userId] = "sent"
+	end
+	for _, r in state.incoming do
+		pending[r.userId] = "incoming"
+	end
+	for i, entry in others do
+		local other: Player = entry.player
+		local id = other.UserId
+		local row = Phone.card(content, 76, 2 + i)
+		local badge = (if friendSet[id] then "  🤝" else "") .. (if table.find(state.robloxHere or {}, id) then "  ⭐" else "")
+		UI.label({ Text = other.DisplayName .. badge, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		local dist = if entry.dist < math.huge then math.floor(entry.dist / 3.57) .. "m away" else "far away"
+		local status = other:GetAttribute("SocialStatus")
+		local line = "LV " .. tostring(other:GetAttribute("Level") or 1) .. "  ·  " .. dist
+		if type(status) == "string" and status ~= "" then
+			line ..= "  ·  " .. statusText(status)
+		end
+		UI.label({ Text = line, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		smallButton(row, "Profile", BLUE, 0, 58, function()
+			Social.openProfile(id)
+		end)
+		if blockedSet[id] then
+			smallButton(row, "Unblock", DIM, 62, 64, function()
+				unblockUser(id)
+			end)
+		elseif not friendSet[id] then
+			if pending[id] == "sent" then
+				UI.label({ Text = "Request sent", TextSize = 11, TextColor3 = colors.subtext, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -64, 1, -6), Size = UDim2.fromOffset(90, 14), TextXAlignment = Enum.TextXAlignment.Right, Parent = row })
+			else
+				smallButton(row, if pending[id] == "incoming" then "Accept" else "Add Friend", GOOD, 62, 80, function()
+					actToast("FRIENDS", if pending[id] == "incoming" then "accept" else "request", id)
+				end)
+			end
+		end
+	end
+end
+
+local function cycle(list: { any }, current: any): any
+	local i = table.find(list, current) or 0
+	return list[i % #list + 1]
+end
+
+local function renderMe(content: ScrollingFrame)
+	local profile = state.profile
+	local view = UI.button({ Text = "VIEW MY PROFILE", TextSize = 14, BackgroundColor3 = BLUE, Size = UDim2.new(1, -20, 0, 36), LayoutOrder = 1, Parent = content })
+	view.Activated:Connect(function()
+		Social.openProfile(player.UserId)
+	end)
+
+	-- Status (spec 47)
+	sectionLabel(content, 2, "MY STATUS")
+	local rows = math.ceil(#SC.STATUSES / 2)
+	local statusCard = Phone.card(content, 26 + rows * 34, 3)
+	for i, st in SC.STATUSES do
+		local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+		local b = UI.button({
+			Text = (if st.icon ~= "" then st.icon .. " " else "") .. st.label,
+			TextSize = 11,
+			TextWrapped = true,
+			BackgroundColor3 = if state.status == st.id then colors.accent else colors.panel,
+			Position = UDim2.new(col * 0.5, if col == 1 then 3 else 0, 0, row * 34),
+			Size = UDim2.new(0.5, -3, 0, 30),
+			Parent = statusCard,
+		})
+		b.Activated:Connect(function()
+			if act("status", st.id) then
+				fetchState()
+				renderApp()
+			end
+		end)
+	end
+	UI.label({ Text = "Auto shows what you're doing. Do Not Disturb blocks invites and calls.", TextSize = 11, TextWrapped = true, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 28), LayoutOrder = 4, Parent = content })
+
+	-- Banner colour
+	sectionLabel(content, 10, "PROFILE BANNER")
+	local bannerCard = Phone.card(content, 56, 11)
+	for i, color in SC.BANNERS do
+		local swatch = UI.new("TextButton", { Text = "", AutoButtonColor = true, BackgroundColor3 = color, Position = UDim2.fromOffset((i - 1) * 29, 2), Size = UDim2.fromOffset(25, 28), Parent = bannerCard }, { UI.corner(6) })
+		if profile.banner == i then
+			UI.stroke(Color3.new(1, 1, 1), 2).Parent = swatch
+		end
+		swatch.Activated:Connect(function()
+			if act("profile", "banner", i) then
+				fetchState()
+				renderApp()
+			end
+		end)
+	end
+
+	-- Title (unlocked from level / reputation / basketball)
+	sectionLabel(content, 20, "TITLE")
+	local titleCard = Phone.card(content, 0, 21)
+	titleCard.AutomaticSize = Enum.AutomaticSize.Y
+	UI.new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = titleCard })
+	local unlocked = {}
+	for _, id in state.titles or {} do
+		unlocked[id] = true
+	end
+	for i, t in SC.TITLES do
+		local isOn = unlocked[t.id] == true
+		local b = UI.button({
+			Text = if isOn then t.id else ("🔒 " .. t.id .. "  ·  " .. SC.titleRequirement(t)),
+			TextSize = 12,
+			AutoButtonColor = isOn,
+			BackgroundColor3 = if profile.title == t.id then colors.accent elseif isOn then colors.panel else Color3.fromRGB(28, 28, 34),
+			TextColor3 = if isOn then colors.text else colors.subtext,
+			Size = UDim2.new(1, 0, 0, 28),
+			LayoutOrder = i,
+			Parent = titleCard,
+		})
+		if isOn then
+			b.Activated:Connect(function()
+				if act("profile", "title", t.id) then
+					fetchState()
+					renderApp()
+				end
+			end)
+		end
+	end
+
+	-- Favourite activity + featured stat (tap to cycle)
+	sectionLabel(content, 30, "SHOWCASE")
+	local showCard = Phone.card(content, 92, 31)
+	UI.label({ Text = "Favourite activity", TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(0.5, 0, 0, 28), Parent = showCard })
+	local fav = UI.button({ Text = if profile.favorite == "None" then "Not set ›" else tostring(profile.favorite) .. " ›", TextSize = 12, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.5, 0, 0, 28), Parent = showCard })
+	fav.Activated:Connect(function()
+		if act("profile", "favorite", cycle(SC.FAVORITES, profile.favorite)) then
+			fetchState()
+			renderApp()
+		end
+	end)
+	UI.label({ Text = "Featured stat", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 34), Size = UDim2.new(0.5, 0, 0, 28), Parent = showCard })
+	local featuredIds = {}
+	for _, f in SC.FEATURED do
+		table.insert(featuredIds, f.id)
+	end
+	local featured = SC.FEATURED_BY_ID[profile.featured] or SC.FEATURED[1]
+	local feat = UI.button({ Text = featured.label .. " ›", TextSize = 12, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 34), Size = UDim2.new(0.5, 0, 0, 28), Parent = showCard })
+	feat.Activated:Connect(function()
+		if act("profile", "featured", cycle(featuredIds, profile.featured)) then
+			fetchState()
+			renderApp()
+		end
+	end)
+
+	-- Bio (filtered by the server before anyone sees it)
+	sectionLabel(content, 40, "BIO")
+	local bioCard = Phone.card(content, 120, 41)
+	local bioBox = UI.new("TextBox", {
+		Text = tostring(profile.bio or ""),
+		PlaceholderText = "Say something about yourself...",
+		ClearTextOnFocus = false,
+		MultiLine = true,
+		TextWrapped = true,
+		Font = UI.FONT,
+		TextSize = 13,
+		TextColor3 = colors.text,
+		PlaceholderColor3 = colors.subtext,
+		BackgroundColor3 = colors.panel,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Size = UDim2.new(1, 0, 0, 60),
+		Parent = bioCard,
+	}, { UI.corner(8), UI.padding(6) })
+	local countLabel = UI.label({ Text = "", TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 66), Size = UDim2.new(0.5, 0, 0, 14), Parent = bioCard })
+	local function updateCount()
+		local n = utf8.len(bioBox.Text) or #bioBox.Text
+		countLabel.Text = n .. " / " .. SC.BIO_MAX
+		countLabel.TextColor3 = if n > SC.BIO_MAX then colors.danger else colors.subtext
+	end
+	bioBox:GetPropertyChangedSignal("Text"):Connect(updateCount)
+	updateCount()
+	local save = UI.button({ Text = "SAVE BIO", TextSize = 12, BackgroundColor3 = GOOD, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0), Size = UDim2.fromOffset(90, 28), Parent = bioCard })
+	save.Activated:Connect(function()
+		if actToast("PROFILE", "profile", "bio", bioBox.Text) then
+			HUD.push("PROFILE", if bioBox.Text == "" then "Bio cleared." else "Bio saved.")
+			fetchState()
+		end
+	end)
+end
+
+local function renderPrivacy(content: ScrollingFrame)
+	local privacy = state.privacy
+	sectionLabel(content, 1, "WHO CAN...")
+	for i, kind in SC.PRIVACY_KINDS do
+		local row = Phone.card(content, 44, 1 + i)
+		UI.label({ Text = kind.label, Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.new(0.5, 0, 1, 0), Parent = row })
+		local value = privacy[kind.id] or "Everyone"
+		local b = UI.button({
+			Text = value .. " ›",
+			TextSize = 12,
+			BackgroundColor3 = if value == "Nobody" then colors.danger elseif value == "Everyone" then GOOD else BLUE,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, 0, 0.5, 0),
+			Size = UDim2.fromOffset(104, 28),
+			Parent = row,
+		})
+		b.Activated:Connect(function()
+			if act("privacy", kind.id, cycle(SC.PRIVACY_VALUES, value)) then
+				fetchState()
+				renderApp()
+			end
+		end)
+	end
+
+	local visRow = Phone.card(content, 44, 20)
+	UI.label({ Text = "Profile visibility", Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.new(0.5, 0, 1, 0), Parent = visRow })
+	local vis = privacy.profile or "Public"
+	local visBtn = UI.button({ Text = vis .. " ›", TextSize = 12, BackgroundColor3 = if vis == "Public" then GOOD elseif vis == "Private" then colors.danger else BLUE, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(104, 28), Parent = visRow })
+	visBtn.Activated:Connect(function()
+		if act("privacy", "profile", cycle(SC.PROFILE_VISIBILITY, vis)) then
+			fetchState()
+			renderApp()
+		end
+	end)
+
+	for i, toggle in { { key = "showStatus", label = "Show my status" }, { key = "shareLocation", label = "Friends can GPS to me" } } do
+		local row = Phone.card(content, 44, 20 + i)
+		UI.label({ Text = toggle.label, Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.new(1, -70, 1, 0), Parent = row })
+		local on = privacy[toggle.key] == true
+		local b = UI.button({ Text = if on then "ON" else "OFF", TextSize = 12, BackgroundColor3 = if on then GOOD else colors.panel, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
+		b.Activated:Connect(function()
+			if act("privacy", toggle.key, not on) then
+				fetchState()
+				renderApp()
+			end
+		end)
+	end
+
+	sectionLabel(content, 40, "BLOCKED (" .. #state.blocked .. ")")
+	if #state.blocked == 0 then
+		emptyNote(content, 41, "You haven't blocked anyone.")
+	end
+	for i, b in state.blocked do
+		local row = Phone.card(content, 44, 41 + i)
+		UI.label({ Text = tostring(b.name), Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.new(1, -80, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		local userId = b.userId
+		local btn = UI.button({ Text = "Unblock", TextSize = 12, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(70, 28), Parent = row })
+		btn.Activated:Connect(function()
+			unblockUser(userId)
+		end)
+	end
+
+	sectionLabel(content, 400, "MUTED (" .. #state.muted .. ")")
+	if #state.muted == 0 then
+		emptyNote(content, 401, "Muting hides someone's messages and invites from you, and mutes their voice for you where Roblox's audio API is on.")
+	end
+	for i, m in state.muted do
+		local row = Phone.card(content, 44, 401 + i)
+		UI.label({ Text = tostring(m.name), Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.new(1, -80, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		local userId = m.userId
+		local btn = UI.button({ Text = "Unmute", TextSize = 12, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(70, 28), Parent = row })
+		btn.Activated:Connect(function()
+			if actToast("MUTE", "unmute", userId) then
+				fetchState()
+			end
+		end)
+	end
+
+	local help = Phone.card(content, 74, 800)
+	UI.label({
+		Text = "To report someone, open the Roblox menu (Esc / ☰) → Report. Blocking here hides them from you in City Grind; Roblox's block also applies across Roblox.",
+		TextSize = 11,
+		TextWrapped = true,
+		TextColor3 = colors.subtext,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Size = UDim2.fromScale(1, 1),
+		Parent = help,
+	})
+end
+
+renderApp = function()
+	local content = appContent
+	if not content then
+		return
+	end
+	Phone.clear(content)
+	renderTabs(content)
+	if not state then
+		emptyNote(content, 1, "Loading your friends...")
+		return
+	end
+	local renderers = { Friends = renderFriends, Requests = renderRequests, Nearby = renderNearby, Me = renderMe, Privacy = renderPrivacy }
+	local ok, err = pcall(renderers[currentTab] or renderFriends, content)
+	if not ok then
+		warn("[CityGrind] Friends app render failed:", err)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Social.start()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindSocial",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 8,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildMenu()
+	buildProfileCard()
+	buildReport()
+	buildEmoteCard()
+
+	Phone.addApp({ id = "Friends", label = "Friends", icon = "🤝", color = Color3.fromRGB(60, 150, 230) }, function(content)
+		appContent = content
+		return function()
+			renderApp()
+			task.spawn(function()
+				fetchState()
+				rerender()
+			end)
+		end
+	end)
+
+	task.spawn(function()
+		remotes = shared:WaitForChild("Remotes")
+		local r = remotes :: Instance
+		SocialAction = r:WaitForChild("SocialAction") :: RemoteFunction
+		SocialProfile = r:WaitForChild("SocialProfile") :: RemoteFunction
+		SocialEmote = r:WaitForChild("SocialEmote") :: RemoteEvent
+		local SocialEvent = r:WaitForChild("SocialEvent") :: RemoteEvent
+		SocialEvent.OnClientEvent:Connect(function(kind: any, a: any, b: any, c: any)
+			if kind == "State" then
+				applyState(a)
+				-- live refresh, except while typing on the Me tab
+				if currentTab ~= "Me" then
+					rerender()
+				end
+			elseif kind == "EmoteRequest" and type(a) == "number" and type(b) == "string" and type(c) == "string" then
+				showEmoteRequest(a, b, c)
+			end
+		end)
+		if not player:GetAttribute("DataLoaded") then
+			player:GetAttributeChangedSignal("DataLoaded"):Wait()
+		end
+		fetchState()
+	end)
+
+	for _, other in Players:GetPlayers() do
+		watchPlayer(other)
+	end
+	Players.PlayerAdded:Connect(watchPlayer)
+	Players.PlayerRemoving:Connect(function(other)
+		local prompt = prompts[other]
+		if prompt then
+			prompt:Destroy()
+			prompts[other] = nil
+		end
+		if menuTarget == other then
+			closeMenu()
+		end
+	end)
+	Social.changed.Event:Connect(refreshVisibility)
+
+	-- keep visibility right as characters respawn, and refresh the
+	-- Friends / Nearby lists while they're on screen
+	task.spawn(function()
+		local tick = 0
+		while true do
+			task.wait(1)
+			refreshVisibility()
+			if menuTarget and (not menuTarget.Parent or distanceTo(menuTarget) > 60) then
+				closeMenu()
+			end
+			tick += 1
+			if tick % 6 == 0 and Phone.isOpen() and Phone.currentPage() == "Friends" and (currentTab == "Friends" or currentTab == "Nearby") then
+				task.spawn(function()
+					fetchState()
+					rerender()
+				end)
+			end
+		end
+	end)
+end
+
+return Social
 ]=====])
 put(client, 'ModuleScript', 'UI', [=====[
 -- CITY GRIND: tiny helpers for building UI in code.

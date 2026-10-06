@@ -215,7 +215,7 @@ local function buildControlsHint()
 		return
 	end
 	UI.label({
-		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal",
+		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal · T Player menu · . Emotes",
 		TextSize = 13,
 		TextColor3 = colors.subtext,
 		TextStrokeTransparency = 0.6,
