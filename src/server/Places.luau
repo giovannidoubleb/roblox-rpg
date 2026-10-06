@@ -144,6 +144,28 @@ function Places.leave(player: Player, outside: CFrame)
 	Places.teleport(player, outside)
 end
 
+-- Adds a destination the phone's Map app lists (City.MapPoints).
+function Places.mapPoint(city: Instance, name: string, category: string, position: Vector3)
+	local points = city:FindFirstChild("MapPoints")
+	if not points then
+		points = Instance.new("Folder")
+		points.Name = "MapPoints"
+		points.Parent = city
+	end
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.Size = Vector3.one
+	p.CFrame = CFrame.new(position)
+	p.Transparency = 1
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p:SetAttribute("Category", category)
+	p.Parent = points
+	return p
+end
+
 -- Respawning always puts you back outside.
 local function track(player: Player)
 	player:SetAttribute("Interior", "")
