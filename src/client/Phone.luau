@@ -603,7 +603,18 @@ local function buildHome()
 	local bigClock = UI.label({ Text = "9:00", Font = UI.FONT_BLACK, TextSize = 56, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 60), Size = UDim2.new(1, 0, 0, 60), Parent = home })
 	local subtitle = UI.label({ Text = "The Neighborhood", Font = UI.FONT_BOLD, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 120), Size = UDim2.new(1, 0, 0, 18), Parent = home })
 
-	local grid = UI.new("Frame", { Name = "Apps", BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 170), Size = UDim2.new(1, -28, 1, -210), Parent = home }, {
+	-- Scrolls once there are more apps than fit on one screen.
+	local grid = UI.new("ScrollingFrame", {
+		Name = "Apps",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(14, 150),
+		Size = UDim2.new(1, -28, 1, -186),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = home,
+	}, {
 		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(60, 80), CellPadding = UDim2.fromOffset(6, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 	local allApps = table.clone(APPS)
