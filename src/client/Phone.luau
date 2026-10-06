@@ -1,9 +1,9 @@
 -- CITY GRIND: the phone (sections 15, 16). P / DPad-Up / on-screen button.
 -- Taking it out tells the server, which puts a phone in your character's hand.
 --
--- Phase 1 ships the apps that fully work today: Profile, Bank, Map (with GPS),
--- Alerts and Settings. Messages, Calls, Camera, CityTok, CityGram and the rest
--- are added to the home screen as each one is built for real (section 118).
+-- Built in: Profile, Map (with GPS), Alerts and Settings. The Bank app lives in
+-- Bank.luau (client); it, Messages, Calls, CityTok, CityGram and the rest are
+-- added to the home screen through Phone.addApp as each one is built for real (section 118).
 
 local ContextActionService = game:GetService("ContextActionService")
 local Lighting = game:GetService("Lighting")
@@ -208,56 +208,6 @@ local function buildProfile()
 			local _, setStat = UI.bar({ Position = UDim2.fromOffset(104, y + 5), Size = UDim2.new(1, -140, 0, 8), Parent = stats }, colors.accent)
 			setStat(value / 99)
 			UI.label({ Text = tostring(value), Font = UI.FONT_BOLD, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y), Size = UDim2.fromOffset(30, 18), Parent = stats })
-		end
-	end
-end
-
----------------------------------------------------------------------------
--- Bank app
----------------------------------------------------------------------------
-local function buildBank()
-	local _, content = appPage("Bank", "City Bank")
-	pages.Bank.open = function()
-		clear(content)
-		local data = fetchProfile()
-		if not data then
-			return
-		end
-		local balance = card(content, 86, 1)
-		balance.BackgroundColor3 = Color3.fromRGB(20, 70, 50)
-		UI.label({ Text = "BALANCE", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = Color3.fromRGB(170, 230, 190), Size = UDim2.new(1, 0, 0, 14), Parent = balance })
-		UI.label({ Text = UI.formatCash(data.cash), Font = UI.FONT_BLACK, TextSize = 32, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 36), Parent = balance })
-
-		local income, expenses = 0, 0
-		for _, t in data.transactions do
-			if t.amount > 0 then
-				income += t.amount
-			else
-				expenses -= t.amount
-			end
-		end
-		local summary = card(content, 54, 2)
-		UI.label({ Text = "Income", TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(0.5, 0, 0, 14), Parent = summary })
-		UI.label({ Text = UI.formatCash(income), Font = UI.FONT_BOLD, TextSize = 16, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 14), Size = UDim2.new(0.5, 0, 0, 18), Parent = summary })
-		UI.label({ Text = "Expenses", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromScale(0.5, 0), Size = UDim2.new(0.5, 0, 0, 14), Parent = summary })
-		UI.label({ Text = UI.formatCash(expenses), Font = UI.FONT_BOLD, TextSize = 16, TextColor3 = colors.danger, Position = UDim2.new(0.5, 0, 0, 14), Size = UDim2.new(0.5, 0, 0, 18), Parent = summary })
-
-		UI.label({ Text = "RECENT TRANSACTIONS", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = 3, Parent = content })
-		for i, t in data.transactions do
-			local row = card(content, 46, 3 + i)
-			UI.label({ Text = t.label, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -80, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
-			UI.label({ Text = UI.timeAgo(t.t), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -80, 0, 14), Parent = row })
-			UI.label({
-				Text = (if t.amount > 0 then "+" else "") .. UI.formatCash(t.amount),
-				Font = UI.FONT_BOLD,
-				TextSize = 15,
-				TextColor3 = if t.amount > 0 then colors.cash else colors.danger,
-				TextXAlignment = Enum.TextXAlignment.Right,
-				AnchorPoint = Vector2.new(1, 0),
-				Position = UDim2.new(1, 0, 0, 4),
-				Size = UDim2.fromOffset(80, 18),
-				Parent = row,
-			})
 		end
 	end
 end
@@ -586,7 +536,6 @@ end
 ---------------------------------------------------------------------------
 local APPS = {
 	{ id = "Profile", label = "Profile", icon = "👤", color = Color3.fromRGB(90, 110, 240) },
-	{ id = "Bank", label = "Bank", icon = "💵", color = Color3.fromRGB(40, 160, 90) },
 	{ id = "Map", label = "Map", icon = "🗺️", color = Color3.fromRGB(240, 150, 40) },
 	{ id = "Alerts", label = "Alerts", icon = "🔔", color = Color3.fromRGB(230, 70, 80) },
 	{ id = "Settings", label = "Settings", icon = "⚙️", color = Color3.fromRGB(55, 55, 68) },
@@ -798,7 +747,6 @@ function Phone.start()
 	buildStatusBar()
 	buildHome()
 	buildProfile()
-	buildBank()
 	buildMap()
 	buildAlerts()
 	buildSettings()
