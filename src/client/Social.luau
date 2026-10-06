@@ -471,6 +471,15 @@ function Social.openProfile(userId: number)
 		end
 	end
 
+	-- Followers / following / latest posts come from CityGram (Phase 5).
+	local CGModule = script.Parent:FindFirstChild("CityGram")
+	if CGModule and not p.blocked then
+		local okCG, CG = pcall(require, CGModule)
+		if okCG and CG.buildProfileSection then
+			CG.buildProfileSection(profileBody, userId, nextOrder())
+		end
+	end
+
 	-- Buttons (all real)
 	if p.self then
 		profileButton("EDIT", BLUE, function()
