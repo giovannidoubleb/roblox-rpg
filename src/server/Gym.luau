@@ -452,7 +452,7 @@ local function buildTreadmill(cf: CFrame, parent: Instance): Station
 		part({ name = "Rail", size = Vector3.new(0.2, 0.2, 2.4), cframe = cf * CFrame.new(side * 1.45, 4.0, -2.1), color = DARK, material = Enum.Material.Metal, collide = false, parent = m })
 	end
 	local console = part({ name = "Console", size = Vector3.new(3.2, 1.3, 0.4), cframe = cf * CFrame.new(0, 4.6, -3.3) * A(-25), color = DARK, material = Enum.Material.Metal, parent = m })
-	local screen = part({ name = "Screen", size = Vector3.new(1.6, 0.6, 0.05), cframe = console.CFrame * CFrame.new(0, 0, -0.22) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(20, 40, 30), material = Enum.Material.Neon, collide = false, parent = m })
+	local screen = part({ name = "Screen", size = Vector3.new(1.6, 0.6, 0.05), cframe = console.CFrame * CFrame.new(0, 0, 0.23) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(20, 40, 30), material = Enum.Material.Neon, collide = false, parent = m })
 	sign(screen, "IRON BOX RUN", Color3.fromRGB(120, 255, 160), Color3.fromRGB(10, 25, 15), Enum.Font.Code)
 	return st
 end

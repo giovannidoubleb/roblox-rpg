@@ -740,7 +740,7 @@ startPlacement = function(itemId: string, uid: number?, rot: number?)
 
 	ContextActionService:BindAction("HomePlace", function(_, inputState)
 		if inputState == Enum.UserInputState.Begin then
-			confirmPlacement()
+			task.spawn(confirmPlacement) -- it invokes the server; never yield inside a CAS callback
 		end
 		return Enum.ContextActionResult.Sink
 	end, false, Enum.KeyCode.Return, Enum.KeyCode.ButtonR2)
@@ -924,8 +924,8 @@ local function buildBars()
 	done.LayoutOrder = 2
 	done.Size = UDim2.fromOffset(100, 40)
 
-	editHover = UI.new("Highlight", { FillTransparency = 1, OutlineColor = Color3.new(1, 1, 1), OutlineTransparency = 0.2, DepthMode = Enum.HighlightDepthMode.Occluded, Parent = gui })
-	editSelect = UI.new("Highlight", { FillColor = HOME_COLOR, FillTransparency = 0.6, OutlineColor = GREEN, OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = gui })
+	editHover = UI.new("Highlight", { FillTransparency = 1, OutlineColor = Color3.new(1, 1, 1), OutlineTransparency = 0.2, DepthMode = Enum.HighlightDepthMode.Occluded, Parent = Workspace.CurrentCamera })
+	editSelect = UI.new("Highlight", { FillColor = HOME_COLOR, FillTransparency = 0.6, OutlineColor = GREEN, OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = Workspace.CurrentCamera })
 end
 
 ---------------------------------------------------------------------------
