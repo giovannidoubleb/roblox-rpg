@@ -118,6 +118,7 @@ local function publish(player: Player)
 	player:SetAttribute("Reputation", data.reputation)
 	player:SetAttribute("Rank", Config.reputationRank(data.reputation))
 	player:SetAttribute("Fame", data.fame)
+	player:SetAttribute("FameLevel", Config.fameLevel(data.fame))
 	player:SetAttribute("Wallpaper", data.settings.wallpaper)
 	player:SetAttribute("UIScale", data.settings.uiScale)
 	player:SetAttribute("NotificationSounds", data.settings.notificationSounds)
@@ -338,6 +339,20 @@ function PlayerData.addReputation(player: Player, amount: number)
 	local after = Config.reputationRank(data.reputation)
 	if after ~= before then
 		PlayerData.onNotify:Fire(player, "NEW RANK", "People around the city now call you " .. after .. ".")
+	end
+	markChanged(player)
+end
+
+function PlayerData.addFame(player: Player, amount: number)
+	local data = profiles[player]
+	if not data or amount <= 0 or amount ~= amount then
+		return
+	end
+	local before = Config.fameLevel(data.fame)
+	data.fame += math.floor(amount)
+	local after = Config.fameLevel(data.fame)
+	if after ~= before then
+		PlayerData.onNotify:Fire(player, "FAME UP", "You're now " .. after .. " around the city.")
 	end
 	markChanged(player)
 end

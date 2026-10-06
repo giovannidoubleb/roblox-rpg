@@ -38,6 +38,29 @@ function Config.reputationRank(rep: number): string
 	return name
 end
 
+-- Fame (section 86-87) is separate from reputation: it comes from followers,
+-- viral posts, events and social activity.
+Config.FAME_LEVELS = {
+	{ min = 0, name = "Unknown" },
+	{ min = 50, name = "Recognized" },
+	{ min = 250, name = "Popular" },
+	{ min = 750, name = "Influencer" },
+	{ min = 2000, name = "Star" },
+	{ min = 5000, name = "Celebrity" },
+	{ min = 12000, name = "Icon" },
+	{ min = 25000, name = "Legend" },
+}
+
+function Config.fameLevel(fame: number): string
+	local name = Config.FAME_LEVELS[1].name
+	for _, level in Config.FAME_LEVELS do
+		if fame >= level.min then
+			name = level.name
+		end
+	end
+	return name
+end
+
 -- Attribute names. Stats are 1-99 like a sports game rating.
 Config.STATS = {
 	"Strength", "Speed", "Stamina", "Vertical",
