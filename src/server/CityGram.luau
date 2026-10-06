@@ -242,6 +242,10 @@ local function filterBroadcast(text: string, userId: number): string?
 	if ok and type(result) == "string" then
 		return result
 	end
+	-- Studio test players (negative ids) can't be filtered; their text passes in Studio only.
+	if userId <= 0 and game:GetService("RunService"):IsStudio() then
+		return text
+	end
 	return nil
 end
 
@@ -1170,7 +1174,10 @@ local function countView(player: Player, id: any)
 		table.remove(s.seen, 1)
 	end
 	PlayerData.markChanged(player)
-	pendingViews[id] = (pendingViews[id] or 0) + 1
+	if postStore.ds then
+		-- (in memory mode `m` IS the stored record, so the line below already counts it)
+		pendingViews[id] = (pendingViews[id] or 0) + 1
+	end
 	m.views = (m.views or 0) + 1 -- show it right away here; flushed to the store in batches
 end
 
@@ -1541,6 +1548,21 @@ function CityGram.start(_city: Instance?)
 		return if ok then data else nil
 	end
 
+	-- Studio without API access: GetDataStore works but every request fails, so
+	-- fall back to this server's memory instead of retrying (and failing) every action.
+	if postStore.ds and game:GetService("RunService"):IsStudio() then
+		task.spawn(function()
+			local ok = pcall(function()
+				(postStore.ds :: DataStore):GetAsync("probe")
+			end)
+			if not ok then
+				postStore.ds = nil
+				followStore.ds = nil
+				table.clear(followCache)
+			end
+		end)
+	end
+
 	PlayerData.onLoaded(function(player: Player)
 		local s = sec(player)
 		if s then
@@ -1598,7 +1620,10 @@ function CityGram.start(_city: Instance?)
 			refreshRecent()
 		end
 	end)
-	game:BindToClose(flushViews)
+	game:BindToClose(function()
+		flushViews()
+		task.wait(2) -- let the batched view writes go out
+	end)
 end
 
 return CityGram

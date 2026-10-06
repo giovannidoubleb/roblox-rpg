@@ -620,6 +620,19 @@ function Media.start(_city: Instance?)
 		return success, message, data
 	end
 
+	-- Studio without API access: GetDataStore works but every request fails, so keep
+	-- photos in memory for this session instead of failing every capture.
+	if photoStore and game:GetService("RunService"):IsStudio() then
+		task.spawn(function()
+			local ok = pcall(function()
+				(photoStore :: DataStore):GetAsync("probe")
+			end)
+			if not ok then
+				photoStore = nil
+			end
+		end)
+	end
+
 	PlayerData.onLoaded(function(player: Player)
 		local s = sec(player)
 		if s then
