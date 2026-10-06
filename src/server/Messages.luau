@@ -252,6 +252,12 @@ local function forUser(result: TextFilterResult, toId: number): string?
 	return if ok and type(text) == "string" then text else nil
 end
 
+-- Studio test players (negative ids) can't be filtered; their text passes through
+-- in Studio only. A live game never delivers text that failed filtering.
+local function studioPass(fromId: number): boolean
+	return IS_STUDIO and fromId <= 0
+end
+
 local function forBroadcast(result: TextFilterResult): string?
 	local ok, text = pcall(function()
 		return result:GetNonChatStringForBroadcastAsync()
@@ -844,6 +850,9 @@ local function sendDirect(sender: Player, toId: number, raw: any): (boolean, str
 	end
 	local result = filterResult(text, sender.UserId, Enum.TextFilterContext.PrivateChat)
 	local filtered = result and (if target then forUser(result, toId) else forBroadcast(result))
+	if not filtered and studioPass(sender.UserId) then
+		filtered = text
+	end
 	if not filtered then
 		return false, "Your message couldn't be sent right now. Try again."
 	end
@@ -1003,6 +1012,9 @@ local function sendGroup(sender: Player, gid: string, raw: any): (boolean, strin
 	end
 	local result = filterResult(text, sender.UserId, Enum.TextFilterContext.PrivateChat)
 	local filtered = result and forBroadcast(result)
+	if not filtered and studioPass(sender.UserId) then
+		filtered = text
+	end
 	if not filtered then
 		return false, "Your message couldn't be sent right now. Try again."
 	end
@@ -1080,6 +1092,9 @@ local function filterGroupName(player: Player, raw: any): (string?, string?)
 	end
 	local result = filterResult(name, player.UserId, Enum.TextFilterContext.PublicChat)
 	local filtered = result and forBroadcast(result)
+	if not filtered and studioPass(player.UserId) then
+		filtered = name
+	end
 	if not filtered then
 		return nil, "That name couldn't be checked right now. Try again."
 	end
@@ -1841,11 +1856,29 @@ function Messages.start(_city: Instance?)
 
 	registerBuiltInInvites()
 
-	pcall(function()
-		MessagingService:SubscribeAsync("CGMail", onMailTopic)
-	end)
-	pcall(function()
-		MessagingService:SubscribeAsync("CGGroup", onGroupTopic)
+	-- Studio without API access: GetDataStore works but every request fails, so
+	-- fall back to same-server, in-memory messaging instead of retrying forever.
+	if IS_STUDIO and (mailStore or groupStore) then
+		task.spawn(function()
+			local ok = pcall(function()
+				((mailStore or groupStore) :: DataStore):GetAsync("probe")
+			end)
+			if not ok then
+				mailStore, groupStore, presence = nil, nil, nil
+				table.clear(groupPending)
+				table.clear(mailPending)
+			end
+		end)
+	end
+
+	-- SubscribeAsync yields; don't hold up the modules that start after us.
+	task.spawn(function()
+		pcall(function()
+			MessagingService:SubscribeAsync("CGMail", onMailTopic)
+		end)
+		pcall(function()
+			MessagingService:SubscribeAsync("CGGroup", onGroupTopic)
+		end)
 	end)
 
 	PlayerData.onLoaded(onLoaded)

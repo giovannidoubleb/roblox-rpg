@@ -87,8 +87,30 @@ local function count(t: { [any]: any }): number
 	return n
 end
 
+local IS_STUDIO = game:GetService("RunService"):IsStudio()
+
+-- Real accounts have positive ids; Studio test players (-1, -2...) only count while they're in this server.
 local function validId(id: any): boolean
-	return type(id) == "number" and id == id and id % 1 == 0 and id > 0 and id < 1e15
+	if type(id) ~= "number" or id ~= id or id % 1 ~= 0 or id >= 1e15 or id == 0 then
+		return false
+	end
+	return id > 0 or Players:GetPlayerByUserId(id) ~= nil
+end
+
+-- Broadcast-filters player text. In Studio, test players (negative ids) can't be
+-- filtered, so their text passes through there only; a live game never does this.
+local function filterForBroadcast(text: string, userId: number): (boolean, string)
+	local ok, result = pcall(function()
+		local filtered = TextService:FilterStringAsync(text, userId, Enum.TextFilterContext.PublicChat)
+		return filtered:GetNonChatStringForBroadcastAsync()
+	end)
+	if ok and type(result) == "string" then
+		return true, result
+	end
+	if IS_STUDIO and userId <= 0 then
+		return true, text
+	end
+	return false, ""
 end
 
 local function record(player: Player)
@@ -143,12 +165,12 @@ local function checkRobloxFriends(a: Player, b: Player)
 	if robloxFriends[k] ~= nil then
 		return
 	end
+	if a.UserId <= 0 or b.UserId <= 0 then
+		robloxFriends[k] = false -- Studio test players have no accounts
+		return
+	end
 	local ok, result = pcall(function()
-		local anyA = a :: any
-		if anyA.IsFriendsWithAsync then
-			return anyA:IsFriendsWithAsync(b.UserId)
-		end
-		return anyA:IsFriendsWith(b.UserId)
+		return a:IsFriendsWithAsync(b.UserId)
 	end)
 	robloxFriends[k] = ok and result == true
 end
@@ -772,10 +794,7 @@ local function publicBio(owner: Player): string
 	if cached and cached.raw == raw then
 		return cached.text
 	end
-	local ok, text = pcall(function()
-		local result = TextService:FilterStringAsync(raw, owner.UserId, Enum.TextFilterContext.PublicChat)
-		return result:GetNonChatStringForBroadcastAsync()
-	end)
+	local ok, text = filterForBroadcast(raw, owner.UserId)
 	if not ok then
 		return ""
 	end
@@ -1332,10 +1351,7 @@ local function setProfileField(player: Player, field: string, value: any): (bool
 			return false, "Bios are up to " .. SC.BIO_MAX .. " characters."
 		end
 		if value ~= "" then
-			local ok, filtered = pcall(function()
-				local result = TextService:FilterStringAsync(value, player.UserId, Enum.TextFilterContext.PublicChat)
-				return result:GetNonChatStringForBroadcastAsync()
-			end)
+			local ok, filtered = filterForBroadcast(value, player.UserId)
 			if not ok then
 				return false, "Couldn't check that bio right now. Try again soon."
 			end
@@ -1551,6 +1567,7 @@ local function onPlayerRemoving(player: Player)
 	tagCache[player] = nil
 	draining[player] = nil
 	pushQueued[player] = nil
+	filteredBios[player.UserId] = nil
 end
 
 function Social.start(_city: Instance)
@@ -1564,6 +1581,16 @@ function Social.start(_city: Instance)
 	end)
 	if ok then
 		store = result
+		-- Studio without API access: requests fail, so stay same-server only.
+		if IS_STUDIO then
+			task.spawn(function()
+				if not pcall(function()
+					(result :: DataStore):GetAsync("probe")
+				end) then
+					store = nil
+				end
+			end)
+		end
 	else
 		warn("[CityGrind] Social DataStore unavailable; friend requests reach this server only:", result)
 	end

@@ -325,13 +325,13 @@ local function showPairPrompt(data: any)
 	local token = pairToken
 	pairText.Text = string.format("%s %s wants a %s!", emote.icon, tostring(data.fromName), emote.name:upper())
 	pairCard.Visible = true
-	-- Enter / gamepad Y accepts, Backspace / gamepad B declines (Social uses keyboard Y for its own requests)
+	-- Enter / gamepad Y accepts (Social uses keyboard Y for its own requests; Backspace stays the gym's)
 	ContextActionService:BindActionAtPriority("CityEmotePairRespond", function(_, state, input)
 		if state == Enum.UserInputState.Begin then
 			respondPair(input.KeyCode == Enum.KeyCode.Return or input.KeyCode == Enum.KeyCode.ButtonY)
 		end
 		return Enum.ContextActionResult.Sink
-	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Return, Enum.KeyCode.ButtonY, Enum.KeyCode.Backspace)
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Return, Enum.KeyCode.ButtonY)
 	task.delay(tonumber(data.seconds) or EmotesConfig.PAIR_REQUEST_SECONDS, function()
 		if token == pairToken and pairCard.Visible then
 			pairRequestId = nil

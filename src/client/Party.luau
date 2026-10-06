@@ -137,7 +137,8 @@ local function updateMarkers()
 				Size = UDim2.fromOffset(140, 40),
 				StudsOffset = Vector3.new(0, 3.4, 0),
 				ResetOnSpawn = false,
-				Parent = gui,
+				-- a BillboardGui nested inside a ScreenGui doesn't render: parent it to PlayerGui
+				Parent = (gui :: ScreenGui).Parent,
 			})
 			UI.label({ Name = "Name", Text = "", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = PARTY_COLOR, TextStrokeTransparency = 0.3, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 18), Parent = marker })
 			UI.label({ Name = "Dist", Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextStrokeTransparency = 0.4, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), Parent = marker })

@@ -22,6 +22,7 @@ local HttpService = game:GetService("HttpService")
 local MessagingService = game:GetService("MessagingService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TextService = game:GetService("TextService")
 
 local Net = require(script.Parent:WaitForChild("Net"))
@@ -265,6 +266,10 @@ local function filterBroadcast(text: string, userId: number): string?
 	end)
 	if ok and type(result) == "string" then
 		return result
+	end
+	-- Studio test players (negative ids) can't be filtered; Studio only, never live.
+	if userId <= 0 and RunService:IsStudio() then
+		return text
 	end
 	return nil
 end
@@ -1128,7 +1133,8 @@ local function onLoaded(player: Player)
 		section.invites = {}
 	end
 	local id = section.crewId
-	if type(id) ~= "string" or id == "" then
+	if type(id) ~= "string" or id == "" or not storeOk then
+		-- (without DataStore access the saved crew can't be read: keep the saved id untouched)
 		setAttributes(player, nil)
 		changed(player)
 		return
@@ -1259,8 +1265,9 @@ function Crews.start(_city: Instance?)
 	-- Probe DataStore access once (fails fast in Studio without API access).
 	task.spawn(function()
 		if store then
-			local ok = pcall(function()
-				(store :: DataStore):GetAsync("probe")
+			-- a few tries: one hiccup must not put a live server into memory mode
+			local ok = retry(if RunService:IsStudio() then 1 else 3, function()
+				return (store :: DataStore):GetAsync("probe")
 			end)
 			storeOk = ok
 		end
