@@ -26,6 +26,7 @@ local Phone = {}
 
 local PHONE_W, PHONE_H = 300, 620
 local SCREEN_INSET = 10
+local PHONE_TOP_GAP = 120 -- keeps the phone below the HUD card
 
 local gui: ScreenGui
 local phoneFrame: Frame
@@ -50,7 +51,7 @@ end
 local function applyScale()
 	local camera = Workspace.CurrentCamera
 	local viewportH = if camera then camera.ViewportSize.Y else 800
-	local fit = math.min(1, (viewportH - 40) / (PHONE_H + 20))
+	local fit = math.min(1, (viewportH - 2 * PHONE_TOP_GAP) / (PHONE_H + 20))
 	uiScale.Scale = fit * (player:GetAttribute("UIScale") or 1)
 end
 
@@ -574,7 +575,7 @@ local APPS = {
 	{ id = "Bank", label = "Bank", icon = "💵", color = Color3.fromRGB(40, 160, 90) },
 	{ id = "Map", label = "Map", icon = "🗺️", color = Color3.fromRGB(240, 150, 40) },
 	{ id = "Alerts", label = "Alerts", icon = "🔔", color = Color3.fromRGB(230, 70, 80) },
-	{ id = "Settings", label = "Settings", icon = "⚙️", color = Color3.fromRGB(110, 110, 125) },
+	{ id = "Settings", label = "Settings", icon = "⚙️", color = Color3.fromRGB(55, 55, 68) },
 }
 
 local function buildHome()
@@ -584,11 +585,11 @@ local function buildHome()
 	local bigClock = UI.label({ Text = "9:00", Font = UI.FONT_BLACK, TextSize = 56, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 60), Size = UDim2.new(1, 0, 0, 60), Parent = home })
 	local subtitle = UI.label({ Text = "The Neighborhood", Font = UI.FONT_BOLD, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 120), Size = UDim2.new(1, 0, 0, 18), Parent = home })
 
-	local grid = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 170), Size = UDim2.new(1, -28, 1, -210), Parent = home }, {
+	local grid = UI.new("Frame", { Name = "Apps", BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 170), Size = UDim2.new(1, -28, 1, -210), Parent = home }, {
 		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(60, 80), CellPadding = UDim2.fromOffset(6, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 	for i, app in APPS do
-		local cell = UI.new("Frame", { BackgroundTransparency = 1, LayoutOrder = i, Parent = grid })
+		local cell = UI.new("Frame", { Name = app.id, BackgroundTransparency = 1, LayoutOrder = i, Parent = grid })
 		local icon = UI.new("TextButton", {
 			Name = "Icon",
 			Text = app.icon,
@@ -672,7 +673,7 @@ function Phone.setOpen(open: boolean)
 	isOpen = open
 	applyScale()
 	phoneFrame.Visible = true
-	local target = if open then UDim2.new(1, -24, 0.5, 0) else UDim2.new(1, PHONE_W + 40, 0.5, 0)
+	local target = if open then UDim2.new(1, -24, 0.5, PHONE_TOP_GAP / 2) else UDim2.new(1, PHONE_W + 40, 0.5, PHONE_TOP_GAP / 2)
 	local tween = TweenService:Create(phoneFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target })
 	tween:Play()
 	if open then
@@ -703,7 +704,7 @@ function Phone.start()
 		Name = "Phone",
 		BackgroundColor3 = Color3.fromRGB(10, 10, 12),
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, PHONE_W + 40, 0.5, 0),
+		Position = UDim2.new(1, PHONE_W + 40, 0.5, PHONE_TOP_GAP / 2),
 		Size = UDim2.fromOffset(PHONE_W, PHONE_H),
 		Visible = false,
 		Parent = gui,

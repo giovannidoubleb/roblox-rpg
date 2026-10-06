@@ -83,7 +83,9 @@ local function buildStatsCard()
 		Name = "Stats",
 		BackgroundColor3 = colors.panel,
 		BackgroundTransparency = 0.15,
-		Position = UDim2.fromOffset(12, 12),
+		-- top-right, clear of Roblox's chat window in the top-left
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -12, 0, 12),
 		Size = UDim2.fromOffset(230, 92),
 		Parent = gui,
 	}, { UI.corner(14), UI.padding(10) })
@@ -118,11 +120,11 @@ local function buildStatsCard()
 					Font = UI.FONT_BLACK,
 					TextSize = 18,
 					TextColor3 = if diff > 0 then colors.cash else colors.danger,
-					Position = UDim2.fromOffset(250, 14),
+					Position = UDim2.new(1, -130, 0, 108),
 					Size = UDim2.fromOffset(120, 24),
 					Parent = gui,
 				})
-				TweenService:Create(pop, TweenInfo.new(1.2), { Position = UDim2.fromOffset(250, -10), TextTransparency = 1 }):Play()
+				TweenService:Create(pop, TweenInfo.new(1.2), { Position = UDim2.new(1, -130, 0, 130), TextTransparency = 1 }):Play()
 				task.delay(1.3, pop.Destroy, pop)
 			end
 			shownCash = newCash
