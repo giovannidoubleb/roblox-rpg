@@ -1,28 +1,29 @@
 {
-  "name": "roblox-rpg",
+  "name": "city-grind",
   "tree": {
     "$className": "DataModel",
-
     "ReplicatedStorage": {
-      "$className": "ReplicatedStorage",
-      "Shared": {
-        "$path": "src/shared"
+      "CityGrind": {
+        "$className": "Folder",
+        "Config": { "$path": "src/shared/Config.luau" }
       }
     },
-
     "ServerScriptService": {
-      "$className": "ServerScriptService",
-      "Server": {
-        "$path": "src/server"
+      "CityGrindServer": {
+        "$path": "src/server/Main.server.luau",
+        "PlayerData": { "$path": "src/server/PlayerData.luau" },
+        "CityBuilder": { "$path": "src/server/CityBuilder.luau" }
       }
     },
-
     "StarterPlayer": {
-      "$className": "StarterPlayer",
+      "$properties": { "EnableMouseLockOption": false },
       "StarterPlayerScripts": {
-        "$className": "StarterPlayerScripts",
-        "Client": {
-          "$path": "src/client"
+        "CityGrindClient": {
+          "$path": "src/client/Client.client.luau",
+          "UI": { "$path": "src/client/UI.luau" },
+          "Movement": { "$path": "src/client/Movement.luau" },
+          "HUD": { "$path": "src/client/HUD.luau" },
+          "Phone": { "$path": "src/client/Phone.luau" }
         }
       }
     }
