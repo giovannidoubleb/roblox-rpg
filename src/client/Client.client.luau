@@ -14,7 +14,7 @@ HUD.start()
 
 -- Phase 3 life systems. They start before the phone so their apps
 -- (Phone.addApp) land on the home screen.
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
