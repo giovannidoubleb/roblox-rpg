@@ -37,6 +37,24 @@ end)
 ---------------------------------------------------------------------------
 local city = CityBuilder.build()
 
+-- The rest of the city (Downtown, Beach, Industrial, Old Town, Luxury, subway).
+local districtsModule = script:FindFirstChild("Districts")
+if districtsModule and not city.city:FindFirstChild("Districts") then
+	local ok, err = pcall(function()
+		require(districtsModule).build(city.city)
+	end)
+	if not ok then
+		warn("[CityGrind] Districts failed to build:", err)
+	end
+	-- street lamps in the new districts follow day/night too
+	table.clear(city.lamps)
+	for _, d in city.city:GetDescendants() do
+		if d:IsA("SpotLight") then
+			table.insert(city.lamps, d)
+		end
+	end
+end
+
 ---------------------------------------------------------------------------
 -- Phone: profile, bank and settings data
 ---------------------------------------------------------------------------
@@ -276,7 +294,7 @@ CourtGames.start()
 ---------------------------------------------------------------------------
 -- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()

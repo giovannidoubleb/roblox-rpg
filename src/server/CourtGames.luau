@@ -525,7 +525,12 @@ end)
 ---------------------------------------------------------------------------
 -- Setup
 ---------------------------------------------------------------------------
+local setUp: { [Model]: boolean } = {}
 local function setupCourt(model: Model)
+	if setUp[model] then
+		return
+	end
+	setUp[model] = true
 	local hoops = {}
 	for _, side in { "North", "South" } do
 		local hoopModel = model:FindFirstChild("Hoop" .. side)
@@ -639,6 +644,13 @@ function CourtGames.start()
 			setupCourt(model)
 		end
 	end
+	-- Courts built later (other districts) join automatically.
+	-- The tag is added before the court is finished building, so wait a frame.
+	CollectionService:GetInstanceAddedSignal("Court"):Connect(function(model)
+		if model:IsA("Model") then
+			task.defer(setupCourt, model)
+		end
+	end)
 	Players.PlayerRemoving:Connect(leaveGame)
 end
 

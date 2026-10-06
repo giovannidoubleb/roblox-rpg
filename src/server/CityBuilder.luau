@@ -691,4 +691,19 @@ end
 
 CityBuilder.RUN_ROUTE = RUN_ROUTE
 
+-- Building helpers for other districts (valid after CityBuilder.build() ran).
+CityBuilder.helpers = {
+	part = part,
+	sign = sign,
+	folder = folder,
+	mapPoint = mapPoint,
+	building = building,
+	tree = tree,
+	bench = bench,
+	buildCourt = buildCourt,
+	buildVendingMachine = buildVendingMachine,
+	buildBusStop = buildBusStop,
+	buildSubwayEntrance = buildSubwayEntrance,
+}
+
 return CityBuilder
