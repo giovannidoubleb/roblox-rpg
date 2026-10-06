@@ -81,4 +81,40 @@ Config.WALLPAPERS = {
 
 Config.UI_SCALES = { 0.8, 0.9, 1, 1.1, 1.25 }
 
+-- Basketball (sections 70, 71). Distances are in studs.
+Config.Ball = {
+	DIAMETER = 1.5,
+	GRAVITY = 90, -- the ball floats a little so shots arc like real ones
+	PICKUP_RANGE = 3.4,
+	STEAL_RANGE = 5.5,
+	STEAL_COOLDOWN = 1.2,
+	REGRAB_COOLDOWN = 0.6,
+	PERFECT_RELEASE = 0.55, -- seconds of holding the shot button
+	RELEASE_WINDOW = 0.45, -- how far from perfect still counts for anything
+	PERFECT_TOLERANCE = 0.06,
+	MAX_SHOT_RANGE = 60,
+	THREE_POINT_RANGE = 19,
+	DUNK_RANGE = 6,
+	BLOCK_RANGE = 5,
+	CONTEST_RANGE = 6,
+	PASS_RANGE = 60,
+	FREE_BALLS_PER_COURT = 6,
+	FREE_BALL_IDLE_SECONDS = 60,
+}
+
+Config.Game = {
+	TARGET_SCORE = 11,
+	TIME_LIMIT = 6 * 60,
+	COUNTDOWN = 5,
+	MAX_TEAM_SIZE = 3,
+	MIN_SECONDS_FOR_REWARDS = 60,
+	MIN_POINTS_FOR_REWARDS = 5,
+	WIN_CASH = 60,
+	WIN_XP = 80,
+	WIN_REP = 15,
+	LOSS_CASH = 20,
+	LOSS_XP = 30,
+	LOSS_REP = 3,
+}
+
 return Config

@@ -10,6 +10,8 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
 local PlayerData = require(script:WaitForChild("PlayerData"))
 local CityBuilder = require(script:WaitForChild("CityBuilder"))
+local Basketball = require(script:WaitForChild("Basketball"))
+local CourtGames = require(script:WaitForChild("CourtGames"))
 
 ---------------------------------------------------------------------------
 -- Remotes
@@ -30,6 +32,8 @@ local StaminaRefill = remote("RemoteEvent", "StaminaRefill") -- server -> client
 local PhoneState = remote("RemoteEvent", "PhoneState") -- client -> server (isOpen)
 local GetProfile = remote("RemoteFunction", "GetProfile") -- client -> server
 local SetSetting = remote("RemoteFunction", "SetSetting") -- client -> server (key, value)
+local BallAction = remote("RemoteEvent", "BallAction") -- client -> server (action)
+local BallFx = remote("RemoteEvent", "BallFx") -- server -> client (kind, ...)
 
 -- Simple per-player cooldowns so no remote can be spammed.
 local lastCall: { [Player]: { [string]: number } } = {}
@@ -263,6 +267,36 @@ for index, trigger in city.runTriggers do
 end
 
 ---------------------------------------------------------------------------
+-- Basketball (Phase 2). The client only reports button presses.
+---------------------------------------------------------------------------
+Basketball.announce = function(players: { Player }, text: string)
+	for _, player in players do
+		BallFx:FireClient(player, "Callout", text)
+	end
+end
+Basketball.dunkJump = function(player: Player, rim: Vector3)
+	BallFx:FireClient(player, "Dunk", rim)
+end
+Basketball.onTrain = function(player: Player, statName: string, amount: number)
+	PlayerData.addStatXP(player, statName, amount)
+end
+
+local BALL_ACTIONS = {
+	ShootStart = { cooldown = 0.15, fn = Basketball.shootStart },
+	ShootRelease = { cooldown = 0.05, fn = Basketball.shootRelease },
+	Pass = { cooldown = 0.3, fn = Basketball.pass },
+	Steal = { cooldown = 0.3, fn = Basketball.steal },
+}
+BallAction.OnServerEvent:Connect(function(player: Player, action: any)
+	local entry = type(action) == "string" and BALL_ACTIONS[action]
+	if entry and allow(player, "Ball" .. action, entry.cooldown) then
+		entry.fn(player)
+	end
+end)
+
+CourtGames.start()
+
+---------------------------------------------------------------------------
 -- Player lifecycle
 ---------------------------------------------------------------------------
 -- Shift is Sprint, so turn off Roblox's Shift-to-lock-mouse toggle.
@@ -270,7 +304,11 @@ game:GetService("StarterPlayer").EnableMouseLockOption = false
 
 local function onPlayerAdded(player: Player)
 	player.DevEnableMouseLock = false
-	player.CharacterAdded:Connect(function()
+	if player.Character then
+		Basketball.tagCharacter(player.Character)
+	end
+	player.CharacterAdded:Connect(function(character)
+		Basketball.tagCharacter(character)
 		-- dying or respawning cancels a run in progress
 		runs[player] = nil
 		setRunAttributes(player)

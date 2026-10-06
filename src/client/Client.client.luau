@@ -5,12 +5,14 @@ local Players = game:GetService("Players")
 local Movement = require(script:WaitForChild("Movement"))
 local HUD = require(script:WaitForChild("HUD"))
 local Phone = require(script:WaitForChild("Phone"))
+local Basketball = require(script:WaitForChild("Basketball"))
 
 local player = Players.LocalPlayer
 
 Movement.start()
 HUD.start()
 Phone.start()
+Basketball.start()
 
 -- Wait for the server to hand over this player's save before welcoming them.
 if not player:GetAttribute("DataLoaded") then

@@ -18,6 +18,8 @@ TREE = [
     ("ServerScriptService", [("Script", "CityGrindServer", "server/Main.server.luau", [
         ("ModuleScript", "PlayerData", "server/PlayerData.luau", []),
         ("ModuleScript", "CityBuilder", "server/CityBuilder.luau", []),
+        ("ModuleScript", "Basketball", "server/Basketball.luau", []),
+        ("ModuleScript", "CourtGames", "server/CourtGames.luau", []),
     ])]),
     ("StarterPlayer", [("StarterPlayerScripts", "StarterPlayerScripts", None, [
         ("LocalScript", "CityGrindClient", "client/Client.client.luau", [
@@ -25,6 +27,7 @@ TREE = [
             ("ModuleScript", "Movement", "client/Movement.luau", []),
             ("ModuleScript", "HUD", "client/HUD.luau", []),
             ("ModuleScript", "Phone", "client/Phone.luau", []),
+            ("ModuleScript", "Basketball", "client/Basketball.luau", []),
         ]),
     ])]),
 ]
@@ -89,9 +92,10 @@ def build_installer():
     lines.append(f"put(folder, 'ModuleScript', 'Config', {lit('shared/Config.luau')})")
     lines.append(f"local server = put(SSS, 'Script', 'CityGrindServer', {lit('server/Main.server.luau')})")
     lines.append(f"put(server, 'ModuleScript', 'PlayerData', {lit('server/PlayerData.luau')})")
-    lines.append(f"put(server, 'ModuleScript', 'CityBuilder', {lit('server/CityBuilder.luau')})")
+    for n in ["CityBuilder", "Basketball", "CourtGames"]:
+        lines.append(f"put(server, 'ModuleScript', '{n}', {lit('server/' + n + '.luau')})")
     lines.append(f"local client = put(SPS, 'LocalScript', 'CityGrindClient', {lit('client/Client.client.luau')})")
-    for n, f in [("UI", "client/UI.luau"), ("Movement", "client/Movement.luau"), ("HUD", "client/HUD.luau"), ("Phone", "client/Phone.luau")]:
+    for n, f in [("UI", "client/UI.luau"), ("Movement", "client/Movement.luau"), ("HUD", "client/HUD.luau"), ("Phone", "client/Phone.luau"), ("Basketball", "client/Basketball.luau")]:
         lines.append(f"put(client, 'ModuleScript', '{n}', {lit(f)})")
     lines.append("print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')")
     return "\n".join(lines) + "\n"

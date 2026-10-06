@@ -99,6 +99,42 @@ Config.WALLPAPERS = {
 
 Config.UI_SCALES = { 0.8, 0.9, 1, 1.1, 1.25 }
 
+-- Basketball (sections 70, 71). Distances are in studs.
+Config.Ball = {
+	DIAMETER = 1.5,
+	GRAVITY = 90, -- the ball floats a little so shots arc like real ones
+	PICKUP_RANGE = 3.4,
+	STEAL_RANGE = 5.5,
+	STEAL_COOLDOWN = 1.2,
+	REGRAB_COOLDOWN = 0.6,
+	PERFECT_RELEASE = 0.55, -- seconds of holding the shot button
+	RELEASE_WINDOW = 0.45, -- how far from perfect still counts for anything
+	PERFECT_TOLERANCE = 0.06,
+	MAX_SHOT_RANGE = 60,
+	THREE_POINT_RANGE = 19,
+	DUNK_RANGE = 6,
+	BLOCK_RANGE = 5,
+	CONTEST_RANGE = 6,
+	PASS_RANGE = 60,
+	FREE_BALLS_PER_COURT = 6,
+	FREE_BALL_IDLE_SECONDS = 60,
+}
+
+Config.Game = {
+	TARGET_SCORE = 11,
+	TIME_LIMIT = 6 * 60,
+	COUNTDOWN = 5,
+	MAX_TEAM_SIZE = 3,
+	MIN_SECONDS_FOR_REWARDS = 60,
+	MIN_POINTS_FOR_REWARDS = 5,
+	WIN_CASH = 60,
+	WIN_XP = 80,
+	WIN_REP = 15,
+	LOSS_CASH = 20,
+	LOSS_XP = 30,
+	LOSS_REP = 3,
+}
+
 return Config
 ]=====])
 local server = put(SSS, 'Script', 'CityGrindServer', [=====[
@@ -114,6 +150,8 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
 local PlayerData = require(script:WaitForChild("PlayerData"))
 local CityBuilder = require(script:WaitForChild("CityBuilder"))
+local Basketball = require(script:WaitForChild("Basketball"))
+local CourtGames = require(script:WaitForChild("CourtGames"))
 
 ---------------------------------------------------------------------------
 -- Remotes
@@ -134,6 +172,8 @@ local StaminaRefill = remote("RemoteEvent", "StaminaRefill") -- server -> client
 local PhoneState = remote("RemoteEvent", "PhoneState") -- client -> server (isOpen)
 local GetProfile = remote("RemoteFunction", "GetProfile") -- client -> server
 local SetSetting = remote("RemoteFunction", "SetSetting") -- client -> server (key, value)
+local BallAction = remote("RemoteEvent", "BallAction") -- client -> server (action)
+local BallFx = remote("RemoteEvent", "BallFx") -- server -> client (kind, ...)
 
 -- Simple per-player cooldowns so no remote can be spammed.
 local lastCall: { [Player]: { [string]: number } } = {}
@@ -367,6 +407,36 @@ for index, trigger in city.runTriggers do
 end
 
 ---------------------------------------------------------------------------
+-- Basketball (Phase 2). The client only reports button presses.
+---------------------------------------------------------------------------
+Basketball.announce = function(players: { Player }, text: string)
+	for _, player in players do
+		BallFx:FireClient(player, "Callout", text)
+	end
+end
+Basketball.dunkJump = function(player: Player, rim: Vector3)
+	BallFx:FireClient(player, "Dunk", rim)
+end
+Basketball.onTrain = function(player: Player, statName: string, amount: number)
+	PlayerData.addStatXP(player, statName, amount)
+end
+
+local BALL_ACTIONS = {
+	ShootStart = { cooldown = 0.15, fn = Basketball.shootStart },
+	ShootRelease = { cooldown = 0.05, fn = Basketball.shootRelease },
+	Pass = { cooldown = 0.3, fn = Basketball.pass },
+	Steal = { cooldown = 0.3, fn = Basketball.steal },
+}
+BallAction.OnServerEvent:Connect(function(player: Player, action: any)
+	local entry = type(action) == "string" and BALL_ACTIONS[action]
+	if entry and allow(player, "Ball" .. action, entry.cooldown) then
+		entry.fn(player)
+	end
+end)
+
+CourtGames.start()
+
+---------------------------------------------------------------------------
 -- Player lifecycle
 ---------------------------------------------------------------------------
 -- Shift is Sprint, so turn off Roblox's Shift-to-lock-mouse toggle.
@@ -374,7 +444,11 @@ game:GetService("StarterPlayer").EnableMouseLockOption = false
 
 local function onPlayerAdded(player: Player)
 	player.DevEnableMouseLock = false
-	player.CharacterAdded:Connect(function()
+	if player.Character then
+		Basketball.tagCharacter(player.Character)
+	end
+	player.CharacterAdded:Connect(function(character)
+		Basketball.tagCharacter(character)
 		-- dying or respawning cancels a run in progress
 		runs[player] = nil
 		setRunAttributes(player)
@@ -470,6 +544,7 @@ local function defaultProfile()
 		statXP = statXP,
 		runsCompleted = 0,
 		bestRunSeconds = 0,
+		basketball = { games = 0, wins = 0, losses = 0, points = 0, threes = 0, dunks = 0, blocks = 0, steals = 0 },
 		transactions = {
 			{ t = os.time(), amount = Config.STARTING_CASH, label = "Welcome to the city" },
 		},
@@ -513,6 +588,8 @@ local function publish(player: Player)
 	for _, stat in Config.STATS do
 		player:SetAttribute(stat, data.stats[stat])
 	end
+	player:SetAttribute("Wins", data.basketball.wins)
+	player:SetAttribute("Losses", data.basketball.losses)
 	player:SetAttribute("DataLoaded", true)
 end
 
@@ -733,6 +810,20 @@ function PlayerData.recordRun(player: Player, seconds: number)
 	markChanged(player)
 end
 
+-- Adds to the saved basketball career totals (only known keys, only positive).
+function PlayerData.recordBasketball(player: Player, deltas: { [string]: number })
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	for key, amount in deltas do
+		if data.basketball[key] ~= nil and type(amount) == "number" and amount > 0 then
+			data.basketball[key] += math.floor(amount)
+		end
+	end
+	markChanged(player)
+end
+
 -- What the phone's Profile and Bank apps are allowed to see.
 function PlayerData.publicSnapshot(player: Player)
 	local data = profiles[player]
@@ -750,6 +841,7 @@ function PlayerData.publicSnapshot(player: Player)
 		stats = table.clone(data.stats),
 		runsCompleted = data.runsCompleted,
 		bestRunSeconds = data.bestRunSeconds,
+		basketball = table.clone(data.basketball),
 		transactions = table.clone(data.transactions),
 		firstJoin = data.firstJoin,
 	}
@@ -802,6 +894,7 @@ put(server, 'ModuleScript', 'CityBuilder', [=====[
 --   NW: Starter apartments, park + playground    NE: Outdoor court, Iron Box gym, subway
 --   SW: Corner Mart, Fresh Cuts barber, Threads  SE: Mama's Kitchen, Budget Wheels lot
 
+local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
 
 local CityBuilder = {}
@@ -1004,30 +1097,47 @@ local function bench(cf: CFrame, parent: Instance)
 	end
 end
 
-local function hoop(baseline: Vector3, dir: number, parent: Instance)
-	-- dir = +1 means the hoop faces +z (it sits at the -z end of the court)
+-- A streetball hoop. dir = +1 means it faces +z (it sits at the -z end of the court).
+-- The rim is sized for a 1.5-stud ball, and its centre is marked by a RimCenter attachment.
+local RIM_RADIUS = 1.45
+local function hoop(name: string, baseline: Vector3, dir: number, parent: Instance): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	m.Parent = parent
 	local pole = baseline + Vector3.new(0, 0, -dir * 3)
-	local polePart = part({ name = "HoopPole", size = Vector3.new(0.8, 12, 0.8), cframe = CFrame.new(pole + Vector3.new(0, 6, 0)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = parent })
-	part({ name = "HoopArm", size = Vector3.new(0.6, 0.6, 3.5), cframe = CFrame.new(pole + Vector3.new(0, 11.5, dir * 1.75)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = parent })
+	local polePart = part({ name = "HoopPole", size = Vector3.new(0.8, 12, 0.8), cframe = CFrame.new(pole + Vector3.new(0, 6, 0)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = m })
+	part({ name = "HoopArm", size = Vector3.new(0.6, 0.6, 3.5), cframe = CFrame.new(pole + Vector3.new(0, 11.5, dir * 1.75)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = m })
 	local board = pole + Vector3.new(0, 11.5, dir * 3.5)
-	part({ name = "Backboard", size = Vector3.new(7, 4.2, 0.3), cframe = CFrame.new(board), color = Color3.new(1, 1, 1), material = Enum.Material.Glass, transparency = 0.3, parent = parent })
-	part({ name = "BoardSquare", size = Vector3.new(2.4, 1.8, 0.32), cframe = CFrame.new(board + Vector3.new(0, -0.6, 0)), color = Color3.fromRGB(230, 60, 40), material = Enum.Material.SmoothPlastic, transparency = 0.5, collide = false, parent = parent })
-	local rimCenter = board + Vector3.new(0, -1.3, dir * 1.3)
-	for i = 0, 11 do
-		local a = i / 12 * math.pi * 2
+	part({ name = "Backboard", size = Vector3.new(7, 4.2, 0.3), cframe = CFrame.new(board), color = Color3.new(1, 1, 1), material = Enum.Material.Glass, transparency = 0.3, parent = m })
+	part({ name = "BoardSquare", size = Vector3.new(2.4, 1.8, 0.32), cframe = CFrame.new(board + Vector3.new(0, -0.6, 0)), color = Color3.fromRGB(230, 60, 40), material = Enum.Material.SmoothPlastic, transparency = 0.5, collide = false, parent = m })
+	local rimCenter = board + Vector3.new(0, -1.3, dir * (RIM_RADIUS + 0.45))
+	local segments = 16
+	for i = 0, segments - 1 do
+		local a = i / segments * math.pi * 2
 		part({
 			name = "Rim",
-			size = Vector3.new(0.18, 0.18, 0.5),
-			cframe = CFrame.new(rimCenter + Vector3.new(math.cos(a) * 0.95, 0, math.sin(a) * 0.95)) * CFrame.Angles(0, -a, 0),
+			size = Vector3.new(0.18, 0.18, 2 * math.pi * RIM_RADIUS / segments + 0.05),
+			cframe = CFrame.new(rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS, 0, math.sin(a) * RIM_RADIUS)) * CFrame.Angles(0, -a, 0),
 			color = Color3.fromRGB(240, 90, 20),
 			material = Enum.Material.Metal,
-			parent = parent,
+			parent = m,
 		})
+	end
+	-- a simple net: thin strands that don't block the ball
+	for i = 0, 7 do
+		local a = i / 8 * math.pi * 2
+		local top = rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS * 0.95, -0.1, math.sin(a) * RIM_RADIUS * 0.95)
+		local bottom = rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS * 0.55, -1.6, math.sin(a) * RIM_RADIUS * 0.55)
+		local strand = part({ name = "Net", size = Vector3.new(0.06, 0.06, (top - bottom).Magnitude), cframe = CFrame.lookAt((top + bottom) / 2, bottom), color = Color3.new(1, 1, 1), collide = false, parent = m })
+		strand.CanQuery = false
+		strand.CanTouch = false
 	end
 	local rimMarker = Instance.new("Attachment")
 	rimMarker.Name = "RimCenter"
 	rimMarker.Parent = polePart
 	rimMarker.WorldPosition = rimCenter
+	m:SetAttribute("RimRadius", RIM_RADIUS)
+	return m
 end
 
 local function buildGround()
@@ -1095,17 +1205,24 @@ local function buildStreetLamps()
 	end
 end
 
-local function buildCourt()
+-- A full outdoor court with two hoops, team pads, a ball rack and a scoreboard.
+-- The CourtGames server module finds courts by their "Court" tag.
+local COURT_W, COURT_L = 44, 76
+local function buildCourt(name: string, c: Vector3, floorColor: Color3, paintColor: Color3): Model
 	local court = Instance.new("Model")
-	court.Name = "NeighborhoodCourt"
+	court.Name = name
 	court.Parent = folder("Courts")
-	local c = Vector3.new(100, 0, -110)
-	local w, l = 44, 76
-	part({ name = "CourtFloor", size = Vector3.new(w + 8, 0.4, l + 8), cframe = CFrame.new(c + Vector3.new(0, 0.2, 0)), color = Color3.fromRGB(40, 90, 150), material = Enum.Material.Concrete, parent = court })
-	part({ name = "Paint", size = Vector3.new(w, 0.05, l), cframe = CFrame.new(c + Vector3.new(0, 0.42, 0)), color = Color3.fromRGB(200, 90, 50), material = Enum.Material.Concrete, collide = false, parent = court })
+	local w, l = COURT_W, COURT_L
+	court:SetAttribute("CourtCenter", c)
+	court:SetAttribute("CourtSize", Vector3.new(w, 0, l))
+	court:SetAttribute("DisplayName", (name:gsub("(%l)(%u)", "%1 %2")))
+	CollectionService:AddTag(court, "Court")
+
+	part({ name = "CourtFloor", size = Vector3.new(w + 8, 0.4, l + 8), cframe = CFrame.new(c + Vector3.new(0, 0.2, 0)), color = floorColor, material = Enum.Material.Concrete, parent = court })
+	part({ name = "Paint", size = Vector3.new(w, 0.05, l), cframe = CFrame.new(c + Vector3.new(0, 0.42, 0)), color = paintColor, material = Enum.Material.Concrete, collide = false, parent = court })
 	local white = Color3.new(1, 1, 1)
-	local function line(size: Vector3, offset: Vector3)
-		part({ name = "Line", size = size, cframe = CFrame.new(c + offset + Vector3.new(0, 0.47, 0)), color = white, collide = false, parent = court })
+	local function line(size: Vector3, offset: Vector3, angle: number?)
+		part({ name = "Line", size = size, cframe = CFrame.new(c + offset + Vector3.new(0, 0.47, 0)) * CFrame.Angles(0, angle or 0, 0), color = white, collide = false, parent = court })
 	end
 	line(Vector3.new(w, 0.04, 0.4), Vector3.new(0, 0, -l / 2))
 	line(Vector3.new(w, 0.04, 0.4), Vector3.new(0, 0, l / 2))
@@ -1118,20 +1235,19 @@ local function buildCourt()
 		line(Vector3.new(12, 0.04, 0.4), Vector3.new(0, 0, endZ - dir * 15))
 		line(Vector3.new(0.4, 0.04, 15), Vector3.new(-6, 0, endZ - dir * 7.5))
 		line(Vector3.new(0.4, 0.04, 15), Vector3.new(6, 0, endZ - dir * 7.5))
-		-- three point arc
-		for i = 0, 20 do
-			local a = i / 20 * math.pi
-			local r = 19
-			line(Vector3.new(1.2, 0.04, 0.4), Vector3.new(math.cos(a) * r, 0, endZ - dir * (4 + math.sin(a) * r)))
+		-- three point arc, centred on the rim (2.4 studs in from the baseline)
+		local r = 19
+		for i = 0, 24 do
+			local a = i / 24 * math.pi
+			line(Vector3.new(0.4, 0.04, 2.6), Vector3.new(math.cos(a) * r, 0, endZ - dir * (2.4 + math.sin(a) * r)), a * dir)
 		end
-		hoop(c + Vector3.new(0, 0, endZ), -dir, court)
+		hoop(if dir == -1 then "HoopNorth" else "HoopSouth", c + Vector3.new(0, 0, endZ), -dir, court)
 	end
-	-- center circle
 	for i = 0, 15 do
 		local a = i / 16 * math.pi * 2
-		line(Vector3.new(1.2, 0.04, 0.4), Vector3.new(math.cos(a) * 6, 0, math.sin(a) * 6))
+		line(Vector3.new(0.4, 0.04, 2.5), Vector3.new(math.cos(a) * 6, 0, math.sin(a) * 6), -a)
 	end
-	-- chain-link fence with a gap on the road side
+	-- chain-link fence with a gap on the south side
 	local fenceColor = Color3.fromRGB(120, 125, 130)
 	for _, side in { -1, 1 } do
 		part({ name = "Fence", size = Vector3.new(0.3, 10, l + 8), cframe = CFrame.new(c + Vector3.new(side * (w / 2 + 4), 5, 0)), color = fenceColor, material = Enum.Material.DiamondPlate, transparency = 0.6, parent = court })
@@ -1144,7 +1260,39 @@ local function buildCourt()
 	for i = -2, 2 do
 		bench(CFrame.new(c + Vector3.new(-(w / 2 + 1.5), 0.4, i * 12)) * CFrame.Angles(0, -math.pi / 2, 0), court)
 	end
-	mapPoint("Neighborhood Court", "Court", c + Vector3.new(0, 3, l / 2 + 8))
+
+	-- team pads behind the south baseline: stand on one to join that team
+	for _, pad in { { "HomePad", -9, Color3.fromRGB(50, 120, 255), "HOME" }, { "AwayPad", 9, Color3.fromRGB(255, 70, 70), "AWAY" } } do
+		local p = part({ name = pad[1], size = Vector3.new(8, 0.3, 2.6), cframe = CFrame.new(c + Vector3.new(pad[2], 0.55, l / 2 + 1.6)), color = pad[3], material = Enum.Material.Neon, collide = false, parent = court })
+		p.CanQuery = false
+		local labelPart = part({ name = pad[1] .. "Label", size = Vector3.new(8, 1.6, 0.2), cframe = CFrame.new(c + Vector3.new(pad[2], 1.6, l / 2 + 3.1)), color = Color3.fromRGB(20, 20, 24), collide = false, parent = court })
+		labelPart.CFrame *= CFrame.Angles(0, math.pi, 0) -- face the road
+		sign(labelPart, Enum.NormalId.Front, pad[4] .. " - stand here to play", pad[3])
+	end
+
+	-- ball rack for free play
+	local rack = part({ name = "BallRack", size = Vector3.new(5, 2.5, 1.6), cframe = CFrame.new(c + Vector3.new(-(w / 2 + 1.5), 1.65, l / 2 - 4)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = court })
+	for i = -1, 1 do
+		part({ name = "RackBall", size = Vector3.new(1.4, 1.4, 1.4), cframe = CFrame.new(rack.Position + Vector3.new(0, 1.9, i * 1.5)), color = Color3.fromRGB(230, 110, 30), material = Enum.Material.Rubber, shape = Enum.PartType.Ball, collide = false, parent = court })
+	end
+	local rackPrompt = Instance.new("ProximityPrompt")
+	rackPrompt.Name = "GrabBall"
+	rackPrompt.ActionText = "Grab a ball"
+	rackPrompt.ObjectText = "Ball Rack"
+	rackPrompt.MaxActivationDistance = 9
+	rackPrompt.RequiresLineOfSight = false
+	rackPrompt.Parent = rack
+
+	-- scoreboard on the north fence, facing the court
+	local board = part({ name = "Scoreboard", size = Vector3.new(16, 6, 0.4), cframe = CFrame.new(c + Vector3.new(0, 13, -(l / 2 + 4))) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(15, 15, 18), parent = court })
+	for _, x in { -7, 7 } do
+		part({ name = "ScoreboardPost", size = Vector3.new(0.5, 10, 0.5), cframe = CFrame.new(c + Vector3.new(x, 5, -(l / 2 + 4.4))), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = court })
+	end
+	local gui = sign(board, Enum.NormalId.Front, "OPEN COURT", Color3.fromRGB(255, 200, 60))
+	gui.Name = "ScoreboardGui"
+
+	mapPoint(court:GetAttribute("DisplayName"), "Court", c + Vector3.new(0, 3, l / 2 + 8))
+	return court
 end
 
 local function buildPark()
@@ -1393,7 +1541,7 @@ function CityBuilder.build(): CityHandles
 	building({ name = "Threads Clothing", center = Vector3.new(-185, 0, 62), size = Vector3.new(44, 18, 30), color = Color3.fromRGB(40, 40, 46), material = Enum.Material.Concrete, facing = -1, signText = "THREADS", signColor = Color3.fromRGB(255, 120, 200), category = "Shop" })
 	building({ name = "Mama's Kitchen", center = Vector3.new(70, 0, 62), size = Vector3.new(40, 16, 30), color = Color3.fromRGB(190, 70, 50), facing = -1, signText = "MAMA'S KITCHEN", signColor = Color3.fromRGB(255, 220, 120), category = "Food" })
 
-	buildCourt()
+	buildCourt("NeighborhoodCourt", Vector3.new(100, 0, -110), Color3.fromRGB(40, 90, 150), Color3.fromRGB(200, 90, 50))
 	buildPark()
 	buildDealership(Vector3.new(190, 0, 85))
 	buildBusStop(Vector3.new(-35, 0, 32))
@@ -1432,6 +1580,1337 @@ CityBuilder.RUN_ROUTE = RUN_ROUTE
 
 return CityBuilder
 ]=====])
+put(server, 'ModuleScript', 'Basketball', [=====[
+-- CITY GRIND: server-owned basketballs (section 70).
+-- Possession, dribbling, shooting, passing, stealing, blocking and scoring all
+-- happen here. The client only says "I pressed shoot / released / pass / steal";
+-- the server times the release itself and decides every outcome.
+
+local Players = game:GetService("Players")
+local PhysicsService = game:GetService("PhysicsService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local B = Config.Ball
+
+local Basketball = {}
+
+export type Hoop = { model: Model, rim: Vector3, radius: number, court: Model?, side: string }
+export type Shot = { shooter: Player, points: number, kind: string, perfect: boolean, at: number, contestedBy: Player? }
+export type Ball = {
+	part: BasePart,
+	force: VectorForce,
+	holder: Player?,
+	weld: Weld?,
+	lastHolder: Player?,
+	court: Model?, -- the court a free-play ball belongs to
+	gameCourt: Model?, -- set while the ball is the game ball of a court
+	owner: Player?,
+	shot: Shot?,
+	shootingSince: number?,
+	regrab: { [Player]: number },
+	lastPos: Vector3,
+	scoreDebounce: number,
+	lastActive: number,
+}
+
+local balls: { [Ball]: boolean } = {}
+local heldBy: { [Player]: Ball } = {}
+local hoops: { Hoop } = {}
+local stealCooldown: { [Player]: number } = {}
+local trainCooldown: { [Player]: { [string]: number } } = {}
+local rng = Random.new()
+
+local ballFolder = Instance.new("Folder")
+ballFolder.Name = "Basketballs"
+ballFolder.Parent = workspace
+
+---------------------------------------------------------------------------
+-- Collision groups: the ball never collides with characters, so it can't be
+-- body-blocked into glitches or used to fling people.
+---------------------------------------------------------------------------
+local BALL_GROUP, CHARACTER_GROUP = "CityBall", "CityCharacters"
+pcall(function()
+	PhysicsService:RegisterCollisionGroup(BALL_GROUP)
+end)
+pcall(function()
+	PhysicsService:RegisterCollisionGroup(CHARACTER_GROUP)
+end)
+PhysicsService:CollisionGroupSetCollidable(BALL_GROUP, CHARACTER_GROUP, false)
+
+function Basketball.tagCharacter(character: Model)
+	local function tag(d: Instance)
+		if d:IsA("BasePart") then
+			d.CollisionGroup = CHARACTER_GROUP
+		end
+	end
+	for _, d in character:GetDescendants() do
+		tag(d)
+	end
+	character.DescendantAdded:Connect(tag)
+end
+
+---------------------------------------------------------------------------
+-- Tiny signal so listeners get the real ball table (BindableEvents copy tables).
+---------------------------------------------------------------------------
+local function signal()
+	local listeners = {}
+	return {
+		connect = function(fn)
+			table.insert(listeners, fn)
+		end,
+		fire = function(...)
+			for _, fn in listeners do
+				task.spawn(fn, ...)
+			end
+		end,
+	}
+end
+
+Basketball.scored = signal() -- (ball, hoop, shot?)
+Basketball.blocked = signal() -- (ball, blocker, shooter)
+Basketball.stolen = signal() -- (ball, stealer, victim)
+Basketball.possession = signal() -- (ball, player?)
+
+-- Set by Main: send big on-screen text ("GAME WINNER!") to these players.
+Basketball.announce = function(_players: { Player }, _text: string) end
+-- Set by Main: tell one client to jump at the rim for a dunk.
+Basketball.dunkJump = function(_player: Player, _rim: Vector3) end
+-- Set by Main: award training progress toward a stat.
+Basketball.onTrain = function(_player: Player, _stat: string, _amount: number) end
+
+-- Rules that depend on whether a game is being played. CourtGames replaces these.
+Basketball.policy = {
+	canHold = function(_player: Player, _ball: Ball): boolean
+		return true
+	end,
+	targetHoop = function(_player: Player, _ball: Ball): Hoop?
+		return nil
+	end,
+	opponents = function(_player: Player, _ball: Ball): { Player }
+		return {}
+	end,
+	passTargets = function(player: Player, _ball: Ball): { Player }
+		local list = {}
+		for _, other in Players:GetPlayers() do
+			if other ~= player then
+				table.insert(list, other)
+			end
+		end
+		return list
+	end,
+	canSteal = function(_player: Player, _victim: Player, _ball: Ball): boolean
+		return true
+	end,
+}
+
+function Basketball.registerHoop(hoop: Hoop)
+	table.insert(hoops, hoop)
+end
+
+function Basketball.heldBall(player: Player): Ball?
+	return heldBy[player]
+end
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function humanoidOf(player: Player): Humanoid?
+	local character = player.Character
+	return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function canAct(player: Player): boolean
+	local humanoid = humanoidOf(player)
+	return humanoid ~= nil and humanoid.Health > 0 and humanoid.SeatPart == nil and rootOf(player) ~= nil
+end
+
+local function flat(v: Vector3): Vector3
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+local function stat(player: Player, name: string): number
+	return player:GetAttribute(name) or 1
+end
+
+-- Small training rewards, throttled so spamming shots doesn't farm stats.
+local function train(player: Player, statName: string, amount: number)
+	local now = os.clock()
+	local cooldowns = trainCooldown[player]
+	if not cooldowns then
+		cooldowns = {}
+		trainCooldown[player] = cooldowns
+	end
+	if cooldowns[statName] and now - cooldowns[statName] < 2 then
+		return
+	end
+	cooldowns[statName] = now
+	Basketball.onTrain(player, statName, amount)
+end
+Basketball.train = train
+
+local function nearestHoop(position: Vector3): (Hoop?, number)
+	local best, bestDist = nil, math.huge
+	for _, hoop in hoops do
+		local d = flat(hoop.rim - position).Magnitude
+		if d < bestDist then
+			best, bestDist = hoop, d
+		end
+	end
+	return best, bestDist
+end
+
+-- Velocity that carries the ball from `from` to `to` in `t` seconds under ball gravity.
+local function launchVelocity(from: Vector3, to: Vector3, t: number): Vector3
+	return (to - from) / t + Vector3.new(0, 0.5 * B.GRAVITY * t, 0)
+end
+
+---------------------------------------------------------------------------
+-- Ball lifecycle
+---------------------------------------------------------------------------
+function Basketball.newBall(position: Vector3): Ball
+	local part = Instance.new("Part")
+	part.Name = "Basketball"
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.one * B.DIAMETER
+	part.Color = Color3.fromRGB(230, 110, 30)
+	part.Material = Enum.Material.Rubber
+	part.CustomPhysicalProperties = PhysicalProperties.new(0.35, 0.6, 0.78, 1, 1)
+	part.CollisionGroup = BALL_GROUP
+	part.CFrame = CFrame.new(position)
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	-- two thin dark discs, slightly wider than the ball, read as seams
+	for _, rot in { CFrame.Angles(0, 0, 0), CFrame.Angles(0, math.pi / 2, 0) } do
+		local seam = Instance.new("Part")
+		seam.Name = "Seam"
+		seam.Size = Vector3.new(0.05, B.DIAMETER + 0.03, B.DIAMETER + 0.03)
+		seam.Color = Color3.fromRGB(30, 20, 15)
+		seam.Material = Enum.Material.SmoothPlastic
+		seam.CanCollide = false
+		seam.CanQuery = false
+		seam.CanTouch = false
+		seam.Massless = true
+		seam.CollisionGroup = BALL_GROUP
+		seam.CFrame = part.CFrame * rot
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = seam
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = part
+		weld.Part1 = seam
+		weld.Parent = seam
+		seam.Parent = part
+	end
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = part
+	local force = Instance.new("VectorForce")
+	force.Attachment0 = attachment
+	force.RelativeTo = Enum.ActuatorRelativeTo.World
+	force.ApplyAtCenterOfMass = true
+	force.Parent = part
+	part.Parent = ballFolder
+	force.Force = Vector3.new(0, part:GetMass() * (workspace.Gravity - B.GRAVITY), 0)
+	pcall(part.SetNetworkOwner, part, nil)
+
+	local ball: Ball = {
+		part = part,
+		force = force,
+		regrab = {},
+		lastPos = position,
+		scoreDebounce = 0,
+		lastActive = os.clock(),
+	}
+	balls[ball] = true
+	return ball
+end
+
+local function detach(ball: Ball)
+	local holder = ball.holder
+	if ball.weld then
+		ball.weld:Destroy()
+		ball.weld = nil
+	end
+	if holder then
+		heldBy[holder] = nil
+		if holder.Parent then
+			holder:SetAttribute("HasBall", false)
+		end
+		ball.lastHolder = holder
+	end
+	ball.holder = nil
+	ball.shootingSince = nil
+	ball.part.Massless = false
+	ball.part.CanCollide = true
+	ball.force.Enabled = true
+	pcall(ball.part.SetNetworkOwner, ball.part, nil)
+end
+
+function Basketball.give(ball: Ball, player: Player)
+	local root = rootOf(player)
+	if not root then
+		return
+	end
+	if heldBy[player] and heldBy[player] ~= ball then
+		return
+	end
+	detach(ball)
+	ball.part.CanCollide = false
+	ball.part.Massless = true
+	ball.force.Enabled = false
+	ball.part.CFrame = root.CFrame * CFrame.new(1.1, -1.5, -1.3)
+	local weld = Instance.new("Weld")
+	weld.Part0 = root
+	weld.Part1 = ball.part
+	weld.C0 = CFrame.new(1.1, -1.5, -1.3)
+	weld.Parent = ball.part
+	ball.weld = weld
+	ball.holder = player
+	ball.lastHolder = player
+	ball.shot = nil
+	ball.lastActive = os.clock()
+	heldBy[player] = ball
+	player:SetAttribute("HasBall", true)
+	Basketball.possession.fire(ball, player)
+end
+
+function Basketball.drop(ball: Ball)
+	local holder = ball.holder
+	local root = holder and rootOf(holder)
+	detach(ball)
+	if root then
+		ball.part.CFrame = CFrame.new(root.Position + root.CFrame.LookVector * 2)
+	end
+	ball.part.AssemblyLinearVelocity = Vector3.zero
+	Basketball.possession.fire(ball, nil)
+end
+
+function Basketball.destroy(ball: Ball)
+	if not balls[ball] then
+		return
+	end
+	detach(ball)
+	balls[ball] = nil
+	ball.part:Destroy()
+end
+
+function Basketball.moveTo(ball: Ball, position: Vector3)
+	detach(ball)
+	ball.part.CFrame = CFrame.new(position)
+	ball.part.AssemblyLinearVelocity = Vector3.zero
+	ball.part.AssemblyAngularVelocity = Vector3.zero
+	ball.lastPos = position
+end
+
+local function launch(ball: Ball, from: Vector3, velocity: Vector3, spin: Vector3?)
+	detach(ball)
+	ball.part.CFrame = CFrame.new(from)
+	ball.part.AssemblyLinearVelocity = velocity
+	ball.part.AssemblyAngularVelocity = spin or Vector3.zero
+	ball.lastPos = from
+	ball.lastActive = os.clock()
+end
+
+function Basketball.balls(): { [Ball]: boolean }
+	return balls
+end
+
+---------------------------------------------------------------------------
+-- Shooting
+---------------------------------------------------------------------------
+function Basketball.shootStart(player: Player)
+	local ball = heldBy[player]
+	if not ball or ball.shootingSince or not canAct(player) then
+		return
+	end
+	ball.shootingSince = os.clock()
+end
+
+local function nearestOpponent(player: Player, ball: Ball, position: Vector3): (Player?, number)
+	local best, bestDist = nil, math.huge
+	for _, other in Basketball.policy.opponents(player, ball) do
+		local r = rootOf(other)
+		if r and canAct(other) then
+			local d = flat(r.Position - position).Magnitude
+			if d < bestDist then
+				best, bestDist = other, d
+			end
+		end
+	end
+	return best, bestDist
+end
+
+local function shoot(player: Player, ball: Ball, held: number)
+	local root = rootOf(player)
+	local humanoid = humanoidOf(player)
+	if not root or not humanoid then
+		return
+	end
+	local hoop = Basketball.policy.targetHoop(player, ball)
+	local dist
+	if hoop then
+		dist = flat(hoop.rim - root.Position).Magnitude
+	else
+		hoop, dist = nearestHoop(root.Position)
+	end
+	local look = flat(root.CFrame.LookVector)
+	look = if look.Magnitude > 0.01 then look.Unit else Vector3.new(0, 0, -1)
+	local from = root.Position + Vector3.new(0, 2.6, 0) + look * 0.8
+
+	if not hoop or dist > B.MAX_SHOT_RANGE then
+		-- Nowhere to shoot: just toss it forward.
+		launch(ball, from, launchVelocity(from, from + look * 20 + Vector3.new(0, -2, 0), 0.9))
+		ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+		return
+	end
+
+	local offBy = math.abs(held - B.PERFECT_RELEASE)
+	local timing = math.clamp(1 - offBy / B.RELEASE_WINDOW, 0, 1)
+	local perfect = offBy <= B.PERFECT_TOLERANCE
+	local moving = flat(root.AssemblyLinearVelocity).Magnitude
+	local airborne = humanoid.FloorMaterial == Enum.Material.Air
+
+	local kind
+	if dist <= B.DUNK_RANGE and (moving > 16 or airborne) then
+		kind = "dunk"
+	elseif dist <= 7 then
+		kind = "layup"
+	elseif dist <= B.THREE_POINT_RANGE then
+		kind = "mid"
+	elseif dist <= 26 then
+		kind = "three"
+	else
+		kind = "deep"
+	end
+	local points = if dist > B.THREE_POINT_RANGE + 0.3 then 3 else 2
+
+	local defender, defenderDist = nearestOpponent(player, ball, root.Position)
+
+	-- Block: a jumping defender right on the shooter can swat it.
+	if defender and defenderDist <= B.BLOCK_RANGE then
+		local defHumanoid = humanoidOf(defender)
+		if defHumanoid and defHumanoid.FloorMaterial == Enum.Material.Air then
+			local chance = 0.3 + (stat(defender, "Vertical") + stat(defender, "Defense")) * 0.002 - stat(player, "Vertical") * 0.001
+			if rng:NextNumber() < math.clamp(chance, 0.1, 0.65) then
+				local away = flat(root.Position - hoop.rim)
+				away = if away.Magnitude > 0.01 then away.Unit else -look
+				local side = Vector3.new(-away.Z, 0, away.X) * rng:NextNumber(-12, 12)
+				launch(ball, from + Vector3.new(0, 1, 0), away * 28 + side + Vector3.new(0, 18, 0))
+				ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+				train(defender, "Defense", 6)
+				train(defender, "Vertical", 4)
+				Basketball.blocked.fire(ball, defender, player)
+				return
+			end
+		end
+	end
+
+	local base
+	if kind == "dunk" then
+		base = 0.9
+	elseif kind == "layup" then
+		base = 0.72
+	elseif kind == "mid" then
+		base = 0.52 - (dist - 7) * 0.008
+	elseif kind == "three" then
+		base = 0.36 - (dist - B.THREE_POINT_RANGE) * 0.01
+	else
+		base = math.max(0.04, 0.22 - (dist - 26) * 0.012)
+	end
+	local close = kind == "dunk" or kind == "layup"
+	local statBonus = if close
+		then (stat(player, "Finishing") - 1) * 0.0025 + (stat(player, "Vertical") - 1) * 0.001
+		else (stat(player, "Shooting") - 1) * 0.003
+	local timingFactor = if kind == "dunk" then 1 elseif kind == "layup" then 0.6 + 0.4 * timing else 0.3 + 0.7 * timing
+	local contest = 1
+	if defender and defenderDist < B.CONTEST_RANGE then
+		local closeness = defenderDist / B.CONTEST_RANGE
+		contest = if kind == "dunk" then 0.85 + 0.15 * closeness else 0.55 + 0.45 * closeness
+	end
+	local perfectBonus = if perfect and not close then 0.1 else 0
+	local chance = math.clamp((base + statBonus) * timingFactor * contest + perfectBonus, 0.02, 0.97)
+	local make = rng:NextNumber() < chance
+
+	ball.shot = {
+		shooter = player,
+		points = points,
+		kind = kind,
+		perfect = perfect and make,
+		at = os.clock(),
+		contestedBy = if defender and defenderDist < B.CONTEST_RANGE then defender else nil,
+	}
+	ball.regrab[player] = os.clock() + B.REGRAB_COOLDOWN
+
+	if kind == "dunk" and make then
+		Basketball.dunkJump(player, hoop.rim)
+		detach(ball)
+		ball.part.CFrame = CFrame.new(hoop.rim + Vector3.new(0, 1.8, 0))
+		ball.lastPos = ball.part.Position
+		-- hang above the rim for the jump, then slam it through
+		ball.part.Anchored = true
+		task.delay(0.28, function()
+			if balls[ball] then
+				ball.part.Anchored = false
+				ball.lastPos = ball.part.Position
+				ball.part.AssemblyLinearVelocity = Vector3.new(0, -45, 0)
+			end
+		end)
+		return
+	end
+
+	local target = hoop.rim + Vector3.new(0, 0.05, 0)
+	if not make then
+		-- Clank it off the rim, or airball a badly timed shot.
+		local angle = rng:NextNumber(0, math.pi * 2)
+		local miss = if timing < 0.15 and not close then rng:NextNumber(2.6, 3.6) else rng:NextNumber(1.1, 1.7)
+		target += Vector3.new(math.cos(angle) * miss, 0.2, math.sin(angle) * miss)
+	end
+	local flight = if close then 0.6 else 0.7 + dist * 0.012
+	launch(ball, from, launchVelocity(from, target, flight), root.CFrame.RightVector * -8)
+end
+
+function Basketball.shootRelease(player: Player)
+	local ball = heldBy[player]
+	if not ball or not ball.shootingSince or not canAct(player) then
+		return
+	end
+	local held = os.clock() - ball.shootingSince
+	ball.shootingSince = nil
+	shoot(player, ball, held)
+end
+
+---------------------------------------------------------------------------
+-- Passing and stealing
+---------------------------------------------------------------------------
+function Basketball.pass(player: Player)
+	local ball = heldBy[player]
+	local root = rootOf(player)
+	if not ball or not root or ball.shootingSince then
+		return
+	end
+	local look = flat(root.CFrame.LookVector).Unit
+	local best, bestScore = nil, math.huge
+	for _, other in Basketball.policy.passTargets(player, ball) do
+		local r = rootOf(other)
+		if r and canAct(other) and not heldBy[other] then
+			local offset = flat(r.Position - root.Position)
+			local d = offset.Magnitude
+			if d > 2 and d < B.PASS_RANGE then
+				local facing = look:Dot(offset.Unit)
+				if facing > 0.2 then
+					local score = d * (2 - facing)
+					if score < bestScore then
+						best, bestScore = other, score
+					end
+				end
+			end
+		end
+	end
+	local from = root.Position + Vector3.new(0, 1, 0) + look * 1.4
+	local target
+	if best then
+		local r = rootOf(best) :: BasePart
+		local d = flat(r.Position - root.Position).Magnitude
+		local t = math.clamp(d / 75, 0.2, 0.8)
+		target = r.Position + flat(r.AssemblyLinearVelocity) * t + Vector3.new(0, 0.5, 0)
+		launch(ball, from, launchVelocity(from, target, t))
+		train(player, "Passing", 3)
+	else
+		target = root.Position + look * 25 + Vector3.new(0, -1, 0)
+		launch(ball, from, launchVelocity(from, target, 0.5))
+	end
+	ball.regrab[player] = os.clock() + 0.4
+end
+
+function Basketball.steal(player: Player)
+	local root = rootOf(player)
+	if not root or heldBy[player] or not canAct(player) then
+		return
+	end
+	local now = os.clock()
+	if (stealCooldown[player] or 0) > now then
+		return
+	end
+	stealCooldown[player] = now + B.STEAL_COOLDOWN
+	for victim, ball in heldBy do
+		local r = rootOf(victim)
+		if victim ~= player and r and flat(r.Position - root.Position).Magnitude <= B.STEAL_RANGE then
+			if Basketball.policy.canSteal(player, victim, ball) and Basketball.policy.canHold(player, ball) then
+				local chance = 0.25 + (stat(player, "Defense") - stat(victim, "BallHandling")) * 0.004
+				if ball.shootingSince then
+					chance += 0.1 -- caught mid-shot
+				end
+				train(player, "Defense", 3)
+				if rng:NextNumber() < math.clamp(chance, 0.08, 0.6) then
+					Basketball.give(ball, player)
+					Basketball.stolen.fire(ball, player, victim)
+				else
+					train(victim, "BallHandling", 3)
+				end
+				return
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Every frame: dribble animation, pickups and scoring
+---------------------------------------------------------------------------
+local function canPickUp(player: Player, ball: Ball, now: number): boolean
+	if heldBy[player] or not canAct(player) then
+		return false
+	end
+	if (ball.regrab[player] or 0) > now then
+		return false
+	end
+	return Basketball.policy.canHold(player, ball)
+end
+
+RunService.Heartbeat:Connect(function()
+	local now = os.clock()
+	for ball in balls do
+		local holder = ball.holder
+		if holder then
+			if not holder.Parent or not canAct(holder) then
+				Basketball.drop(ball)
+			elseif ball.weld then
+				if ball.shootingSince then
+					ball.weld.C0 = CFrame.new(0, 2.5, -0.9)
+					if now - ball.shootingSince > 1.6 then
+						Basketball.shootRelease(holder) -- held far too long
+					end
+				else
+					local bounce = math.abs(math.sin(now * 8.5)) * 1.7
+					ball.weld.C0 = CFrame.new(1.1, -2.1 + bounce, -1.3)
+				end
+				if (now - ball.lastActive) > 0.5 then
+					ball.lastActive = now
+					train(holder, "BallHandling", 1)
+				end
+			end
+			continue
+		end
+
+		local part = ball.part
+		local pos = part.Position
+
+		-- Scoring: the ball's centre passes down through the rim.
+		if now > ball.scoreDebounce then
+			for _, hoop in hoops do
+				local rimY = hoop.rim.Y
+				if ball.lastPos.Y >= rimY and pos.Y < rimY then
+					local mid = (ball.lastPos + pos) / 2
+					if flat(mid - hoop.rim).Magnitude < hoop.radius - 0.35 then
+						ball.scoreDebounce = now + 1
+						local shot = ball.shot
+						if shot and now - shot.at > 4 then
+							shot = nil
+						end
+						ball.shot = nil
+						Basketball.scored.fire(ball, hoop, shot)
+						break
+					end
+				end
+			end
+		end
+		ball.lastPos = pos
+
+		-- Pickups: closest eligible player within reach.
+		if not part.Anchored then
+			local best, bestDist = nil, math.huge
+			for _, player in Players:GetPlayers() do
+				local r = rootOf(player)
+				if r then
+					local offset = pos - r.Position
+					local horizontal = flat(offset).Magnitude
+					if horizontal < B.PICKUP_RANGE and offset.Y > -4 and offset.Y < 4.5 and horizontal < bestDist then
+						if canPickUp(player, ball, now) then
+							best, bestDist = player, horizontal
+						end
+					end
+				end
+			end
+			if best then
+				Basketball.give(ball, best)
+			elseif part.AssemblyLinearVelocity.Magnitude > 2 then
+				ball.lastActive = now
+			end
+		end
+
+		-- Fell out of the world.
+		if pos.Y < -30 then
+			if ball.court then
+				local center = ball.court:GetAttribute("CourtCenter")
+				Basketball.moveTo(ball, center + Vector3.new(0, 4, 0))
+			else
+				Basketball.destroy(ball)
+			end
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	local ball = heldBy[player]
+	if ball then
+		Basketball.drop(ball)
+	end
+	for b in balls do
+		b.regrab[player] = nil
+		if b.owner == player and not b.gameCourt then
+			Basketball.destroy(b)
+		end
+	end
+	stealCooldown[player] = nil
+	trainCooldown[player] = nil
+end)
+
+return Basketball
+]=====])
+put(server, 'ModuleScript', 'CourtGames', [=====[
+-- CITY GRIND: pickup games on every tagged court (sections 51, 71).
+-- Stand on the HOME or AWAY pad; when both sides have the same number of
+-- players (1v1, 2v2 or 3v3) a countdown starts. First to 11 wins, or whoever
+-- leads after 6 minutes (tied games go to next basket). Between games the
+-- ball rack gives out free-play balls.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local G = Config.Game
+local B = Config.Ball
+
+local CourtGames = {}
+
+type Team = "Home" | "Away"
+type Court = {
+	model: Model,
+	name: string,
+	center: Vector3,
+	size: Vector3,
+	hoops: { [string]: Basketball.Hoop },
+	pads: { [Team]: BasePart },
+	scoreText: TextLabel?,
+	state: string,
+	teams: { [Team]: { Player } },
+	score: { [Team]: number },
+	startedAt: number,
+	countdownEnds: number,
+	overtime: boolean,
+	ball: Basketball.Ball?,
+	freeBalls: { [Basketball.Ball]: boolean },
+	points: { [Player]: number },
+	awaySince: { [Player]: number },
+}
+
+local courts: { Court } = {}
+local playerGame: { [Player]: { court: Court, team: Team } } = {}
+
+local function other(team: Team): Team
+	return if team == "Home" then "Away" else "Home"
+end
+
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+local function flatDistance(a: Vector3, b: Vector3): number
+	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+local function gamePlayers(court: Court): { Player }
+	local list = table.clone(court.teams.Home)
+	for _, p in court.teams.Away do
+		table.insert(list, p)
+	end
+	return list
+end
+
+-- Everyone in the game plus anyone watching nearby.
+local function audience(court: Court): { Player }
+	local list = {}
+	for _, player in Players:GetPlayers() do
+		local r = rootOf(player)
+		if (playerGame[player] and playerGame[player].court == court) or (r and flatDistance(r.Position, court.center) < 90) then
+			table.insert(list, player)
+		end
+	end
+	return list
+end
+
+local function setScoreboard(court: Court, text: string)
+	if court.scoreText then
+		court.scoreText.Text = text
+	end
+end
+
+local function publish(court: Court)
+	local m = court.model
+	m:SetAttribute("State", court.state)
+	m:SetAttribute("HomeScore", court.score.Home)
+	m:SetAttribute("AwayScore", court.score.Away)
+	m:SetAttribute("Mode", #court.teams.Home .. "v" .. #court.teams.Away)
+	m:SetAttribute("Overtime", court.overtime)
+	local timeLeft = if court.state == "Playing" then math.max(0, G.TIME_LIMIT - (os.clock() - court.startedAt)) else 0
+	m:SetAttribute("TimeLeft", math.floor(timeLeft))
+	m:SetAttribute("Countdown", if court.state == "Countdown" then math.max(0, math.ceil(court.countdownEnds - os.clock())) else 0)
+end
+
+local function inBounds(court: Court, position: Vector3, margin: number): boolean
+	local offset = position - court.center
+	return math.abs(offset.X) <= court.size.X / 2 + margin and math.abs(offset.Z) <= court.size.Z / 2 + margin
+end
+
+local function onPad(pad: BasePart, root: BasePart): boolean
+	local offset = pad.CFrame:PointToObjectSpace(root.Position)
+	return math.abs(offset.X) <= pad.Size.X / 2 + 0.5 and math.abs(offset.Z) <= pad.Size.Z / 2 + 0.5 and offset.Y > -1 and offset.Y < 6
+end
+
+local function clearFreeBalls(court: Court)
+	for ball in court.freeBalls do
+		Basketball.destroy(ball)
+	end
+	table.clear(court.freeBalls)
+end
+
+---------------------------------------------------------------------------
+-- Rules handed to the ball system
+---------------------------------------------------------------------------
+Basketball.policy.canHold = function(player, ball)
+	local entry = playerGame[player]
+	if ball.gameCourt then
+		return entry ~= nil and entry.court.model == ball.gameCourt and entry.court.state == "Playing"
+	end
+	return entry == nil
+end
+
+Basketball.policy.targetHoop = function(player, _ball)
+	local entry = playerGame[player]
+	if not entry then
+		return nil
+	end
+	return entry.court.hoops[if entry.team == "Home" then "North" else "South"]
+end
+
+Basketball.policy.opponents = function(player, _ball)
+	local entry = playerGame[player]
+	if not entry then
+		return {}
+	end
+	return entry.court.teams[other(entry.team)]
+end
+
+Basketball.policy.passTargets = function(player, _ball)
+	local entry = playerGame[player]
+	if entry then
+		local mates = {}
+		for _, p in entry.court.teams[entry.team] do
+			if p ~= player then
+				table.insert(mates, p)
+			end
+		end
+		return mates
+	end
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		if p ~= player and not playerGame[p] then
+			table.insert(list, p)
+		end
+	end
+	return list
+end
+
+Basketball.policy.canSteal = function(player, victim, _ball)
+	local a, b = playerGame[player], playerGame[victim]
+	if a and b then
+		return a.court == b.court and a.team ~= b.team
+	end
+	return a == nil and b == nil
+end
+
+---------------------------------------------------------------------------
+-- Game flow
+---------------------------------------------------------------------------
+local function giveTo(court: Court, team: Team)
+	local ball = court.ball
+	local list = court.teams[team]
+	if not ball or #list == 0 then
+		return
+	end
+	-- Check the ball to a random player on that team.
+	Basketball.give(ball, list[math.random(1, #list)])
+end
+
+local function leaveGame(player: Player)
+	local entry = playerGame[player]
+	if not entry then
+		return
+	end
+	playerGame[player] = nil
+	local list = entry.court.teams[entry.team]
+	local i = table.find(list, player)
+	if i then
+		table.remove(list, i)
+	end
+	if player.Parent then
+		player:SetAttribute("InGame", nil)
+		player:SetAttribute("Team", nil)
+	end
+	local ball = entry.court.ball
+	if ball and ball.holder == player then
+		Basketball.drop(ball)
+	end
+end
+
+local function endGame(court: Court, winner: Team?, forfeit: boolean)
+	court.state = "Ended"
+	local duration = os.clock() - court.startedAt
+	local total = court.score.Home + court.score.Away
+	local eligible = not forfeit and duration >= G.MIN_SECONDS_FOR_REWARDS and total >= G.MIN_POINTS_FOR_REWARDS
+	local teamSize = math.max(#court.teams.Home, #court.teams.Away)
+	local sizeBonus = 1 + 0.25 * (teamSize - 1)
+
+	for _, team in { "Home", "Away" } :: { Team } do
+		for _, player in table.clone(court.teams[team]) do
+			local won = team == winner
+			if eligible then
+				if won then
+					PlayerData.addCash(player, math.floor(G.WIN_CASH * sizeBonus), "Won a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
+					PlayerData.addXP(player, math.floor(G.WIN_XP * sizeBonus))
+					PlayerData.addReputation(player, math.floor(G.WIN_REP * sizeBonus))
+				else
+					PlayerData.addCash(player, G.LOSS_CASH, "Played a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
+					PlayerData.addXP(player, G.LOSS_XP)
+					PlayerData.addReputation(player, G.LOSS_REP)
+				end
+				PlayerData.recordBasketball(player, { games = 1, wins = if won then 1 else 0, losses = if won then 0 else 1 })
+			end
+			Basketball.announce({ player }, if won then "YOU WIN!" else "GOOD GAME")
+			if not eligible and not forfeit then
+				PlayerData.onNotify:Fire(player, "SHORT GAME", "Games need 1+ minute and 5+ points to count for rewards.")
+			end
+			leaveGame(player)
+		end
+	end
+
+	if court.ball then
+		Basketball.destroy(court.ball)
+		court.ball = nil
+	end
+	local result = if winner then string.upper(winner) .. " WINS" else "GAME OVER"
+	setScoreboard(court, string.format("%s\n%d - %d", result, court.score.Home, court.score.Away))
+	publish(court)
+	task.delay(6, function()
+		if court.state == "Ended" then
+			court.state = "Idle"
+			court.score = { Home = 0, Away = 0 }
+			court.overtime = false
+			setScoreboard(court, "OPEN COURT")
+			publish(court)
+		end
+	end)
+end
+
+local function startGame(court: Court, home: { Player }, away: { Player })
+	clearFreeBalls(court)
+	for _, p in home do
+		local held = Basketball.heldBall(p)
+		if held then
+			Basketball.destroy(held)
+		end
+	end
+	for _, p in away do
+		local held = Basketball.heldBall(p)
+		if held then
+			Basketball.destroy(held)
+		end
+	end
+	court.teams = { Home = home, Away = away }
+	court.score = { Home = 0, Away = 0 }
+	court.points = {}
+	court.awaySince = {}
+	court.overtime = false
+	court.state = "Playing"
+	court.startedAt = os.clock()
+
+	-- Line up at half court. Home attacks the north hoop (toward -z).
+	for team, list in court.teams do
+		local zSide = if team == "Home" then 6 else -6
+		local facing = if team == "Home" then Vector3.new(0, 0, -1) else Vector3.new(0, 0, 1)
+		for i, player in list do
+			playerGame[player] = { court = court, team = team }
+			player:SetAttribute("InGame", court.name)
+			player:SetAttribute("Team", team)
+			local pos = court.center + Vector3.new((i - (#list + 1) / 2) * 7, 3.5, zSide)
+			if player.Character then
+				player.Character:PivotTo(CFrame.lookAt(pos, pos + facing))
+			end
+		end
+	end
+
+	local ball = Basketball.newBall(court.center + Vector3.new(0, 4, 0))
+	ball.gameCourt = court.model
+	ball.court = court.model
+	court.ball = ball
+	local first: Team = if math.random() < 0.5 then "Home" else "Away"
+	giveTo(court, first)
+	local mode = #home .. "v" .. #away
+	Basketball.announce(gamePlayers(court), mode .. "  ·  FIRST TO " .. G.TARGET_SCORE)
+	publish(court)
+end
+
+local function updateIdle(court: Court)
+	local home, away = {}, {}
+	for _, player in Players:GetPlayers() do
+		local r = rootOf(player)
+		if r and not playerGame[player] then
+			if onPad(court.pads.Home, r) and #home < G.MAX_TEAM_SIZE then
+				table.insert(home, player)
+			elseif onPad(court.pads.Away, r) and #away < G.MAX_TEAM_SIZE then
+				table.insert(away, player)
+			end
+		end
+	end
+	local ready = #home >= 1 and #home == #away
+	if court.state == "Idle" then
+		if ready then
+			court.state = "Countdown"
+			court.countdownEnds = os.clock() + G.COUNTDOWN
+		elseif #home + #away > 0 then
+			setScoreboard(court, string.format("HOME %d  ·  AWAY %d\nNeed even teams", #home, #away))
+		else
+			setScoreboard(court, "OPEN COURT")
+		end
+	end
+	if court.state == "Countdown" then
+		if not ready then
+			court.state = "Idle"
+		elseif os.clock() >= court.countdownEnds then
+			startGame(court, home, away)
+			return
+		else
+			setScoreboard(court, string.format("%dv%d STARTS IN %d", #home, #away, math.ceil(court.countdownEnds - os.clock())))
+		end
+	end
+	publish(court)
+end
+
+local function updatePlaying(court: Court)
+	local now = os.clock()
+	-- Players who wander off (or die and respawn far away) leave the game.
+	for _, player in gamePlayers(court) do
+		local r = rootOf(player)
+		if not player.Parent then
+			leaveGame(player)
+		elseif not r or flatDistance(r.Position, court.center) > 90 then
+			court.awaySince[player] = court.awaySince[player] or now
+			if now - court.awaySince[player] > 8 then
+				PlayerData.onNotify:Fire(player, "LEFT THE GAME", "You went too far from " .. court.name .. ".")
+				leaveGame(player)
+			end
+		else
+			court.awaySince[player] = nil
+		end
+	end
+	if #court.teams.Home == 0 or #court.teams.Away == 0 then
+		local winner: Team? = if #court.teams.Home > 0 then "Home" elseif #court.teams.Away > 0 then "Away" else nil
+		endGame(court, winner, true)
+		return
+	end
+
+	local ball = court.ball
+	if ball then
+		-- Out of bounds: the other team takes it.
+		local holder = ball.holder
+		if holder then
+			local r = rootOf(holder)
+			if r and not inBounds(court, r.Position, 1.5) then
+				local entry = playerGame[holder]
+				if entry then
+					Basketball.announce(audience(court), "OUT OF BOUNDS")
+					giveTo(court, other(entry.team))
+				end
+			end
+		elseif not ball.part.Anchored then
+			local pos = ball.part.Position
+			if not inBounds(court, pos, 1.5) and pos.Y < court.center.Y + 4 then
+				local last = ball.lastHolder and playerGame[ball.lastHolder]
+				local team: Team = if last then other(last.team) else "Home"
+				Basketball.announce(audience(court), "OUT OF BOUNDS")
+				giveTo(court, team)
+			end
+		end
+	end
+
+	if now - court.startedAt >= G.TIME_LIMIT and not court.overtime then
+		if court.score.Home ~= court.score.Away then
+			endGame(court, if court.score.Home > court.score.Away then "Home" else "Away", false)
+			return
+		end
+		court.overtime = true
+		Basketball.announce(audience(court), "TIED! NEXT BUCKET WINS")
+	end
+
+	local timeLeft = math.max(0, G.TIME_LIMIT - (now - court.startedAt))
+	setScoreboard(
+		court,
+		string.format(
+			"HOME %d - %d AWAY\n%s",
+			court.score.Home,
+			court.score.Away,
+			if court.overtime then "NEXT BUCKET WINS" else string.format("%d:%02d", timeLeft // 60, timeLeft % 60)
+		)
+	)
+	publish(court)
+end
+
+---------------------------------------------------------------------------
+-- Ball events
+---------------------------------------------------------------------------
+local function courtOfModel(model: Model?): Court?
+	for _, court in courts do
+		if court.model == model then
+			return court
+		end
+	end
+	return nil
+end
+
+Basketball.scored.connect(function(ball, hoop, shot)
+	local court = courtOfModel(ball.gameCourt)
+	local shooter = shot and shot.shooter
+
+	if not court or court.state ~= "Playing" or ball ~= court.ball then
+		-- Free play: training only, and a callout for the big ones.
+		if shooter and shooter.Parent then
+			if shot.kind == "dunk" then
+				Basketball.train(shooter, "Vertical", 5)
+				Basketball.train(shooter, "Finishing", 4)
+				Basketball.announce({ shooter }, "SLAM!")
+			elseif shot.kind == "layup" then
+				Basketball.train(shooter, "Finishing", 4)
+			else
+				Basketball.train(shooter, "Shooting", if shot.points == 3 then 6 else 4)
+				if shot.perfect then
+					Basketball.announce({ shooter }, "PERFECT RELEASE!")
+				end
+			end
+		end
+		return
+	end
+
+	local team: Team = if hoop.side == "North" then "Home" else "Away"
+	local points = 2
+	local shooterEntry = shooter and playerGame[shooter]
+	if shot and shooterEntry and shooterEntry.court == court and shooterEntry.team == team then
+		points = shot.points
+		court.points[shooter] = (court.points[shooter] or 0) + points
+		PlayerData.recordBasketball(shooter, {
+			points = points,
+			threes = if points == 3 then 1 else 0,
+			dunks = if shot.kind == "dunk" then 1 else 0,
+		})
+		if shot.kind == "dunk" then
+			Basketball.train(shooter, "Vertical", 5)
+			Basketball.train(shooter, "Finishing", 5)
+		elseif shot.kind == "layup" then
+			Basketball.train(shooter, "Finishing", 5)
+		else
+			Basketball.train(shooter, "Shooting", if points == 3 then 8 else 5)
+		end
+	end
+	local before = court.score[team]
+	local wasTied = court.score.Home == court.score.Away
+	court.score[team] += points
+
+	local gameOver = court.overtime or court.score[team] >= G.TARGET_SCORE
+	local callout
+	if gameOver then
+		callout = "GAME WINNER!"
+	elseif wasTied and before >= G.TARGET_SCORE - 4 then
+		callout = "CLUTCH!"
+	elseif shot and shot.kind == "dunk" and shot.contestedBy then
+		callout = "POSTER!"
+	elseif shot and shot.perfect then
+		callout = "PERFECT RELEASE!"
+	elseif points == 3 then
+		callout = "FROM DOWNTOWN!"
+	end
+	if callout then
+		Basketball.announce(audience(court), callout)
+	end
+	publish(court)
+
+	if gameOver then
+		task.delay(1.2, function()
+			if court.state == "Playing" then
+				endGame(court, team, false)
+			end
+		end)
+		return
+	end
+	-- Possession goes to the team that got scored on once the ball drops.
+	task.delay(1, function()
+		if court.state == "Playing" and court.ball == ball and not ball.holder then
+			giveTo(court, other(team))
+		end
+	end)
+end)
+
+Basketball.blocked.connect(function(ball, blocker, _shooter)
+	local court = courtOfModel(ball.gameCourt)
+	if court and court.state == "Playing" then
+		PlayerData.recordBasketball(blocker, { blocks = 1 })
+		Basketball.announce(audience(court), "BIG BLOCK!")
+	else
+		Basketball.announce({ blocker }, "BIG BLOCK!")
+	end
+end)
+
+Basketball.stolen.connect(function(ball, stealer, _victim)
+	local court = courtOfModel(ball.gameCourt)
+	if court and court.state == "Playing" then
+		PlayerData.recordBasketball(stealer, { steals = 1 })
+		Basketball.announce(audience(court), "STEAL!")
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Setup
+---------------------------------------------------------------------------
+local function setupCourt(model: Model)
+	local hoops = {}
+	for _, side in { "North", "South" } do
+		local hoopModel = model:FindFirstChild("Hoop" .. side)
+		local marker = hoopModel and hoopModel:FindFirstChild("RimCenter", true)
+		if marker and marker:IsA("Attachment") then
+			local hoop: Basketball.Hoop = {
+				model = hoopModel,
+				rim = marker.WorldPosition,
+				radius = hoopModel:GetAttribute("RimRadius") or 1.45,
+				court = model,
+				side = side,
+			}
+			hoops[side] = hoop
+			Basketball.registerHoop(hoop)
+		end
+	end
+	local homePad = model:FindFirstChild("HomePad")
+	local awayPad = model:FindFirstChild("AwayPad")
+	if not hoops.North or not hoops.South or not homePad or not awayPad then
+		warn("[CityGrind] Court is missing hoops or pads:", model:GetFullName())
+		return
+	end
+	local scoreboard = model:FindFirstChild("Scoreboard")
+	local gui = scoreboard and scoreboard:FindFirstChildOfClass("SurfaceGui")
+
+	local court: Court = {
+		model = model,
+		name = model:GetAttribute("DisplayName") or model.Name,
+		center = model:GetAttribute("CourtCenter"),
+		size = model:GetAttribute("CourtSize"),
+		hoops = hoops,
+		pads = { Home = homePad, Away = awayPad },
+		scoreText = gui and gui:FindFirstChildOfClass("TextLabel"),
+		state = "Idle",
+		teams = { Home = {}, Away = {} },
+		score = { Home = 0, Away = 0 },
+		startedAt = 0,
+		countdownEnds = 0,
+		overtime = false,
+		ball = nil,
+		freeBalls = {},
+		points = {},
+		awaySince = {},
+	}
+	table.insert(courts, court)
+	setScoreboard(court, "OPEN COURT")
+	publish(court)
+
+	local rack = model:FindFirstChild("BallRack")
+	local prompt = rack and rack:FindFirstChild("GrabBall")
+	if prompt and prompt:IsA("ProximityPrompt") then
+		prompt.Triggered:Connect(function(player)
+			if playerGame[player] or court.state == "Playing" then
+				PlayerData.onNotify:Fire(player, "GAME IN PROGRESS", "Free play balls come back when the game ends.")
+				return
+			end
+			if Basketball.heldBall(player) then
+				return
+			end
+			-- One practice ball per player, a few per court.
+			for ball in court.freeBalls do
+				if ball.owner == player then
+					Basketball.destroy(ball)
+					court.freeBalls[ball] = nil
+				end
+			end
+			local count = 0
+			for _ in court.freeBalls do
+				count += 1
+			end
+			if count >= B.FREE_BALLS_PER_COURT then
+				PlayerData.onNotify:Fire(player, "RACK IS EMPTY", "Grab a loose ball on the court instead.")
+				return
+			end
+			local ball = Basketball.newBall((rack :: BasePart).Position + Vector3.new(0, 2.5, 0))
+			ball.court = model
+			ball.owner = player
+			court.freeBalls[ball] = true
+			Basketball.give(ball, player)
+		end)
+	end
+
+	task.spawn(function()
+		while model.Parent do
+			if court.state == "Idle" or court.state == "Countdown" then
+				updateIdle(court)
+			elseif court.state == "Playing" then
+				updatePlaying(court)
+			end
+			-- tidy up practice balls nobody has touched for a while
+			for ball in court.freeBalls do
+				if not Basketball.balls()[ball] then
+					court.freeBalls[ball] = nil
+				elseif not ball.holder and os.clock() - ball.lastActive > B.FREE_BALL_IDLE_SECONDS then
+					Basketball.destroy(ball)
+					court.freeBalls[ball] = nil
+				end
+			end
+			task.wait(0.2)
+		end
+	end)
+end
+
+function CourtGames.start()
+	for _, model in CollectionService:GetTagged("Court") do
+		if model:IsA("Model") then
+			setupCourt(model)
+		end
+	end
+	Players.PlayerRemoving:Connect(leaveGame)
+end
+
+function CourtGames.gameOf(player: Player): string?
+	local entry = playerGame[player]
+	return entry and entry.court.name
+end
+
+return CourtGames
+]=====])
 local client = put(SPS, 'LocalScript', 'CityGrindClient', [=====[
 -- CITY GRIND: client entry point (StarterPlayerScripts.CityGrindClient).
 
@@ -1440,12 +2919,14 @@ local Players = game:GetService("Players")
 local Movement = require(script:WaitForChild("Movement"))
 local HUD = require(script:WaitForChild("HUD"))
 local Phone = require(script:WaitForChild("Phone"))
+local Basketball = require(script:WaitForChild("Basketball"))
 
 local player = Players.LocalPlayer
 
 Movement.start()
 HUD.start()
 Phone.start()
+Basketball.start()
 
 -- Wait for the server to hand over this player's save before welcoming them.
 if not player:GetAttribute("DataLoaded") then
@@ -2001,13 +3482,13 @@ local function buildControlsHint()
 		return
 	end
 	UI.label({
-		Text = "P Phone   ·   Shift Sprint   ·   C Crouch / Slide   ·   E Interact",
+		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal",
 		TextSize = 13,
 		TextColor3 = colors.subtext,
 		TextStrokeTransparency = 0.6,
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 14, 1, -10),
-		Size = UDim2.fromOffset(500, 16),
+		Size = UDim2.fromOffset(640, 16),
 		Parent = gui,
 	})
 end
@@ -2234,7 +3715,21 @@ local function buildProfile()
 			UI.label({ Text = entry[1], TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new(x, 0, 0, 24), Size = UDim2.new(1 / #entries, 0, 0, 14), Parent = numbers })
 		end
 
-		local stats = card(content, 30 + #Config.STATS * 24, 3)
+		local bb = data.basketball or {}
+		local hoops = card(content, 66, 3)
+		local bbEntries = {
+			{ "W - L", string.format("%d-%d", bb.wins or 0, bb.losses or 0) },
+			{ "Points", tostring(bb.points or 0) },
+			{ "3PT", tostring(bb.threes or 0) },
+			{ "Dunks", tostring(bb.dunks or 0) },
+		}
+		for i, entry in bbEntries do
+			local x = (i - 1) / #bbEntries
+			UI.label({ Text = entry[2], Font = UI.FONT_BLACK, TextSize = 17, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromScale(x, 0), Size = UDim2.new(1 / #bbEntries, 0, 0, 22), Parent = hoops })
+			UI.label({ Text = entry[1], TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new(x, 0, 0, 24), Size = UDim2.new(1 / #bbEntries, 0, 0, 14), Parent = hoops })
+		end
+
+		local stats = card(content, 30 + #Config.STATS * 24, 4)
 		UI.label({ Text = "ATTRIBUTES", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 16), Parent = stats })
 		for i, stat in Config.STATS do
 			local y = 22 + (i - 1) * 24
@@ -2831,5 +4326,345 @@ function Phone.start()
 end
 
 return Phone
+]=====])
+put(client, 'ModuleScript', 'Basketball', [=====[
+-- CITY GRIND: basketball controls and on-screen feedback.
+-- With the ball: hold Click / R2 / Shoot to raise the shot meter and let go in
+-- the green zone; Q / X / Pass passes. Without it: F / X / Steal near a ball handler.
+-- The server decides whether anything goes in; this only sends button presses.
+
+local CollectionService = game:GetService("CollectionService")
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local remotes = shared:WaitForChild("Remotes")
+local BallAction = remotes:WaitForChild("BallAction")
+local BallFx = remotes:WaitForChild("BallFx")
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+local B = Config.Ball
+
+local Basketball = {}
+
+local gui: ScreenGui
+local meter: Frame
+local meterFill: Frame
+local meterLabel: TextLabel
+local callout: TextLabel
+local scoreboard: Frame
+local scoreText: TextLabel
+local subText: TextLabel
+
+local charging = false
+local chargeStart = 0
+local METER_FULL = B.PERFECT_RELEASE * 2 -- the green zone sits in the middle
+
+---------------------------------------------------------------------------
+-- Shot meter
+---------------------------------------------------------------------------
+local function buildMeter()
+	meter = UI.new("Frame", {
+		Name = "ShotMeter",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.2,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -64),
+		Size = UDim2.fromOffset(240, 18),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(9), UI.stroke(Color3.new(1, 1, 1), 1.5, 0.4) })
+	local zoneWidth = B.PERFECT_TOLERANCE * 2 / METER_FULL
+	local goodWidth = B.RELEASE_WINDOW * 0.6 / METER_FULL
+	UI.new("Frame", {
+		BackgroundColor3 = Color3.fromRGB(80, 160, 80),
+		BackgroundTransparency = 0.4,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromScale(goodWidth * 2, 1),
+		Parent = meter,
+	})
+	UI.new("Frame", {
+		BackgroundColor3 = Color3.fromRGB(90, 255, 120),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromScale(zoneWidth, 1),
+		ZIndex = 2,
+		Parent = meter,
+	})
+	meterFill = UI.new("Frame", {
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.new(0, 4, 1, 8),
+		ZIndex = 3,
+		Parent = meter,
+	}, { UI.corner(2) })
+	meterLabel = UI.label({
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 16,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextStrokeTransparency = 0.4,
+		Position = UDim2.fromOffset(0, -24),
+		Size = UDim2.new(1, 0, 0, 20),
+		Parent = meter,
+	})
+end
+
+local function releaseFeedback(held: number)
+	local off = math.abs(held - B.PERFECT_RELEASE)
+	if off <= B.PERFECT_TOLERANCE then
+		meterLabel.Text = "PERFECT"
+		meterLabel.TextColor3 = Color3.fromRGB(90, 255, 120)
+	elseif off <= B.RELEASE_WINDOW * 0.6 then
+		meterLabel.Text = if held < B.PERFECT_RELEASE then "SLIGHTLY EARLY" else "SLIGHTLY LATE"
+		meterLabel.TextColor3 = colors.stamina
+	else
+		meterLabel.Text = if held < B.PERFECT_RELEASE then "EARLY" else "LATE"
+		meterLabel.TextColor3 = colors.danger
+	end
+	task.delay(0.9, function()
+		if not charging then
+			meter.Visible = false
+			meterLabel.Text = ""
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Actions
+---------------------------------------------------------------------------
+local function onShoot(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		charging = true
+		chargeStart = os.clock()
+		meter.Visible = true
+		meterLabel.Text = ""
+		BallAction:FireServer("ShootStart")
+	elseif (state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel) and charging then
+		charging = false
+		releaseFeedback(os.clock() - chargeStart)
+		BallAction:FireServer("ShootRelease")
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function onPass(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		BallAction:FireServer("Pass")
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function onSteal(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		BallAction:FireServer("Steal")
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local stealBound = false
+local function refreshBindings()
+	if player:GetAttribute("HasBall") then
+		ContextActionService:BindAction("CityShoot", onShoot, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
+		ContextActionService:SetTitle("CityShoot", "Shoot")
+		ContextActionService:SetPosition("CityShoot", UDim2.new(1, -95, 1, -95))
+		ContextActionService:BindAction("CityPass", onPass, true, Enum.KeyCode.Q, Enum.KeyCode.ButtonX)
+		ContextActionService:SetTitle("CityPass", "Pass")
+		ContextActionService:SetPosition("CityPass", UDim2.new(1, -170, 1, -60))
+	else
+		ContextActionService:UnbindAction("CityShoot")
+		ContextActionService:UnbindAction("CityPass")
+		if charging then
+			charging = false
+			meter.Visible = false
+		end
+	end
+end
+
+-- The steal button only appears near someone dribbling.
+local function updateStealBinding()
+	local want = false
+	if not player:GetAttribute("HasBall") then
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if root then
+			for _, other in Players:GetPlayers() do
+				if other ~= player and other:GetAttribute("HasBall") then
+					local r = other.Character and other.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+					if r and (r.Position - root.Position).Magnitude < 14 then
+						want = true
+						break
+					end
+				end
+			end
+		end
+	end
+	if want and not stealBound then
+		ContextActionService:BindAction("CitySteal", onSteal, true, Enum.KeyCode.F, Enum.KeyCode.ButtonX)
+		ContextActionService:SetTitle("CitySteal", "Steal")
+		ContextActionService:SetPosition("CitySteal", UDim2.new(1, -170, 1, -60))
+		stealBound = true
+	elseif not want and stealBound then
+		ContextActionService:UnbindAction("CitySteal")
+		stealBound = false
+	end
+end
+
+---------------------------------------------------------------------------
+-- Callouts and scoreboard
+---------------------------------------------------------------------------
+local function showCallout(text: string)
+	callout.Text = text
+	callout.TextTransparency = 0
+	callout.TextStrokeTransparency = 0.2
+	local scale = callout:FindFirstChildOfClass("UIScale") :: UIScale
+	scale.Scale = 0.6
+	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+	local token = os.clock()
+	callout:SetAttribute("Token", token)
+	task.delay(1.6, function()
+		if callout:GetAttribute("Token") == token then
+			TweenService:Create(callout, TweenInfo.new(0.4), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+		end
+	end)
+end
+
+local function buildScoreboard()
+	scoreboard = UI.new("Frame", {
+		Name = "Scoreboard",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.15,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 12),
+		Size = UDim2.fromOffset(260, 56),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(12), UI.padding(6) })
+	scoreText = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = scoreboard })
+	subText = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = scoreboard })
+end
+
+local function nearestActiveCourt(): Model?
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root then
+		return nil
+	end
+	local best, bestDist = nil, 90
+	for _, court in CollectionService:GetTagged("Court") do
+		local state = court:GetAttribute("State")
+		local center = court:GetAttribute("CourtCenter")
+		if center and (state == "Playing" or state == "Countdown" or state == "Ended") then
+			local d = (center - root.Position).Magnitude
+			local mine = player:GetAttribute("InGame") == court:GetAttribute("DisplayName")
+			if mine then
+				return court
+			elseif d < bestDist then
+				best, bestDist = court, d
+			end
+		end
+	end
+	return best
+end
+
+local function updateScoreboard()
+	local court = nearestActiveCourt()
+	scoreboard.Visible = court ~= nil
+	if not court then
+		return
+	end
+	local state = court:GetAttribute("State")
+	local home, away = court:GetAttribute("HomeScore") or 0, court:GetAttribute("AwayScore") or 0
+	scoreText.Text = string.format("HOME  %d  –  %d  AWAY", home, away)
+	if state == "Countdown" then
+		subText.Text = string.format("%s starts in %d", court:GetAttribute("Mode") or "", court:GetAttribute("Countdown") or 0)
+	elseif state == "Ended" then
+		subText.Text = "Final"
+	elseif court:GetAttribute("Overtime") then
+		subText.Text = "Next bucket wins"
+	else
+		local t = court:GetAttribute("TimeLeft") or 0
+		local team = player:GetAttribute("Team")
+		subText.Text = string.format("%d:%02d%s", t // 60, t % 60, if team then "   ·   You: " .. string.upper(team) else "")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Dunk: the server says jump, the client (which owns its character) jumps.
+---------------------------------------------------------------------------
+local function dunkJump(rim: Vector3)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid then
+		return
+	end
+	local toRim = Vector3.new(rim.X - root.Position.X, 0, rim.Z - root.Position.Z)
+	local stopShort = if toRim.Magnitude > 1.5 then toRim - toRim.Unit * 1.2 else Vector3.zero
+	local rise = math.max(4, rim.Y - root.Position.Y - 1)
+	local up = math.sqrt(2 * workspace.Gravity * rise)
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	root.AssemblyLinearVelocity = stopShort / (up / workspace.Gravity) + Vector3.new(0, up, 0)
+end
+
+function Basketball.start()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindBasketball",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 3,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildMeter()
+	buildScoreboard()
+	callout = UI.label({
+		Name = "Callout",
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 54,
+		TextColor3 = Color3.fromRGB(255, 210, 60),
+		TextStrokeColor3 = Color3.fromRGB(60, 20, 0),
+		TextStrokeTransparency = 1,
+		TextTransparency = 1,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.32),
+		Size = UDim2.new(1, 0, 0, 70),
+		Parent = gui,
+	}, { UI.new("UIScale", {}) })
+
+	player:GetAttributeChangedSignal("HasBall"):Connect(refreshBindings)
+	refreshBindings()
+
+	BallFx.OnClientEvent:Connect(function(kind: string, arg: any)
+		if kind == "Callout" and type(arg) == "string" then
+			showCallout(arg)
+		elseif kind == "Dunk" and typeof(arg) == "Vector3" then
+			dunkJump(arg)
+		end
+	end)
+
+	local accumulator = 0
+	RunService.Heartbeat:Connect(function(dt)
+		if charging then
+			local t = (os.clock() - chargeStart) / METER_FULL
+			meterFill.Position = UDim2.fromScale(math.clamp(t, 0, 1), 0.5)
+		end
+		accumulator += dt
+		if accumulator >= 0.25 then
+			accumulator = 0
+			updateStealBinding()
+			updateScoreboard()
+		end
+	end)
+end
+
+return Basketball
 ]=====])
 print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')

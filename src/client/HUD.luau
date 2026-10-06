@@ -215,13 +215,13 @@ local function buildControlsHint()
 		return
 	end
 	UI.label({
-		Text = "P Phone   ·   Shift Sprint   ·   C Crouch / Slide   ·   E Interact",
+		Text = "P Phone · Shift Sprint · C Crouch/Slide · E Interact · Click Shoot · Q Pass · F Steal",
 		TextSize = 13,
 		TextColor3 = colors.subtext,
 		TextStrokeTransparency = 0.6,
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 14, 1, -10),
-		Size = UDim2.fromOffset(500, 16),
+		Size = UDim2.fromOffset(640, 16),
 		Parent = gui,
 	})
 end

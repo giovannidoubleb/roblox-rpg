@@ -185,7 +185,21 @@ local function buildProfile()
 			UI.label({ Text = entry[1], TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new(x, 0, 0, 24), Size = UDim2.new(1 / #entries, 0, 0, 14), Parent = numbers })
 		end
 
-		local stats = card(content, 30 + #Config.STATS * 24, 3)
+		local bb = data.basketball or {}
+		local hoops = card(content, 66, 3)
+		local bbEntries = {
+			{ "W - L", string.format("%d-%d", bb.wins or 0, bb.losses or 0) },
+			{ "Points", tostring(bb.points or 0) },
+			{ "3PT", tostring(bb.threes or 0) },
+			{ "Dunks", tostring(bb.dunks or 0) },
+		}
+		for i, entry in bbEntries do
+			local x = (i - 1) / #bbEntries
+			UI.label({ Text = entry[2], Font = UI.FONT_BLACK, TextSize = 17, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromScale(x, 0), Size = UDim2.new(1 / #bbEntries, 0, 0, 22), Parent = hoops })
+			UI.label({ Text = entry[1], TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.new(x, 0, 0, 24), Size = UDim2.new(1 / #bbEntries, 0, 0, 14), Parent = hoops })
+		end
+
+		local stats = card(content, 30 + #Config.STATS * 24, 4)
 		UI.label({ Text = "ATTRIBUTES", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 16), Parent = stats })
 		for i, stat in Config.STATS do
 			local y = 22 + (i - 1) * 24

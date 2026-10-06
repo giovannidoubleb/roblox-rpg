@@ -53,6 +53,7 @@ local function defaultProfile()
 		statXP = statXP,
 		runsCompleted = 0,
 		bestRunSeconds = 0,
+		basketball = { games = 0, wins = 0, losses = 0, points = 0, threes = 0, dunks = 0, blocks = 0, steals = 0 },
 		transactions = {
 			{ t = os.time(), amount = Config.STARTING_CASH, label = "Welcome to the city" },
 		},
@@ -96,6 +97,8 @@ local function publish(player: Player)
 	for _, stat in Config.STATS do
 		player:SetAttribute(stat, data.stats[stat])
 	end
+	player:SetAttribute("Wins", data.basketball.wins)
+	player:SetAttribute("Losses", data.basketball.losses)
 	player:SetAttribute("DataLoaded", true)
 end
 
@@ -316,6 +319,20 @@ function PlayerData.recordRun(player: Player, seconds: number)
 	markChanged(player)
 end
 
+-- Adds to the saved basketball career totals (only known keys, only positive).
+function PlayerData.recordBasketball(player: Player, deltas: { [string]: number })
+	local data = profiles[player]
+	if not data then
+		return
+	end
+	for key, amount in deltas do
+		if data.basketball[key] ~= nil and type(amount) == "number" and amount > 0 then
+			data.basketball[key] += math.floor(amount)
+		end
+	end
+	markChanged(player)
+end
+
 -- What the phone's Profile and Bank apps are allowed to see.
 function PlayerData.publicSnapshot(player: Player)
 	local data = profiles[player]
@@ -333,6 +350,7 @@ function PlayerData.publicSnapshot(player: Player)
 		stats = table.clone(data.stats),
 		runsCompleted = data.runsCompleted,
 		bestRunSeconds = data.bestRunSeconds,
+		basketball = table.clone(data.basketball),
 		transactions = table.clone(data.transactions),
 		firstJoin = data.firstJoin,
 	}

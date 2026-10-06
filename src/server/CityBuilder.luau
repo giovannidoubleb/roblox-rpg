@@ -7,6 +7,7 @@
 --   NW: Starter apartments, park + playground    NE: Outdoor court, Iron Box gym, subway
 --   SW: Corner Mart, Fresh Cuts barber, Threads  SE: Mama's Kitchen, Budget Wheels lot
 
+local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
 
 local CityBuilder = {}
@@ -209,30 +210,47 @@ local function bench(cf: CFrame, parent: Instance)
 	end
 end
 
-local function hoop(baseline: Vector3, dir: number, parent: Instance)
-	-- dir = +1 means the hoop faces +z (it sits at the -z end of the court)
+-- A streetball hoop. dir = +1 means it faces +z (it sits at the -z end of the court).
+-- The rim is sized for a 1.5-stud ball, and its centre is marked by a RimCenter attachment.
+local RIM_RADIUS = 1.45
+local function hoop(name: string, baseline: Vector3, dir: number, parent: Instance): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	m.Parent = parent
 	local pole = baseline + Vector3.new(0, 0, -dir * 3)
-	local polePart = part({ name = "HoopPole", size = Vector3.new(0.8, 12, 0.8), cframe = CFrame.new(pole + Vector3.new(0, 6, 0)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = parent })
-	part({ name = "HoopArm", size = Vector3.new(0.6, 0.6, 3.5), cframe = CFrame.new(pole + Vector3.new(0, 11.5, dir * 1.75)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = parent })
+	local polePart = part({ name = "HoopPole", size = Vector3.new(0.8, 12, 0.8), cframe = CFrame.new(pole + Vector3.new(0, 6, 0)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = m })
+	part({ name = "HoopArm", size = Vector3.new(0.6, 0.6, 3.5), cframe = CFrame.new(pole + Vector3.new(0, 11.5, dir * 1.75)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = m })
 	local board = pole + Vector3.new(0, 11.5, dir * 3.5)
-	part({ name = "Backboard", size = Vector3.new(7, 4.2, 0.3), cframe = CFrame.new(board), color = Color3.new(1, 1, 1), material = Enum.Material.Glass, transparency = 0.3, parent = parent })
-	part({ name = "BoardSquare", size = Vector3.new(2.4, 1.8, 0.32), cframe = CFrame.new(board + Vector3.new(0, -0.6, 0)), color = Color3.fromRGB(230, 60, 40), material = Enum.Material.SmoothPlastic, transparency = 0.5, collide = false, parent = parent })
-	local rimCenter = board + Vector3.new(0, -1.3, dir * 1.3)
-	for i = 0, 11 do
-		local a = i / 12 * math.pi * 2
+	part({ name = "Backboard", size = Vector3.new(7, 4.2, 0.3), cframe = CFrame.new(board), color = Color3.new(1, 1, 1), material = Enum.Material.Glass, transparency = 0.3, parent = m })
+	part({ name = "BoardSquare", size = Vector3.new(2.4, 1.8, 0.32), cframe = CFrame.new(board + Vector3.new(0, -0.6, 0)), color = Color3.fromRGB(230, 60, 40), material = Enum.Material.SmoothPlastic, transparency = 0.5, collide = false, parent = m })
+	local rimCenter = board + Vector3.new(0, -1.3, dir * (RIM_RADIUS + 0.45))
+	local segments = 16
+	for i = 0, segments - 1 do
+		local a = i / segments * math.pi * 2
 		part({
 			name = "Rim",
-			size = Vector3.new(0.18, 0.18, 0.5),
-			cframe = CFrame.new(rimCenter + Vector3.new(math.cos(a) * 0.95, 0, math.sin(a) * 0.95)) * CFrame.Angles(0, -a, 0),
+			size = Vector3.new(0.18, 0.18, 2 * math.pi * RIM_RADIUS / segments + 0.05),
+			cframe = CFrame.new(rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS, 0, math.sin(a) * RIM_RADIUS)) * CFrame.Angles(0, -a, 0),
 			color = Color3.fromRGB(240, 90, 20),
 			material = Enum.Material.Metal,
-			parent = parent,
+			parent = m,
 		})
+	end
+	-- a simple net: thin strands that don't block the ball
+	for i = 0, 7 do
+		local a = i / 8 * math.pi * 2
+		local top = rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS * 0.95, -0.1, math.sin(a) * RIM_RADIUS * 0.95)
+		local bottom = rimCenter + Vector3.new(math.cos(a) * RIM_RADIUS * 0.55, -1.6, math.sin(a) * RIM_RADIUS * 0.55)
+		local strand = part({ name = "Net", size = Vector3.new(0.06, 0.06, (top - bottom).Magnitude), cframe = CFrame.lookAt((top + bottom) / 2, bottom), color = Color3.new(1, 1, 1), collide = false, parent = m })
+		strand.CanQuery = false
+		strand.CanTouch = false
 	end
 	local rimMarker = Instance.new("Attachment")
 	rimMarker.Name = "RimCenter"
 	rimMarker.Parent = polePart
 	rimMarker.WorldPosition = rimCenter
+	m:SetAttribute("RimRadius", RIM_RADIUS)
+	return m
 end
 
 local function buildGround()
@@ -300,17 +318,24 @@ local function buildStreetLamps()
 	end
 end
 
-local function buildCourt()
+-- A full outdoor court with two hoops, team pads, a ball rack and a scoreboard.
+-- The CourtGames server module finds courts by their "Court" tag.
+local COURT_W, COURT_L = 44, 76
+local function buildCourt(name: string, c: Vector3, floorColor: Color3, paintColor: Color3): Model
 	local court = Instance.new("Model")
-	court.Name = "NeighborhoodCourt"
+	court.Name = name
 	court.Parent = folder("Courts")
-	local c = Vector3.new(100, 0, -110)
-	local w, l = 44, 76
-	part({ name = "CourtFloor", size = Vector3.new(w + 8, 0.4, l + 8), cframe = CFrame.new(c + Vector3.new(0, 0.2, 0)), color = Color3.fromRGB(40, 90, 150), material = Enum.Material.Concrete, parent = court })
-	part({ name = "Paint", size = Vector3.new(w, 0.05, l), cframe = CFrame.new(c + Vector3.new(0, 0.42, 0)), color = Color3.fromRGB(200, 90, 50), material = Enum.Material.Concrete, collide = false, parent = court })
+	local w, l = COURT_W, COURT_L
+	court:SetAttribute("CourtCenter", c)
+	court:SetAttribute("CourtSize", Vector3.new(w, 0, l))
+	court:SetAttribute("DisplayName", (name:gsub("(%l)(%u)", "%1 %2")))
+	CollectionService:AddTag(court, "Court")
+
+	part({ name = "CourtFloor", size = Vector3.new(w + 8, 0.4, l + 8), cframe = CFrame.new(c + Vector3.new(0, 0.2, 0)), color = floorColor, material = Enum.Material.Concrete, parent = court })
+	part({ name = "Paint", size = Vector3.new(w, 0.05, l), cframe = CFrame.new(c + Vector3.new(0, 0.42, 0)), color = paintColor, material = Enum.Material.Concrete, collide = false, parent = court })
 	local white = Color3.new(1, 1, 1)
-	local function line(size: Vector3, offset: Vector3)
-		part({ name = "Line", size = size, cframe = CFrame.new(c + offset + Vector3.new(0, 0.47, 0)), color = white, collide = false, parent = court })
+	local function line(size: Vector3, offset: Vector3, angle: number?)
+		part({ name = "Line", size = size, cframe = CFrame.new(c + offset + Vector3.new(0, 0.47, 0)) * CFrame.Angles(0, angle or 0, 0), color = white, collide = false, parent = court })
 	end
 	line(Vector3.new(w, 0.04, 0.4), Vector3.new(0, 0, -l / 2))
 	line(Vector3.new(w, 0.04, 0.4), Vector3.new(0, 0, l / 2))
@@ -323,20 +348,19 @@ local function buildCourt()
 		line(Vector3.new(12, 0.04, 0.4), Vector3.new(0, 0, endZ - dir * 15))
 		line(Vector3.new(0.4, 0.04, 15), Vector3.new(-6, 0, endZ - dir * 7.5))
 		line(Vector3.new(0.4, 0.04, 15), Vector3.new(6, 0, endZ - dir * 7.5))
-		-- three point arc
-		for i = 0, 20 do
-			local a = i / 20 * math.pi
-			local r = 19
-			line(Vector3.new(1.2, 0.04, 0.4), Vector3.new(math.cos(a) * r, 0, endZ - dir * (4 + math.sin(a) * r)))
+		-- three point arc, centred on the rim (2.4 studs in from the baseline)
+		local r = 19
+		for i = 0, 24 do
+			local a = i / 24 * math.pi
+			line(Vector3.new(0.4, 0.04, 2.6), Vector3.new(math.cos(a) * r, 0, endZ - dir * (2.4 + math.sin(a) * r)), a * dir)
 		end
-		hoop(c + Vector3.new(0, 0, endZ), -dir, court)
+		hoop(if dir == -1 then "HoopNorth" else "HoopSouth", c + Vector3.new(0, 0, endZ), -dir, court)
 	end
-	-- center circle
 	for i = 0, 15 do
 		local a = i / 16 * math.pi * 2
-		line(Vector3.new(1.2, 0.04, 0.4), Vector3.new(math.cos(a) * 6, 0, math.sin(a) * 6))
+		line(Vector3.new(0.4, 0.04, 2.5), Vector3.new(math.cos(a) * 6, 0, math.sin(a) * 6), -a)
 	end
-	-- chain-link fence with a gap on the road side
+	-- chain-link fence with a gap on the south side
 	local fenceColor = Color3.fromRGB(120, 125, 130)
 	for _, side in { -1, 1 } do
 		part({ name = "Fence", size = Vector3.new(0.3, 10, l + 8), cframe = CFrame.new(c + Vector3.new(side * (w / 2 + 4), 5, 0)), color = fenceColor, material = Enum.Material.DiamondPlate, transparency = 0.6, parent = court })
@@ -349,7 +373,39 @@ local function buildCourt()
 	for i = -2, 2 do
 		bench(CFrame.new(c + Vector3.new(-(w / 2 + 1.5), 0.4, i * 12)) * CFrame.Angles(0, -math.pi / 2, 0), court)
 	end
-	mapPoint("Neighborhood Court", "Court", c + Vector3.new(0, 3, l / 2 + 8))
+
+	-- team pads behind the south baseline: stand on one to join that team
+	for _, pad in { { "HomePad", -9, Color3.fromRGB(50, 120, 255), "HOME" }, { "AwayPad", 9, Color3.fromRGB(255, 70, 70), "AWAY" } } do
+		local p = part({ name = pad[1], size = Vector3.new(8, 0.3, 2.6), cframe = CFrame.new(c + Vector3.new(pad[2], 0.55, l / 2 + 1.6)), color = pad[3], material = Enum.Material.Neon, collide = false, parent = court })
+		p.CanQuery = false
+		local labelPart = part({ name = pad[1] .. "Label", size = Vector3.new(8, 1.6, 0.2), cframe = CFrame.new(c + Vector3.new(pad[2], 1.6, l / 2 + 3.1)), color = Color3.fromRGB(20, 20, 24), collide = false, parent = court })
+		labelPart.CFrame *= CFrame.Angles(0, math.pi, 0) -- face the road
+		sign(labelPart, Enum.NormalId.Front, pad[4] .. " - stand here to play", pad[3])
+	end
+
+	-- ball rack for free play
+	local rack = part({ name = "BallRack", size = Vector3.new(5, 2.5, 1.6), cframe = CFrame.new(c + Vector3.new(-(w / 2 + 1.5), 1.65, l / 2 - 4)), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = court })
+	for i = -1, 1 do
+		part({ name = "RackBall", size = Vector3.new(1.4, 1.4, 1.4), cframe = CFrame.new(rack.Position + Vector3.new(0, 1.9, i * 1.5)), color = Color3.fromRGB(230, 110, 30), material = Enum.Material.Rubber, shape = Enum.PartType.Ball, collide = false, parent = court })
+	end
+	local rackPrompt = Instance.new("ProximityPrompt")
+	rackPrompt.Name = "GrabBall"
+	rackPrompt.ActionText = "Grab a ball"
+	rackPrompt.ObjectText = "Ball Rack"
+	rackPrompt.MaxActivationDistance = 9
+	rackPrompt.RequiresLineOfSight = false
+	rackPrompt.Parent = rack
+
+	-- scoreboard on the north fence, facing the court
+	local board = part({ name = "Scoreboard", size = Vector3.new(16, 6, 0.4), cframe = CFrame.new(c + Vector3.new(0, 13, -(l / 2 + 4))) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(15, 15, 18), parent = court })
+	for _, x in { -7, 7 } do
+		part({ name = "ScoreboardPost", size = Vector3.new(0.5, 10, 0.5), cframe = CFrame.new(c + Vector3.new(x, 5, -(l / 2 + 4.4))), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = court })
+	end
+	local gui = sign(board, Enum.NormalId.Front, "OPEN COURT", Color3.fromRGB(255, 200, 60))
+	gui.Name = "ScoreboardGui"
+
+	mapPoint(court:GetAttribute("DisplayName"), "Court", c + Vector3.new(0, 3, l / 2 + 8))
+	return court
 end
 
 local function buildPark()
@@ -598,7 +654,7 @@ function CityBuilder.build(): CityHandles
 	building({ name = "Threads Clothing", center = Vector3.new(-185, 0, 62), size = Vector3.new(44, 18, 30), color = Color3.fromRGB(40, 40, 46), material = Enum.Material.Concrete, facing = -1, signText = "THREADS", signColor = Color3.fromRGB(255, 120, 200), category = "Shop" })
 	building({ name = "Mama's Kitchen", center = Vector3.new(70, 0, 62), size = Vector3.new(40, 16, 30), color = Color3.fromRGB(190, 70, 50), facing = -1, signText = "MAMA'S KITCHEN", signColor = Color3.fromRGB(255, 220, 120), category = "Food" })
 
-	buildCourt()
+	buildCourt("NeighborhoodCourt", Vector3.new(100, 0, -110), Color3.fromRGB(40, 90, 150), Color3.fromRGB(200, 90, 50))
 	buildPark()
 	buildDealership(Vector3.new(190, 0, 85))
 	buildBusStop(Vector3.new(-35, 0, 32))
