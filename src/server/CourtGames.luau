@@ -426,10 +426,13 @@ Basketball.scored.connect(function(ball, hoop, shot)
 				Basketball.announce({ shooter }, "SLAM!")
 			elseif shot.kind == "layup" then
 				Basketball.train(shooter, "Finishing", 4)
+				Basketball.announce({ shooter }, "BUCKET")
 			else
 				Basketball.train(shooter, "Shooting", if shot.points == 3 then 6 else 4)
 				if shot.perfect then
 					Basketball.announce({ shooter }, "PERFECT RELEASE!")
+				else
+					Basketball.announce({ shooter }, if shot.points == 3 then "SPLASH! +3" else "BUCKET +2")
 				end
 			end
 		end

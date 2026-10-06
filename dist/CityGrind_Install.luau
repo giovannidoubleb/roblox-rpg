@@ -2702,10 +2702,13 @@ Basketball.scored.connect(function(ball, hoop, shot)
 				Basketball.announce({ shooter }, "SLAM!")
 			elseif shot.kind == "layup" then
 				Basketball.train(shooter, "Finishing", 4)
+				Basketball.announce({ shooter }, "BUCKET")
 			else
 				Basketball.train(shooter, "Shooting", if shot.points == 3 then 6 else 4)
 				if shot.perfect then
 					Basketball.announce({ shooter }, "PERFECT RELEASE!")
+				else
+					Basketball.announce({ shooter }, if shot.points == 3 then "SPLASH! +3" else "BUCKET +2")
 				end
 			end
 		end
@@ -3000,7 +3003,7 @@ function UI.stroke(color: Color3, thickness: number, transparency: number?): UIS
 	})
 end
 
-function UI.label(props: { [string]: any }): TextLabel
+function UI.label(props: { [string]: any }, children: { Instance }?): TextLabel
 	local defaults = {
 		BackgroundTransparency = 1,
 		Font = UI.FONT,
@@ -3011,10 +3014,10 @@ function UI.label(props: { [string]: any }): TextLabel
 	for k, v in props do
 		defaults[k] = v
 	end
-	return UI.new("TextLabel", defaults)
+	return UI.new("TextLabel", defaults, children)
 end
 
-function UI.button(props: { [string]: any }): TextButton
+function UI.button(props: { [string]: any }, children: { Instance }?): TextButton
 	local defaults = {
 		BackgroundColor3 = UI.colors.panelLight,
 		Font = UI.FONT_BOLD,
@@ -3025,7 +3028,7 @@ function UI.button(props: { [string]: any }): TextButton
 	for k, v in props do
 		defaults[k] = v
 	end
-	local b = UI.new("TextButton", defaults)
+	local b = UI.new("TextButton", defaults, children)
 	UI.corner(10).Parent = b
 	return b
 end
