@@ -1569,8 +1569,8 @@ local function buildDepot()
 	m.Name = "DeliveryDepot"
 	m.Parent = root
 	part({ name = "Slab", size = Vector3.new(34, 0.4, 30), cframe = CFrame.new(D + Vector3.new(0, 0.2, -2)), color = Color3.fromRGB(120, 120, 125), material = Enum.Material.Concrete, parent = m })
-	part({ name = "DepotBuilding", size = Vector3.new(30, 14, 14), cframe = CFrame.new(D + Vector3.new(0, 7, 6)), color = Color3.fromRGB(150, 110, 70), material = Enum.Material.CorrugatedSteel, parent = m })
-	part({ name = "RollerDoor", size = Vector3.new(12, 10, 0.3), cframe = CFrame.new(D + Vector3.new(0, 5, -1.1)), color = Color3.fromRGB(200, 160, 60), material = Enum.Material.CorrugatedSteel, parent = m })
+	part({ name = "DepotBuilding", size = Vector3.new(30, 14, 14), cframe = CFrame.new(D + Vector3.new(0, 7, 6)), color = Color3.fromRGB(150, 110, 70), material = Enum.Material.Metal, parent = m })
+	part({ name = "RollerDoor", size = Vector3.new(12, 10, 0.3), cframe = CFrame.new(D + Vector3.new(0, 5, -1.1)), color = Color3.fromRGB(200, 160, 60), material = Enum.Material.Metal, parent = m })
 	local s = part({ name = "Sign", size = Vector3.new(24, 2.6, 0.4), cframe = CFrame.new(D + Vector3.new(0, 12, -1.3)), color = Color3.fromRGB(25, 25, 30), parent = m })
 	sign(s, Enum.NormalId.Front, "CITY PARCEL DEPOT", Color3.fromRGB(255, 190, 80))
 	depotCounter = part({ name = "Counter", size = Vector3.new(12, 3.4, 3), cframe = CFrame.new(D + Vector3.new(0, 1.9, -8)), color = Color3.fromRGB(90, 70, 50), material = Enum.Material.Wood, parent = m })
@@ -1617,7 +1617,7 @@ local function buildWarehouse()
 	m.Parent = root
 	local wall = Color3.fromRGB(150, 155, 165)
 	local function w(size: Vector3, offset: Vector3)
-		part({ name = "Wall", size = size, cframe = CFrame.new(W + offset), color = wall, material = Enum.Material.CorrugatedSteel, parent = m })
+		part({ name = "Wall", size = size, cframe = CFrame.new(W + offset), color = wall, material = Enum.Material.Metal, parent = m })
 	end
 	part({ name = "Floor", size = Vector3.new(56, 0.4, 40), cframe = CFrame.new(W + Vector3.new(0, 0.2, 0)), color = Color3.fromRGB(110, 110, 115), material = Enum.Material.Concrete, parent = m })
 	w(Vector3.new(1, 18, 40), Vector3.new(-28, 9, 0))

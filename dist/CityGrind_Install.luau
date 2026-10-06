@@ -15,6 +15,828 @@ local SP = game:GetService('StarterPlayer')
 SP.EnableMouseLockOption = false
 local SPS = SP:FindFirstChildOfClass('StarterPlayerScripts')
 local folder = put(RS, 'Folder', 'CityGrind', nil)
+put(folder, 'ModuleScript', 'ApartmentsConfig', [=====[
+-- CITY GRIND: homes and furniture (spec sections 48, 73, 77, 110).
+-- Shared by the server (which owns every rule) and the client (which uses the
+-- same numbers to colour the placement preview). The server never accepts a
+-- size, price or position rule from a client: it reads this module's tables.
+--
+-- Units are built relative to an origin whose floor-1 top surface is y = 0.
+-- +x east, +z south. The exit door is always in the middle of the south wall.
+
+local ApartmentsConfig = {}
+
+-- Where Maple Court's front door is (the GPS target) and the realty kiosk.
+ApartmentsConfig.HOME_GPS = Vector3.new(-100, 3, -58)
+ApartmentsConfig.REALTY_POS = Vector3.new(-126, 0, -56)
+ApartmentsConfig.OUTSIDE = CFrame.lookAt(Vector3.new(-100, 0, -58), Vector3.new(-100, 0, -50))
+
+ApartmentsConfig.MAX_PER_ITEM = 20 -- how many of one furniture item a player may own
+
+---------------------------------------------------------------------------
+-- Home tiers
+---------------------------------------------------------------------------
+export type Rect = { f: number, x0: number, z0: number, x1: number, z1: number, kind: string?, label: string? }
+export type Zone = { f: number, y: number, x0: number, z0: number, x1: number, z1: number }
+export type Tier = {
+	id: string,
+	name: string,
+	price: number,
+	level: number,
+	reputation: number,
+	description: string,
+	width: number,
+	depth: number,
+	height: number,
+	maxItems: number,
+	zones: { Zone },
+	blocked: { Rect },
+	style: { [string]: any },
+}
+
+ApartmentsConfig.TIERS = {
+	{
+		id = "Studio",
+		name = "Studio",
+		price = 0,
+		level = 1,
+		reputation = 0,
+		description = "One cosy room at Maple Court. Bed, lamp and a kitchenette. Yours from day one.",
+		width = 30,
+		depth = 24,
+		height = 12,
+		maxItems = 12,
+		zones = { { f = 1, y = 0, x0 = -15, z0 = -12, x1 = 15, z1 = 12 } },
+		blocked = {
+			{ f = 1, x0 = -15, z0 = -12, x1 = -5, z1 = -9.5, kind = "kitchen", label = "the kitchenette" },
+			{ f = 1, x0 = -4, z0 = 8, x1 = 4, z1 = 12, kind = "door", label = "the doorway" },
+		},
+		style = {
+			floorColor = Color3.fromRGB(176, 136, 98), floorMat = Enum.Material.WoodPlanks,
+			wallColor = Color3.fromRGB(226, 214, 192), wallMat = Enum.Material.SmoothPlastic,
+			accentColor = Color3.fromRGB(150, 80, 60), accentMat = Enum.Material.Brick,
+			north = "window", east = "solid", west = "accent",
+			cabinet = Color3.fromRGB(235, 235, 230), counter = Color3.fromRGB(70, 70, 75),
+		},
+	},
+	{
+		id = "Apartment",
+		name = "Apartment",
+		price = 15_000,
+		level = 1,
+		reputation = 0,
+		description = "Living room, separate bedroom and a real kitchen. Room for 22 pieces.",
+		width = 44,
+		depth = 32,
+		height = 12,
+		maxItems = 22,
+		zones = { { f = 1, y = 0, x0 = -22, z0 = -16, x1 = 22, z1 = 16 } },
+		blocked = {
+			{ f = 1, x0 = 7.5, z0 = -16, x1 = 8.5, z1 = 4, kind = "wall", label = "a wall" },
+			{ f = 1, x0 = -22, z0 = -16, x1 = -8, z1 = -13.5, kind = "kitchen", label = "the kitchen" },
+			{ f = 1, x0 = -4, z0 = 12, x1 = 4, z1 = 16, kind = "door", label = "the doorway" },
+		},
+		style = {
+			floorColor = Color3.fromRGB(120, 84, 58), floorMat = Enum.Material.WoodPlanks,
+			wallColor = Color3.fromRGB(238, 238, 236), wallMat = Enum.Material.SmoothPlastic,
+			accentColor = Color3.fromRGB(40, 120, 130), accentMat = Enum.Material.SmoothPlastic,
+			north = "window", east = "window", west = "accent",
+			cabinet = Color3.fromRGB(45, 60, 80), counter = Color3.fromRGB(225, 225, 225),
+		},
+	},
+	{
+		id = "Luxury",
+		name = "Luxury Apartment",
+		price = 75_000,
+		level = 15,
+		reputation = 0,
+		description = "Marble floors, floor-to-ceiling windows, kitchen island and a fireplace.",
+		width = 56,
+		depth = 40,
+		height = 14,
+		maxItems = 32,
+		zones = { { f = 1, y = 0, x0 = -28, z0 = -20, x1 = 28, z1 = 20 } },
+		blocked = {
+			{ f = 1, x0 = 13.5, z0 = -20, x1 = 14.5, z1 = 2, kind = "wall", label = "a wall" },
+			{ f = 1, x0 = -28, z0 = -20, x1 = -8, z1 = -17.5, kind = "kitchen", label = "the kitchen" },
+			{ f = 1, x0 = -21, z0 = -8, x1 = -11, z1 = -4, kind = "island", label = "the island" },
+			{ f = 1, x0 = -28, z0 = 2, x1 = -25, z1 = 10, kind = "fireplace", label = "the fireplace" },
+			{ f = 1, x0 = -4, z0 = 16, x1 = 4, z1 = 20, kind = "door", label = "the doorway" },
+		},
+		style = {
+			floorColor = Color3.fromRGB(232, 230, 226), floorMat = Enum.Material.Marble,
+			wallColor = Color3.fromRGB(210, 210, 214), wallMat = Enum.Material.SmoothPlastic,
+			accentColor = Color3.fromRGB(55, 55, 62), accentMat = Enum.Material.Slate,
+			north = "tall", east = "tall", west = "accent",
+			cabinet = Color3.fromRGB(30, 30, 34), counter = Color3.fromRGB(240, 240, 240),
+		},
+	},
+	{
+		id = "Penthouse",
+		name = "Penthouse",
+		price = 300_000,
+		level = 35,
+		reputation = 1000,
+		description = "Top floor. Glass walls with a sky view, hot tub, neon trim. Room for 45 pieces.",
+		width = 72,
+		depth = 52,
+		height = 16,
+		maxItems = 45,
+		zones = { { f = 1, y = 0, x0 = -36, z0 = -26, x1 = 36, z1 = 26 } },
+		blocked = {
+			{ f = 1, x0 = 19.5, z0 = -26, x1 = 20.5, z1 = -2, kind = "wall", label = "a wall" },
+			{ f = 1, x0 = -36, z0 = 23.5, x1 = -16, z1 = 26, kind = "kitchen", label = "the kitchen" },
+			{ f = 1, x0 = -29, z0 = 12, x1 = -19, z1 = 16, kind = "island", label = "the island" },
+			{ f = 1, x0 = 24, z0 = 14, x1 = 34, z1 = 24, kind = "hottub", label = "the hot tub" },
+			{ f = 1, x0 = -4, z0 = 22, x1 = 4, z1 = 26, kind = "door", label = "the doorway" },
+		},
+		style = {
+			floorColor = Color3.fromRGB(40, 40, 46), floorMat = Enum.Material.Marble,
+			wallColor = Color3.fromRGB(30, 30, 36), wallMat = Enum.Material.SmoothPlastic,
+			accentColor = Color3.fromRGB(30, 30, 36), accentMat = Enum.Material.SmoothPlastic,
+			north = "glass", east = "glass", west = "glass",
+			neon = Color3.fromRGB(170, 90, 255),
+			cabinet = Color3.fromRGB(240, 240, 244), counter = Color3.fromRGB(25, 25, 28),
+		},
+	},
+	{
+		id = "Mansion",
+		name = "Mansion",
+		price = 1_500_000,
+		level = 60,
+		reputation = 2500,
+		description = "Two floors, indoor pool, your own half-court and a glass atrium. 70 pieces.",
+		width = 96,
+		depth = 72,
+		height = 31, -- outer walls; the upper floor's surface is at y = 17
+		maxItems = 70,
+		zones = {
+			{ f = 1, y = 0, x0 = -48, z0 = -36, x1 = 48, z1 = 36 },
+			{ f = 2, y = 17, x0 = -48, z0 = 0.5, x1 = 48, z1 = 36 },
+		},
+		blocked = {
+			{ f = 1, x0 = -46, z0 = -34, x1 = -12, z1 = -8, kind = "pool", label = "the pool" },
+			{ f = 1, x0 = 11, z0 = -36, x1 = 48, z1 = -3, kind = "court", label = "the court" },
+			{ f = 1, x0 = 21, z0 = 22.5, x1 = 48, z1 = 29.5, kind = "stairs", label = "the stairs" },
+			{ f = 1, x0 = -48, z0 = 14, x1 = -45.5, z1 = 34, kind = "kitchen", label = "the kitchen" },
+			{ f = 1, x0 = -4, z0 = 32, x1 = 4, z1 = 36, kind = "door", label = "the doorway" },
+			{ f = 2, x0 = 21, z0 = 22.5, x1 = 48, z1 = 29.5, kind = "stairwell", label = "the stairwell" },
+		},
+		style = {
+			floorColor = Color3.fromRGB(240, 236, 228), floorMat = Enum.Material.Marble,
+			upperColor = Color3.fromRGB(150, 110, 75), upperMat = Enum.Material.WoodPlanks,
+			wallColor = Color3.fromRGB(236, 228, 210), wallMat = Enum.Material.SmoothPlastic,
+			accentColor = Color3.fromRGB(190, 160, 110), accentMat = Enum.Material.Limestone,
+			north = "glass", east = "window", west = "window",
+			cabinet = Color3.fromRGB(60, 45, 35), counter = Color3.fromRGB(245, 245, 245),
+		},
+	},
+} :: { Tier }
+
+ApartmentsConfig.TIER_BY_ID = {} :: { [string]: Tier }
+for i, tier in ApartmentsConfig.TIERS do
+	ApartmentsConfig.TIER_BY_ID[tier.id] = tier;
+	(tier :: any).order = i
+end
+
+function ApartmentsConfig.floorY(tier: Tier, f: number): number?
+	for _, zone in tier.zones do
+		if zone.f == f then
+			return zone.y
+		end
+	end
+	return nil
+end
+
+-- Where a player appears inside a unit (relative to the origin), facing north.
+function ApartmentsConfig.spawnOffset(tier: Tier): Vector3
+	return Vector3.new(0, 0, tier.depth / 2 - 5)
+end
+
+---------------------------------------------------------------------------
+-- Part helper (also used by the server's room builder)
+---------------------------------------------------------------------------
+local SMOOTH = Enum.SurfaceType.Smooth
+
+function ApartmentsConfig.part(parent: Instance, name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?, props: { [string]: any }?): BasePart
+	local className = if props and props.class then props.class else "Part"
+	local p = Instance.new(className) :: any
+	p.Name = name
+	p.Anchored = true
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.TopSurface = SMOOTH
+	p.BottomSurface = SMOOTH
+	if props then
+		for key, value in props do
+			if key ~= "class" then
+				p[key] = value
+			end
+		end
+	end
+	p.Parent = parent
+	return p
+end
+
+---------------------------------------------------------------------------
+-- Furniture builders. Each builds around (0, 0, 0) = centre of its footprint on
+-- the floor, front facing -z, inside its own size box.
+---------------------------------------------------------------------------
+local V = Vector3.new
+local at = CFrame.new
+local rgb = Color3.fromRGB
+local M = Enum.Material
+local CYL = { Shape = Enum.PartType.Cylinder }
+local BALL = { Shape = Enum.PartType.Ball }
+local UP = CFrame.Angles(0, 0, math.pi / 2) -- cylinder axis X -> Y
+local FORWARD = CFrame.Angles(0, math.pi / 2, 0) -- cylinder axis X -> Z
+local SEAT = { class = "Seat" }
+
+local WOOD = rgb(160, 115, 75)
+local DARK_WOOD = rgb(85, 58, 40)
+local BLACK = rgb(25, 25, 28)
+local WHITE = rgb(236, 236, 232)
+local STEEL = rgb(150, 150, 158)
+local GOLD = rgb(230, 180, 50)
+
+type Add = (name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?, props: { [string]: any }?) -> BasePart
+
+local function legs(add: Add, w: number, d: number, h: number, inset: number, color: Color3, thick: number?)
+	local t = thick or 0.3
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			add("Leg", V(t, h, t), at(sx * (w / 2 - inset), h / 2, sz * (d / 2 - inset)), color, M.Wood)
+		end
+	end
+end
+
+local function chair(add: Add, cf: CFrame, color: Color3, cushion: Color3)
+	for _, sx in { -0.55, 0.55 } do
+		for _, sz in { -0.55, 0.55 } do
+			add("Leg", V(0.2, 1.45, 0.2), cf * at(sx, 0.725, sz), color, M.Wood)
+		end
+	end
+	add("Seat", V(1.4, 0.3, 1.4), cf * at(0, 1.6, 0), cushion, M.Fabric, SEAT)
+	add("ChairBack", V(1.4, 1.7, 0.2), cf * at(0, 2.6, 0.6), color, M.Wood)
+end
+
+local function bed(add: Add, w: number, d: number, frame: Color3, sheet: Color3, blanket: Color3, headH: number)
+	legs(add, w, d, 0.3, 0.3, DARK_WOOD, 0.4)
+	add("Frame", V(w, 0.9, d), at(0, 0.75, 0), frame, M.Wood)
+	add("Mattress", V(w - 0.3, 0.8, d - 0.4), at(0, 1.6, -0.1), sheet, M.Fabric)
+	add("Blanket", V(w - 0.1, 0.25, d * 0.62), at(0, 2.05, -d * 0.17), blanket, M.Fabric)
+	local pillows = if w >= 6 then 2 else 1
+	for i = 1, pillows do
+		local x = if pillows == 1 then 0 else (i - 1.5) * (w / 2)
+		add("Pillow", V(if pillows == 1 then 3 else w / 2 - 0.5, 0.5, 1.2), at(x, 2.25, d / 2 - 1.2), WHITE, M.Fabric)
+	end
+	add("Headboard", V(w, headH, 0.4), at(0, headH / 2, d / 2 - 0.2), frame, M.Wood)
+end
+
+local function surfaceGui(target: BasePart, face: Enum.NormalId, ppsu: number): SurfaceGui
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = face
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = ppsu
+	gui.LightInfluence = 0
+	gui.Parent = target
+	return gui
+end
+
+local function guiLabel(parent: Instance, text: string, size: UDim2, pos: UDim2, color: Color3, font: Enum.Font?): TextLabel
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = size
+	label.Position = pos
+	label.Text = text
+	label.TextColor3 = color
+	label.TextScaled = true
+	label.Font = font or Enum.Font.GothamBlack
+	label.Parent = parent
+	return label
+end
+
+export type Item = {
+	id: string,
+	name: string,
+	price: number,
+	category: string,
+	size: Vector3, -- footprint X, height Y, footprint Z (rotation 0)
+	flat: boolean?, -- rugs: only collide with other flat items
+	kind: string?, -- "bed" | "tv" | "lamp" (functional furniture)
+	seats: number?,
+	build: (Add) -> (),
+}
+
+ApartmentsConfig.ITEMS = {
+	{
+		id = "nightstand", name = "Nightstand", price = 50, category = "Bedroom", size = V(1.6, 2, 1.6),
+		build = function(add)
+			add("Body", V(1.5, 1.75, 1.5), at(0, 0.875, 0), WOOD, M.Wood)
+			add("Top", V(1.6, 0.2, 1.6), at(0, 1.85, 0), DARK_WOOD, M.Wood)
+			add("Drawer", V(1.2, 0.55, 0.05), at(0, 1.25, -0.77), rgb(185, 140, 95), M.Wood)
+			add("Knob", V(0.2, 0.2, 0.15), at(0, 1.25, -0.85), GOLD, M.Metal)
+		end,
+	},
+	{
+		id = "plant", name = "Potted Plant", price = 60, category = "Decor", size = V(2, 4.5, 2),
+		build = function(add)
+			add("Pot", V(1.6, 1.7, 1.7), at(0, 0.8, 0) * UP, rgb(190, 90, 60), M.Slate, CYL)
+			add("Soil", V(0.1, 1.5, 1.5), at(0, 1.62, 0) * UP, rgb(70, 50, 35), M.Ground, CYL)
+			add("Stem", V(0.25, 1.5, 0.25), at(0, 2.3, 0), rgb(70, 110, 50), M.Wood)
+			add("Leaves", V(2, 1.8, 2), at(0, 3.1, 0), rgb(60, 150, 70), M.Grass, BALL)
+			add("Leaves", V(1.3, 1.3, 1.3), at(0.3, 3.8, -0.2), rgb(80, 170, 80), M.Grass, BALL)
+			add("Leaves", V(1.1, 1.1, 1.1), at(-0.4, 3.7, 0.3), rgb(50, 135, 60), M.Grass, BALL)
+		end,
+	},
+	{
+		id = "beanbag", name = "Beanbag", price = 70, category = "Living", size = V(3, 2.4, 3), seats = 1,
+		build = function(add)
+			add("Bag", V(3, 1.5, 3), at(0, 0.75, 0), rgb(230, 120, 40), M.Fabric, BALL)
+			add("BagBack", V(2.6, 1.7, 1.2), at(0, 1.4, 0.85), rgb(220, 110, 35), M.Fabric, BALL)
+			add("Seat", V(1.8, 0.2, 1.8), at(0, 1.3, -0.1), rgb(230, 120, 40), M.Fabric, { class = "Seat", Transparency = 1 })
+		end,
+	},
+	{
+		id = "floor_lamp", name = "Floor Lamp", price = 80, category = "Decor", size = V(1.5, 6, 1.5), kind = "lamp",
+		build = function(add)
+			add("Base", V(0.2, 1.3, 1.3), at(0, 0.1, 0) * UP, BLACK, M.Metal, CYL)
+			add("Pole", V(0.18, 4.8, 0.18), at(0, 2.6, 0), BLACK, M.Metal)
+			local bulb = add("Bulb", V(0.6, 0.6, 0.6), at(0, 5.1, 0), rgb(255, 235, 190), M.Neon, BALL)
+			add("Shade", V(1.3, 1.5, 1.5), at(0, 5.35, 0) * UP, rgb(245, 230, 200), M.Fabric, { Shape = Enum.PartType.Cylinder, Transparency = 0.15 })
+			local light = Instance.new("PointLight")
+			light.Name = "Light"
+			light.Range = 18
+			light.Brightness = 1.6
+			light.Color = rgb(255, 220, 170)
+			light.Parent = bulb
+		end,
+	},
+	{
+		id = "rug", name = "Area Rug", price = 90, category = "Decor", size = V(8, 0.12, 6), flat = true,
+		build = function(add)
+			add("Rug", V(8, 0.08, 6), at(0, 0.04, 0), rgb(150, 40, 50), M.Fabric, { CanCollide = false })
+			add("Border", V(7, 0.1, 5), at(0, 0.06, 0), rgb(230, 200, 140), M.Fabric, { CanCollide = false })
+			add("Field", V(6.4, 0.12, 4.4), at(0, 0.07, 0), rgb(120, 30, 45), M.Fabric, { CanCollide = false })
+			add("Medallion", V(0.13, 2.4, 2.4), at(0, 0.07, 0) * UP, rgb(230, 200, 140), M.Fabric, { Shape = Enum.PartType.Cylinder, CanCollide = false })
+		end,
+	},
+	{
+		id = "coffee_table", name = "Coffee Table", price = 120, category = "Living", size = V(5, 1.6, 3),
+		build = function(add)
+			legs(add, 5, 3, 1.3, 0.3, DARK_WOOD)
+			add("Top", V(5, 0.3, 3), at(0, 1.45, 0), WOOD, M.Wood)
+			add("Shelf", V(4.4, 0.15, 2.4), at(0, 0.4, 0), DARK_WOOD, M.Wood)
+			add("Magazine", V(1.2, 0.05, 1.6), at(-1, 1.62, 0.2), rgb(220, 60, 60), M.SmoothPlastic)
+		end,
+	},
+	{
+		id = "basic_bed", name = "Basic Bed", price = 150, category = "Bedroom", size = V(5, 3.5, 7), kind = "bed",
+		build = function(add)
+			bed(add, 5, 7, rgb(140, 100, 70), rgb(225, 230, 240), rgb(70, 110, 170), 3.5)
+		end,
+	},
+	{
+		id = "bar_stools", name = "Bar Stools (2)", price = 160, category = "Kitchen", size = V(4, 3.3, 1.8), seats = 2,
+		build = function(add)
+			for _, x in { -1, 1 } do
+				add("Foot", V(0.15, 1.2, 1.2), at(x, 0.075, 0) * UP, BLACK, M.Metal, CYL)
+				add("Post", V(0.25, 2.8, 0.25), at(x, 1.5, 0), STEEL, M.Metal)
+				add("Footrest", V(1.1, 0.12, 1.1), at(x, 1.1, 0), STEEL, M.Metal)
+				add("Seat", V(1.4, 0.35, 1.4), at(x, 3.05, 0), rgb(200, 40, 40), M.Fabric, SEAT)
+			end
+		end,
+	},
+	{
+		id = "mirror", name = "Standing Mirror", price = 200, category = "Bedroom", size = V(2.5, 6.5, 1),
+		build = function(add)
+			add("Frame", V(2.5, 6.2, 0.3), at(0, 3.25, 0), GOLD, M.Metal)
+			add("Glass", V(2.1, 5.8, 0.06), at(0, 3.25, -0.17), rgb(200, 215, 230), M.Glass, { Reflectance = 0.9 })
+			add("Stand", V(0.2, 0.2, 1), at(-1, 0.1, 0.1), GOLD, M.Metal)
+			add("Stand", V(0.2, 0.2, 1), at(1, 0.1, 0.1), GOLD, M.Metal)
+		end,
+	},
+	{
+		id = "armchair", name = "Armchair", price = 220, category = "Living", size = V(3.5, 3.6, 3.5), seats = 1,
+		build = function(add)
+			legs(add, 3.4, 3.4, 0.35, 0.3, DARK_WOOD)
+			add("Base", V(3.5, 1, 3.5), at(0, 0.85, 0), rgb(70, 100, 80), M.Fabric)
+			add("Seat", V(2.4, 0.5, 2.6), at(0, 1.6, -0.35), rgb(85, 120, 95), M.Fabric, SEAT)
+			add("Back", V(3.5, 2.3, 0.7), at(0, 2.4, 1.4), rgb(70, 100, 80), M.Fabric)
+			add("Arm", V(0.55, 1.1, 3.5), at(-1.475, 1.9, 0), rgb(70, 100, 80), M.Fabric)
+			add("Arm", V(0.55, 1.1, 3.5), at(1.475, 1.9, 0), rgb(70, 100, 80), M.Fabric)
+		end,
+	},
+	{
+		id = "wall_art", name = "Gallery Canvas", price = 250, category = "Decor", size = V(5, 8, 0.8),
+		build = function(add)
+			add("Post", V(0.2, 8, 0.2), at(-2.2, 4, 0.2), DARK_WOOD, M.Wood)
+			add("Post", V(0.2, 8, 0.2), at(2.2, 4, 0.2), DARK_WOOD, M.Wood)
+			add("Foot", V(5, 0.2, 0.8), at(0, 0.1, 0), DARK_WOOD, M.Wood)
+			add("Frame", V(5, 3.6, 0.25), at(0, 5.8, 0), BLACK, M.Wood)
+			local canvas = add("Canvas", V(4.6, 3.2, 0.06), at(0, 5.8, -0.14), WHITE, M.SmoothPlastic)
+			local gui = surfaceGui(canvas, Enum.NormalId.Front, 40)
+			local bg = Instance.new("Frame")
+			bg.Size = UDim2.fromScale(1, 1)
+			bg.BorderSizePixel = 0
+			bg.BackgroundColor3 = Color3.new(1, 1, 1)
+			bg.Parent = gui
+			local grad = Instance.new("UIGradient")
+			grad.Color = ColorSequence.new(rgb(255, 110, 80), rgb(80, 40, 160))
+			grad.Rotation = 35
+			grad.Parent = bg
+			local shapes = {
+				{ UDim2.fromScale(0.12, 0.2), UDim2.fromScale(0.34, 0.48), rgb(255, 215, 90), 1 },
+				{ UDim2.fromScale(0.5, 0.38), UDim2.fromScale(0.36, 0.5), rgb(40, 200, 200), 0 },
+				{ UDim2.fromScale(0.36, 0.08), UDim2.fromScale(0.08, 0.84), rgb(20, 20, 30), 0 },
+			}
+			for _, s in shapes do
+				local f = Instance.new("Frame")
+				f.Position = s[1]
+				f.Size = s[2]
+				f.BackgroundColor3 = s[3]
+				f.BorderSizePixel = 0
+				f.Parent = bg
+				if s[4] == 1 then
+					local c = Instance.new("UICorner")
+					c.CornerRadius = UDim.new(0.5, 0)
+					c.Parent = f
+				end
+			end
+		end,
+	},
+	{
+		id = "mini_fridge", name = "Mini Fridge", price = 300, category = "Kitchen", size = V(2, 3, 2),
+		build = function(add)
+			add("Body", V(2, 3, 1.9), at(0, 1.5, 0.05), WHITE, M.Metal)
+			add("Door", V(1.9, 2.9, 0.1), at(0, 1.5, -0.95), rgb(245, 245, 245), M.Metal)
+			add("Handle", V(0.12, 1.2, 0.15), at(0.75, 1.8, -1.0), STEEL, M.Metal)
+			add("Logo", V(0.6, 0.15, 0.05), at(-0.3, 2.7, -1.0), rgb(60, 140, 230), M.Neon)
+		end,
+	},
+	{
+		id = "bookshelf", name = "Bookshelf", price = 350, category = "Living", size = V(5, 7, 1.5),
+		build = function(add)
+			add("Back", V(5, 7, 0.15), at(0, 3.5, 0.67), DARK_WOOD, M.Wood)
+			add("Side", V(0.2, 7, 1.5), at(-2.4, 3.5, 0), DARK_WOOD, M.Wood)
+			add("Side", V(0.2, 7, 1.5), at(2.4, 3.5, 0), DARK_WOOD, M.Wood)
+			local bookColors = { rgb(200, 50, 50), rgb(50, 90, 170), rgb(230, 190, 60), rgb(60, 150, 90), rgb(240, 240, 235), rgb(120, 60, 140) }
+			for shelf = 0, 4 do
+				local y = 0.1 + shelf * 1.7
+				add("Shelf", V(4.6, 0.2, 1.4), at(0, y, 0), WOOD, M.Wood)
+				if shelf < 4 then
+					local x = -2.1
+					local n = 0
+					while x < 1.6 do
+						n += 1
+						local w = 0.25 + ((shelf * 7 + n * 3) % 4) * 0.07
+						local h = 1.0 + ((shelf * 5 + n * 2) % 5) * 0.08
+						add("Book", V(w, h, 1), at(x + w / 2, y + 0.1 + h / 2, -0.05), bookColors[(shelf * 3 + n) % #bookColors + 1], M.SmoothPlastic)
+						x += w + 0.04
+					end
+				end
+			end
+		end,
+	},
+	{
+		id = "speaker", name = "Speaker Tower", price = 350, category = "Tech", size = V(1.8, 4.5, 1.8),
+		build = function(add)
+			add("Cabinet", V(1.8, 4.5, 1.8), at(0, 2.25, 0), BLACK, M.SmoothPlastic)
+			add("Woofer", V(0.2, 1.4, 1.4), at(0, 1.3, -0.9) * FORWARD, rgb(45, 45, 50), M.Metal, CYL)
+			add("Tweeter", V(0.2, 0.7, 0.7), at(0, 3.2, -0.9) * FORWARD, rgb(45, 45, 50), M.Metal, CYL)
+			add("Glow", V(0.05, 1.6, 1.6), at(0, 1.3, -0.88) * FORWARD, rgb(60, 200, 255), M.Neon, CYL)
+		end,
+	},
+	{
+		id = "dumbbell_rack", name = "Dumbbell Rack", price = 450, category = "Fitness", size = V(5, 3, 2),
+		build = function(add)
+			add("Frame", V(0.3, 2.6, 1.8), at(-2.3, 1.3, 0), BLACK, M.Metal)
+			add("Frame", V(0.3, 2.6, 1.8), at(2.3, 1.3, 0), BLACK, M.Metal)
+			add("Rail", V(4.6, 0.2, 0.5), at(0, 1.2, -0.4), BLACK, M.Metal)
+			add("Rail", V(4.6, 0.2, 0.5), at(0, 2.4, 0.4), BLACK, M.Metal)
+			for i = 0, 3 do
+				local x = -1.65 + i * 1.1
+				for _, row in { { 1.6, -0.4, 0.55 }, { 2.8, 0.4, 0.75 } } do
+					local y, z, r = row[1], row[2], row[3] + i * 0.04
+					add("Handle", V(0.12, 0.12, 0.7), at(x, y, z), STEEL, M.Metal)
+					add("Plate", V(0.25, r, r), at(x, y, z - 0.35) * FORWARD, rgb(40, 40, 44), M.Metal, CYL)
+					add("Plate", V(0.25, r, r), at(x, y, z + 0.35) * FORWARD, rgb(40, 40, 44), M.Metal, CYL)
+				end
+			end
+		end,
+	},
+	{
+		id = "mini_hoop", name = "Mini Hoop", price = 500, category = "Fitness", size = V(3, 8, 2),
+		build = function(add)
+			add("Base", V(3, 0.6, 2), at(0, 0.3, 0), BLACK, M.Plastic)
+			add("Pole", V(0.3, 7, 0.3), at(0, 3.8, 0.7), STEEL, M.Metal)
+			add("Board", V(2.8, 1.8, 0.15), at(0, 7.0, 0.45), WHITE, M.SmoothPlastic, { Transparency = 0.1 })
+			add("Square", V(1, 0.7, 0.16), at(0, 6.8, 0.45), rgb(220, 60, 40), M.SmoothPlastic)
+			for i = 0, 9 do
+				local a = i / 10 * math.pi * 2
+				add("Rim", V(0.12, 0.08, 0.42), CFrame.new(math.cos(a) * 0.55, 6.4, -0.2 + math.sin(a) * 0.55) * CFrame.Angles(0, -a, 0), rgb(255, 100, 30), M.Metal)
+			end
+			add("Net", V(0.9, 1.0, 1.0), at(0, 5.9, -0.2) * UP, WHITE, M.Fabric, { Shape = Enum.PartType.Cylinder, Transparency = 0.55, CanCollide = false })
+			add("Ball", V(1, 1, 1), at(0.9, 1.1, -0.3), rgb(230, 110, 40), M.Plastic, BALL)
+		end,
+	},
+	{
+		id = "wardrobe", name = "Wardrobe", price = 550, category = "Bedroom", size = V(5, 7.5, 2),
+		build = function(add)
+			add("Body", V(5, 7.2, 2), at(0, 3.75, 0), rgb(235, 230, 220), M.Wood)
+			add("Top", V(5.1, 0.3, 2.1), at(0, 7.35, 0), DARK_WOOD, M.Wood)
+			add("Plinth", V(4.8, 0.3, 1.8), at(0, 0.15, 0), DARK_WOOD, M.Wood)
+			add("Door", V(2.4, 6.8, 0.08), at(-1.23, 3.75, -1.02), rgb(245, 240, 232), M.Wood)
+			add("Door", V(2.4, 6.8, 0.08), at(1.23, 3.75, -1.02), rgb(245, 240, 232), M.Wood)
+			add("Handle", V(0.12, 1, 0.12), at(-0.2, 3.9, -1.1), GOLD, M.Metal)
+			add("Handle", V(0.12, 1, 0.12), at(0.2, 3.9, -1.1), GOLD, M.Metal)
+		end,
+	},
+	{
+		id = "neon_sign", name = "Neon Sign", price = 600, category = "Decor", size = V(5, 4.6, 1),
+		build = function(add)
+			add("Post", V(0.2, 2.2, 0.2), at(-1.8, 1.1, 0.2), BLACK, M.Metal)
+			add("Post", V(0.2, 2.2, 0.2), at(1.8, 1.1, 0.2), BLACK, M.Metal)
+			add("Foot", V(4.4, 0.15, 1), at(0, 0.075, 0), BLACK, M.Metal)
+			local board = add("Board", V(4.8, 2.4, 0.2), at(0, 3.4, 0.2), rgb(15, 15, 18), M.SmoothPlastic)
+			add("Tube", V(4.6, 0.1, 0.1), at(0, 4.5, 0.05), rgb(255, 60, 200), M.Neon)
+			add("Tube", V(4.6, 0.1, 0.1), at(0, 2.3, 0.05), rgb(255, 60, 200), M.Neon)
+			local gui = surfaceGui(board, Enum.NormalId.Front, 40)
+			local label = guiLabel(gui, "GRIND", UDim2.fromScale(0.9, 0.8), UDim2.fromScale(0.05, 0.1), rgb(255, 120, 230))
+			label.TextStrokeColor3 = rgb(255, 0, 170)
+			label.TextStrokeTransparency = 0
+			local light = Instance.new("PointLight")
+			light.Color = rgb(255, 80, 210)
+			light.Range = 14
+			light.Brightness = 1.5
+			light.Parent = board
+		end,
+	},
+	{
+		id = "dining_set", name = "Dining Table + 4 Chairs", price = 650, category = "Kitchen", size = V(7, 3.6, 7), seats = 4,
+		build = function(add)
+			legs(add, 3.8, 2.8, 2.7, 0.3, DARK_WOOD)
+			add("Top", V(4, 0.3, 3), at(0, 2.85, 0), WOOD, M.Wood)
+			add("Runner", V(0.8, 0.04, 2.6), at(0, 3.02, 0), rgb(230, 230, 220), M.Fabric)
+			local cushion = rgb(180, 160, 120)
+			chair(add, at(0, 0, 2.6), DARK_WOOD, cushion) -- faces -z (toward the table)
+			chair(add, at(0, 0, -2.6) * CFrame.Angles(0, math.pi, 0), DARK_WOOD, cushion)
+			chair(add, at(2.7, 0, 0) * CFrame.Angles(0, -math.pi / 2, 0), DARK_WOOD, cushion)
+			chair(add, at(-2.7, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), DARK_WOOD, cushion)
+		end,
+	},
+	{
+		id = "trophy_shelf", name = "Trophy Shelf", price = 750, category = "Decor", size = V(5, 6, 1.5),
+		build = function(add)
+			add("Back", V(5, 6, 0.15), at(0, 3, 0.67), rgb(30, 30, 40), M.Wood)
+			add("Side", V(0.2, 6, 1.5), at(-2.4, 3, 0), rgb(30, 30, 40), M.Wood)
+			add("Side", V(0.2, 6, 1.5), at(2.4, 3, 0), rgb(30, 30, 40), M.Wood)
+			for shelf = 0, 3 do
+				local y = 0.1 + shelf * 1.95
+				add("Shelf", V(4.6, 0.2, 1.4), at(0, y, 0), rgb(50, 50, 62), M.Wood)
+				if shelf < 3 then
+					for i, x in { -1.4, 0, 1.4 } do
+						local s = 0.8 + ((shelf + i) % 3) * 0.15
+						add("TrophyBase", V(0.6, 0.3, 0.6), at(x, y + 0.25, 0), BLACK, M.Marble)
+						add("TrophyStem", V(0.15, 0.5 * s, 0.15), at(x, y + 0.4 + 0.25 * s, 0), GOLD, M.Metal, { Reflectance = 0.3 })
+						add("TrophyCup", V(0.7 * s, 0.6 * s, 0.7 * s), at(x, y + 0.65 + 0.6 * s, 0), GOLD, M.Metal, { Shape = Enum.PartType.Ball, Reflectance = 0.3 })
+					end
+				end
+			end
+			local light = Instance.new("SpotLight")
+			light.Face = Enum.NormalId.Front
+			light.Range = 6
+			light.Brightness = 1
+			light.Parent = add("Strip", V(4.6, 0.1, 0.1), at(0, 5.8, -0.6), rgb(255, 240, 200), M.Neon)
+		end,
+	},
+	{
+		id = "tv", name = "TV + Stand", price = 900, category = "Tech", size = V(7, 7, 2.5), kind = "tv",
+		build = function(add)
+			add("Stand", V(6.4, 1.8, 2.2), at(0, 0.9, 0.1), DARK_WOOD, M.Wood)
+			add("StandDoor", V(3, 1.4, 0.05), at(-1.5, 0.9, -1.0), rgb(110, 80, 55), M.Wood)
+			add("StandDoor", V(3, 1.4, 0.05), at(1.5, 0.9, -1.0), rgb(110, 80, 55), M.Wood)
+			add("Neck", V(0.8, 1.1, 0.4), at(0, 2.35, 0.5), BLACK, M.Metal)
+			add("Bezel", V(6.6, 3.9, 0.3), at(0, 4.85, 0.5), BLACK, M.SmoothPlastic)
+			local screen = add("Screen", V(6.3, 3.6, 0.06), at(0, 4.85, 0.33), rgb(10, 10, 14), M.SmoothPlastic)
+			local gui = surfaceGui(screen, Enum.NormalId.Front, 50)
+			gui.Name = "TVGui"
+			local bg = Instance.new("Frame")
+			bg.Name = "BG"
+			bg.Size = UDim2.fromScale(1, 1)
+			bg.BorderSizePixel = 0
+			bg.BackgroundColor3 = rgb(20, 30, 80)
+			bg.Parent = gui
+			guiLabel(bg, "CITY GRIND TV", UDim2.fromScale(0.9, 0.24), UDim2.fromScale(0.05, 0.12), rgb(255, 150, 60)).Name = "Title"
+			guiLabel(bg, "Neighborhood Hoops · LIVE", UDim2.fromScale(0.9, 0.16), UDim2.fromScale(0.05, 0.48), Color3.new(1, 1, 1), Enum.Font.GothamBold).Name = "Show"
+			guiLabel(bg, "CG1", UDim2.fromScale(0.15, 0.1), UDim2.fromScale(0.82, 0.85), rgb(200, 200, 210), Enum.Font.GothamBold).Name = "Channel"
+		end,
+	},
+	{
+		id = "couch", name = "Couch", price = 400, category = "Living", size = V(8, 3.5, 3.5), seats = 3,
+		build = function(add)
+			legs(add, 7.8, 3.3, 0.35, 0.35, DARK_WOOD)
+			add("Base", V(8, 1, 3.5), at(0, 0.85, 0), rgb(60, 70, 95), M.Fabric)
+			for _, x in { -2.45, 0, 2.45 } do
+				add("Seat", V(2.4, 0.5, 2.6), at(x, 1.6, -0.35), rgb(75, 88, 118), M.Fabric, SEAT)
+			end
+			add("Back", V(8, 2.1, 0.8), at(0, 2.4, 1.35), rgb(60, 70, 95), M.Fabric)
+			add("Arm", V(0.6, 1.1, 3.5), at(-3.7, 1.9, 0), rgb(60, 70, 95), M.Fabric)
+			add("Arm", V(0.6, 1.1, 3.5), at(3.7, 1.9, 0), rgb(60, 70, 95), M.Fabric)
+			add("Pillow", V(1.4, 1.2, 0.4), at(-2.9, 2.4, 0.75), rgb(230, 190, 80), M.Fabric)
+		end,
+	},
+	{
+		id = "kitchen_counter", name = "Kitchen Counter", price = 1_200, category = "Kitchen", size = V(8, 3.6, 2.5),
+		build = function(add)
+			add("Cabinets", V(8, 3.1, 2.4), at(0, 1.55, 0.05), rgb(60, 80, 100), M.Wood)
+			add("Countertop", V(8, 0.3, 2.5), at(0, 3.25, 0), rgb(235, 235, 235), M.Marble)
+			for i = 0, 3 do
+				add("CabinetDoor", V(1.85, 2.4, 0.05), at(-3 + i * 2, 1.5, -1.17), rgb(75, 100, 125), M.Wood)
+				add("Handle", V(0.8, 0.1, 0.1), at(-3 + i * 2, 2.5, -1.23), STEEL, M.Metal)
+			end
+			add("Sink", V(2, 0.1, 1.4), at(-2, 3.42, 0), STEEL, M.Metal)
+			add("Faucet", V(0.15, 0.9, 0.15), at(-2, 3.85, 0.9), STEEL, M.Metal)
+			add("Spout", V(0.15, 0.15, 0.7), at(-2, 4.25, 0.6), STEEL, M.Metal)
+			add("Cooktop", V(2.6, 0.06, 1.8), at(2, 3.43, 0), BLACK, M.Glass)
+			for _, offset in { V(-0.6, 0, -0.4), V(0.6, 0, -0.4), V(-0.6, 0, 0.4), V(0.6, 0, 0.4) } do
+				add("Burner", V(0.04, 0.6, 0.6), at(2 + offset.X, 3.47, offset.Z) * UP, rgb(80, 30, 30), M.SmoothPlastic, CYL)
+			end
+		end,
+	},
+	{
+		id = "gaming_desk", name = "Desk + Gaming Setup", price = 1_800, category = "Tech", size = V(6, 5, 3.6), seats = 1,
+		build = function(add)
+			add("Top", V(6, 0.25, 2.2), at(0, 2.6, 0.7), BLACK, M.SmoothPlastic)
+			add("LegPanel", V(0.2, 2.5, 2), at(-2.8, 1.25, 0.7), BLACK, M.Metal)
+			add("LegPanel", V(0.2, 2.5, 2), at(2.8, 1.25, 0.7), BLACK, M.Metal)
+			add("RGBStrip", V(5.6, 0.06, 0.06), at(0, 2.45, -0.38), rgb(0, 255, 180), M.Neon)
+			for i, x in { -1.25, 1.25 } do
+				add("MonitorStand", V(0.3, 0.8, 0.3), at(x, 3.1, 1.3), BLACK, M.Metal)
+				add("Monitor", V(2.3, 1.4, 0.15), at(x, 3.9, 1.25) * CFrame.Angles(0, (i - 1.5) * -0.35, 0), BLACK, M.SmoothPlastic)
+				add("MonitorScreen", V(2.15, 1.25, 0.04), at(x, 3.9, 1.16) * CFrame.Angles(0, (i - 1.5) * -0.35, 0), if i == 1 then rgb(60, 120, 255) else rgb(255, 80, 160), M.Neon)
+			end
+			add("Keyboard", V(1.6, 0.08, 0.5), at(0, 2.77, 0.2), rgb(40, 40, 46), M.SmoothPlastic)
+			add("KeyGlow", V(1.5, 0.02, 0.4), at(0, 2.82, 0.2), rgb(140, 80, 255), M.Neon)
+			add("Mouse", V(0.25, 0.1, 0.4), at(1.2, 2.77, 0.2), rgb(40, 40, 46), M.SmoothPlastic)
+			add("Tower", V(0.9, 2, 1.8), at(2.3, 3.73, 0.85), rgb(25, 25, 30), M.SmoothPlastic)
+			add("TowerGlass", V(0.05, 1.8, 1.6), at(1.84, 3.73, 0.85), rgb(255, 60, 60), M.Neon, { Transparency = 0.3 })
+			-- gaming chair facing the desk (+z)
+			local cf = at(0, 0, -1.0) * CFrame.Angles(0, math.pi, 0)
+			add("ChairBase", V(0.2, 1.6, 1.6), cf * at(0, 0.1, 0) * UP, BLACK, M.Metal, CYL)
+			add("ChairPost", V(0.25, 1.2, 0.25), cf * at(0, 0.8, 0), BLACK, M.Metal)
+			add("Seat", V(1.7, 0.4, 1.5), cf * at(0, 1.6, 0), rgb(200, 30, 50), M.Fabric, SEAT)
+			add("ChairBack", V(1.7, 2.4, 0.3), cf * at(0, 2.9, 0.65), rgb(200, 30, 50), M.Fabric)
+			add("ChairStripe", V(0.4, 2.3, 0.31), cf * at(0, 2.9, 0.65), BLACK, M.Fabric)
+		end,
+	},
+	{
+		id = "king_bed", name = "King Bed", price = 2_400, category = "Bedroom", size = V(7, 5, 8), kind = "bed",
+		build = function(add)
+			bed(add, 7, 8, rgb(60, 60, 70), rgb(245, 245, 250), rgb(150, 30, 60), 5)
+			add("HeadboardPanel", V(6, 3.4, 0.2), at(0, 3.2, 3.55), rgb(120, 120, 135), M.Fabric)
+		end,
+	},
+	{
+		id = "aquarium", name = "Aquarium", price = 5_000, category = "Decor", size = V(6, 5.6, 2),
+		build = function(add)
+			add("Cabinet", V(6, 2.4, 2), at(0, 1.2, 0), BLACK, M.Wood)
+			add("Gravel", V(5.8, 0.3, 1.8), at(0, 2.55, 0), rgb(210, 190, 150), M.Sand)
+			add("Water", V(5.8, 2.6, 1.8), at(0, 3.85, 0), rgb(60, 150, 220), M.Glass, { Transparency = 0.55, CanCollide = false })
+			add("Tank", V(6, 3, 2), at(0, 3.9, 0), rgb(200, 230, 255), M.Glass, { Transparency = 0.8 })
+			add("Lid", V(6, 0.2, 2), at(0, 5.5, 0), BLACK, M.SmoothPlastic)
+			add("Weed", V(0.3, 1.8, 0.3), at(-2.2, 3.5, 0.3), rgb(40, 170, 80), M.Grass)
+			add("Weed", V(0.3, 1.3, 0.3), at(2.3, 3.25, -0.2), rgb(50, 190, 90), M.Grass)
+			add("Rock", V(1, 0.8, 0.8), at(1.4, 3, 0.4), rgb(110, 110, 120), M.Slate, BALL)
+			local fishColors = { rgb(255, 140, 30), rgb(255, 230, 60), rgb(80, 200, 255), rgb(255, 80, 120) }
+			for i, c in fishColors do
+				local y = 3.1 + (i % 3) * 0.6
+				local x = -2 + i * 0.85
+				add("Fish", V(0.5, 0.3, 0.15), at(x, y, (i % 2) * 0.5 - 0.25), c, M.Neon)
+				add("FishTail", V(0.15, 0.25, 0.1), at(x + 0.32, y, (i % 2) * 0.5 - 0.25), c, M.Neon)
+			end
+			local light = Instance.new("PointLight")
+			light.Color = rgb(90, 170, 255)
+			light.Range = 12
+			light.Brightness = 1.2
+			light.Parent = add("TankLight", V(5.6, 0.05, 0.3), at(0, 5.38, 0), rgb(180, 220, 255), M.Neon)
+		end,
+	},
+} :: { Item }
+
+-- keep the catalog cheapest first
+table.sort(ApartmentsConfig.ITEMS, function(a, b)
+	return a.price < b.price
+end)
+
+ApartmentsConfig.ITEM_BY_ID = {} :: { [string]: Item }
+for _, item in ApartmentsConfig.ITEMS do
+	ApartmentsConfig.ITEM_BY_ID[item.id] = item
+end
+
+-- Builds a fresh furniture model. Its PrimaryPart "Hitbox" is the item's size box,
+-- so model:PivotTo(ApartmentsConfig.pieceCFrame(...)) places it.
+function ApartmentsConfig.buildItem(itemId: string): Model?
+	local item = ApartmentsConfig.ITEM_BY_ID[itemId]
+	if not item then
+		return nil
+	end
+	local model = Instance.new("Model")
+	model.Name = item.id
+	local hitbox = ApartmentsConfig.part(model, "Hitbox", item.size, at(0, item.size.Y / 2, 0), WHITE, M.SmoothPlastic, {
+		Transparency = 1,
+		CanCollide = false,
+		CanTouch = false,
+		CastShadow = false,
+	})
+	model.PrimaryPart = hitbox
+	item.build(function(name, size, cf, color, material, props)
+		return ApartmentsConfig.part(model, name, size, cf, color, material, props)
+	end)
+	return model
+end
+
+---------------------------------------------------------------------------
+-- Placement rules (the server runs exactly these)
+---------------------------------------------------------------------------
+export type Placement = { u: number, id: string, x: number, z: number, f: number, r: number }
+
+local EPS = 0.01
+
+function ApartmentsConfig.footprint(item: Item, r: number): (number, number)
+	if r == 90 or r == 270 then
+		return item.size.Z, item.size.X
+	end
+	return item.size.X, item.size.Z
+end
+
+local function overlaps(ax0: number, az0: number, ax1: number, az1: number, bx0: number, bz0: number, bx1: number, bz1: number): boolean
+	return ax0 < bx1 - EPS and ax1 > bx0 + EPS and az0 < bz1 - EPS and az1 > bz0 + EPS
+end
+
+-- World CFrame of a placed piece's Hitbox.
+function ApartmentsConfig.pieceCFrame(origin: Vector3, tier: Tier, item: Item, x: number, z: number, f: number, r: number): CFrame
+	local y = ApartmentsConfig.floorY(tier, f) or 0
+	return CFrame.new(origin + Vector3.new(x, y + item.size.Y / 2, z)) * CFrame.Angles(0, math.rad(r), 0)
+end
+
+-- Returns (ok, reason). `placements` are the other pieces in this home;
+-- `ignoreUid` skips the piece being moved.
+function ApartmentsConfig.validatePlacement(tierId: string, itemId: any, x: any, z: any, f: any, r: any, placements: { Placement }, ignoreUid: number?): (boolean, string?)
+	local tier = ApartmentsConfig.TIER_BY_ID[tierId]
+	local item = type(itemId) == "string" and ApartmentsConfig.ITEM_BY_ID[itemId]
+	if not tier or not item then
+		return false, "Unknown item."
+	end
+	if type(x) ~= "number" or type(z) ~= "number" or type(f) ~= "number" or type(r) ~= "number" then
+		return false, "Bad position."
+	end
+	if x ~= x or z ~= z or math.abs(x) > 500 or math.abs(z) > 500 then
+		return false, "Bad position."
+	end
+	if x % 1 ~= 0 or z % 1 ~= 0 or f % 1 ~= 0 then
+		return false, "Not on the grid."
+	end
+	if r % 90 ~= 0 or r < 0 or r >= 360 then
+		return false, "Rotation must be a multiple of 90."
+	end
+	local sx, sz = ApartmentsConfig.footprint(item, r)
+	local x0, x1, z0, z1 = x - sx / 2, x + sx / 2, z - sz / 2, z + sz / 2
+
+	local inside = false
+	for _, zone in tier.zones do
+		if zone.f == f and x0 >= zone.x0 - EPS and x1 <= zone.x1 + EPS and z0 >= zone.z0 - EPS and z1 <= zone.z1 + EPS then
+			inside = true
+			break
+		end
+	end
+	if not inside then
+		return false, "Outside the room."
+	end
+	for _, b in tier.blocked do
+		if b.f == f and overlaps(x0, z0, x1, z1, b.x0, b.z0, b.x1, b.z1) then
+			return false, "In the way of " .. (b.label or "something") .. "."
+		end
+	end
+	local flat = item.flat == true
+	for _, p in placements do
+		if p.u ~= ignoreUid and p.f == f then
+			local other = ApartmentsConfig.ITEM_BY_ID[p.id]
+			if other and (other.flat == true) == flat then
+				local ox, oz = ApartmentsConfig.footprint(other, p.r)
+				if overlaps(x0, z0, x1, z1, p.x - ox / 2, p.z - oz / 2, p.x + ox / 2, p.z + oz / 2) then
+					return false, "Overlaps your " .. other.name .. "."
+				end
+			end
+		end
+	end
+	return true, nil
+end
+
+return ApartmentsConfig
+]=====])
 put(folder, 'ModuleScript', 'Config', [=====[
 --!strict
 -- CITY GRIND: shared tuning values. Lives in ReplicatedStorage.CityGrind.Config
@@ -136,6 +958,2124 @@ Config.Game = {
 }
 
 return Config
+]=====])
+put(folder, 'ModuleScript', 'GymConfig', [=====[
+-- CITY GRIND: Iron Box Gym tuning (sections 56, 69, 110, 120).
+-- Shared by the server (which judges every rep) and the client (which draws
+-- the rep meter), so both compute the same marker position and target zone.
+
+local GymConfig = {}
+
+GymConfig.INTERIOR = "Iron Box Gym" -- Player attribute "Interior" while inside
+GymConfig.BUILDING = "Iron Box Gym" -- CityBuilder building name
+
+-- Entry (section 69): first visit free, then a day pass or a membership.
+GymConfig.DAY_PASS_PRICE = 20
+GymConfig.DAY_PASS_SECONDS = 20 * 60 -- real seconds
+GymConfig.MEMBERSHIP_PRICE = 400
+
+-- Rep validation (server). A good rep can't come faster than this, and no more
+-- than MAX_REPS_PER_MINUTE good reps count in any rolling minute.
+GymConfig.MIN_REP_INTERVAL = 0.7
+GymConfig.MAX_REPS_PER_MINUTE = 48
+GymConfig.MISS_COOLDOWN = 0.35 -- client-side pause after a missed press
+
+-- Fatigue: 0-100, each good rep adds FATIGUE_PER_REP. Above FATIGUE_FREE the
+-- gains shrink until MIN_EFFICIENCY at 100. Rest (anywhere, even offline)
+-- brings it back to 0 over FATIGUE_RECOVERY_SECONDS.
+GymConfig.FATIGUE_PER_REP = 0.7
+GymConfig.FATIGUE_FREE = 40
+GymConfig.MIN_EFFICIENCY = 0.15
+GymConfig.FATIGUE_RECOVERY_SECONDS = 30 * 60
+
+-- Stat XP per good rep before scaling (100 stat XP = +1 stat point).
+GymConfig.BASE_STAT_XP = 5
+GymConfig.PERFECT_MULT = 1.5
+GymConfig.LEVEL_SOFTNESS = 14 -- higher stats train slower: gain / (1 + (stat-1)/14)
+GymConfig.PLAYER_XP_GOOD = 1
+GymConfig.PLAYER_XP_PERFECT = 2
+
+-- Side-by-side treadmill race (section 56).
+GymConfig.RACE_TARGET = 20 -- good reps
+GymConfig.RACE_INVITE_SECONDS = 15
+GymConfig.RACE_BONUS_REPS = 6 -- winner gets this many perfect reps worth of stat XP
+GymConfig.RACE_BONUS_XP = 15
+
+-- Station types. stats = { {statName, weight} } (weight multiplies BASE_STAT_XP).
+-- period = seconds for the marker to sweep across and back.
+-- good / perfect = half-width of the target zone (meter runs 0..1).
+GymConfig.STATIONS = {
+	Treadmill = { label = "Treadmill", stats = { { "Stamina", 1 }, { "Speed", 0.8 } }, period = 1.5, good = 0.13, perfect = 0.04, color = Color3.fromRGB(80, 200, 255) },
+	Bike = { label = "Exercise Bike", stats = { { "Stamina", 1.1 } }, period = 1.6, good = 0.14, perfect = 0.04, color = Color3.fromRGB(110, 230, 160) },
+	Bench = { label = "Bench Press", stats = { { "Strength", 1.1 } }, period = 1.8, good = 0.11, perfect = 0.035, color = Color3.fromRGB(255, 110, 80) },
+	Dumbbells = { label = "Dumbbells", stats = { { "Strength", 0.9 } }, period = 1.4, good = 0.13, perfect = 0.04, color = Color3.fromRGB(255, 160, 70) },
+	Squat = { label = "Squat Rack", stats = { { "Vertical", 1 }, { "Strength", 0.6 } }, period = 1.9, good = 0.11, perfect = 0.035, color = Color3.fromRGB(190, 120, 255) },
+	PullUp = { label = "Pull-up Bar", stats = { { "Strength", 1.2 } }, period = 2.0, good = 0.10, perfect = 0.03, color = Color3.fromRGB(255, 90, 140) },
+	Cable = { label = "Cable Machine", stats = { { "Strength", 0.7 }, { "Defense", 0.8 } }, period = 1.7, good = 0.12, perfect = 0.035, color = Color3.fromRGB(90, 170, 255) },
+	Abs = { label = "Ab Mat", stats = { { "Stamina", 0.6 }, { "Finishing", 0.8 } }, period = 1.5, good = 0.13, perfect = 0.04, color = Color3.fromRGB(255, 210, 70) },
+}
+GymConfig.ORDER = { "Treadmill", "Bike", "Bench", "Dumbbells", "Squat", "PullUp", "Cable", "Abs" }
+
+-- Daily challenges rotate by UTC day.
+GymConfig.CHALLENGES = {
+	{ station = "Bench", reps = 50, cash = 120, xp = 150, text = "Do 50 bench press reps" },
+	{ station = "Treadmill", reps = 80, cash = 110, xp = 140, text = "Log 80 good strides on a treadmill" },
+	{ station = "Squat", reps = 40, cash = 130, xp = 160, text = "Hit 40 squats" },
+	{ station = "PullUp", reps = 30, cash = 140, xp = 170, text = "Do 30 pull-ups" },
+	{ station = "Dumbbells", reps = 60, cash = 110, xp = 140, text = "Curl 60 dumbbell reps" },
+	{ station = "Bike", reps = 70, cash = 100, xp = 130, text = "Pedal 70 good reps on the bike" },
+	{ station = "Cable", reps = 45, cash = 120, xp = 150, text = "Do 45 cable flys" },
+	{ station = "Abs", reps = 60, cash = 100, xp = 130, text = "Crunch out 60 ab reps" },
+}
+
+function GymConfig.day(unixTime: number): number
+	return math.floor(unixTime / 86400)
+end
+
+function GymConfig.challengeFor(day: number)
+	return GymConfig.CHALLENGES[day % #GymConfig.CHALLENGES + 1]
+end
+
+-- Marker position 0..1 (a triangle wave) at server time `t`.
+function GymConfig.meterPos(t: number, start: number, period: number): number
+	local f = ((t - start) / period) % 1
+	return if f < 0.5 then f * 2 else 2 - f * 2
+end
+
+-- Centre of the target zone for the n-th good rep of a set.
+function GymConfig.zoneCenter(seed: number, n: number): number
+	return Random.new(seed + n * 7919):NextNumber(0.22, 0.78)
+end
+
+-- Judges a press: "perfect", "good" or "miss".
+function GymConfig.judge(kind: string, t: number, start: number, seed: number, goodReps: number): string
+	local def = GymConfig.STATIONS[kind]
+	local d = math.abs(GymConfig.meterPos(t, start, def.period) - GymConfig.zoneCenter(seed, goodReps))
+	if d <= def.perfect then
+		return "perfect"
+	elseif d <= def.good then
+		return "good"
+	end
+	return "miss"
+end
+
+-- Fatigue after resting since `at` (unix seconds).
+function GymConfig.currentFatigue(fatigue: number, at: number, now: number): number
+	local rested = math.max(0, now - at)
+	return math.max(0, fatigue - rested * 100 / GymConfig.FATIGUE_RECOVERY_SECONDS)
+end
+
+-- Fraction of normal gains at this fatigue.
+function GymConfig.efficiency(fatigue: number): number
+	if fatigue <= GymConfig.FATIGUE_FREE then
+		return 1
+	end
+	local t = math.clamp((fatigue - GymConfig.FATIGUE_FREE) / (100 - GymConfig.FATIGUE_FREE), 0, 1)
+	return 1 - (1 - GymConfig.MIN_EFFICIENCY) * t
+end
+
+-- Stat XP for one rep, rounded to 0.1 (at least 0.1).
+function GymConfig.statGain(statValue: number, weight: number, perfect: boolean, efficiency: number): number
+	local amount = GymConfig.BASE_STAT_XP * weight * (if perfect then GymConfig.PERFECT_MULT else 1) * efficiency
+	amount /= 1 + (math.max(1, statValue) - 1) / GymConfig.LEVEL_SOFTNESS
+	return math.max(0.1, math.floor(amount * 10 + 0.5) / 10)
+end
+
+return GymConfig
+]=====])
+put(folder, 'ModuleScript', 'JobsConfig', [=====[
+-- CITY GRIND: job tuning shared by the server (which pays) and the client
+-- (which shows the pay ranges). Sections 40, 68, 77, 110.
+-- Every number the phone shows comes from these same functions, so the
+-- "$min–$max per shift" a player reads is what the server actually pays.
+
+local JobsConfig = {}
+
+JobsConfig.MAX_LEVEL = 25
+JobsConfig.ORDER = { "Delivery", "FoodDelivery", "Taxi", "Warehouse", "Construction", "Security" }
+
+export type Unlock = { level: number, text: string, bonus: number?, extraSteps: number? }
+export type JobDef = {
+	id: string,
+	name: string,
+	icon: string,
+	color: Color3,
+	blurb: string,
+	requirement: string,
+	stepWord: string, -- "drops", "orders"...
+	baseSteps: number,
+	stepPay: number, -- average base pay per step at job level 1 (before unlock bonuses)
+	stepPayMin: number, -- worst case multiplier of stepPay (short trips / cold food / no combo)
+	stepPayMax: number, -- best case multiplier (long trips, tips, full combo)
+	completionBonus: number,
+	unlocks: { Unlock },
+}
+
+local function c(r, g, b)
+	return Color3.fromRGB(r, g, b)
+end
+
+JobsConfig.JOBS = {
+	Delivery = {
+		id = "Delivery",
+		name = "Delivery",
+		icon = "📦",
+		color = c(200, 140, 60),
+		blurb = "Load parcels at the Depot and drop them on doorsteps around the Neighborhood.",
+		requirement = "None",
+		stepWord = "drops",
+		baseSteps = 4,
+		stepPay = 48,
+		stepPayMin = 0.8,
+		stepPayMax = 1.35,
+		completionBonus = 40,
+		unlocks = {
+			{ level = 3, text = "Fragile parcels pay +10%", bonus = 0.10 },
+			{ level = 6, text = "Longer route: +1 drop", extraSteps = 1 },
+			{ level = 10, text = "Express clients pay +15%", bonus = 0.15 },
+			{ level = 15, text = "Bulk route: +1 drop", extraSteps = 1 },
+			{ level = 20, text = "Priority contracts +20%", bonus = 0.20 },
+			{ level = 25, text = "Master Courier +25%", bonus = 0.25 },
+		},
+	},
+	FoodDelivery = {
+		id = "FoodDelivery",
+		name = "Food Delivery",
+		icon = "🍔",
+		color = c(230, 80, 60),
+		blurb = "Grab orders at Mama's Kitchen and deliver them hot. Faster = bigger tip. Foot or wheels.",
+		requirement = "None",
+		stepWord = "orders",
+		baseSteps = 3,
+		stepPay = 52,
+		stepPayMin = 0.42, -- cold food, short trip
+		stepPayMax = 1.75, -- long trip + full tip
+		completionBonus = 35,
+		unlocks = {
+			{ level = 3, text = "Regular customers tip +10%", bonus = 0.10 },
+			{ level = 7, text = "Dinner rush: +1 order", extraSteps = 1 },
+			{ level = 12, text = "Premium menu pays +15%", bonus = 0.15 },
+			{ level = 18, text = "Catering: +1 order", extraSteps = 1 },
+			{ level = 25, text = "Five-star driver +30%", bonus = 0.30 },
+		},
+	},
+	Taxi = {
+		id = "Taxi",
+		name = "Taxi",
+		icon = "🚕",
+		color = c(245, 200, 40),
+		blurb = "Pick up passengers at the curb and drive them across town. Fare is by distance.",
+		requirement = "Own a car (drive it to pick up fares)",
+		stepWord = "fares",
+		baseSteps = 3,
+		stepPay = 85,
+		stepPayMin = 0.8,
+		stepPayMax = 1.4,
+		completionBonus = 50,
+		unlocks = {
+			{ level = 4, text = "Airport rates +10%", bonus = 0.10 },
+			{ level = 8, text = "Night shift: +1 fare", extraSteps = 1 },
+			{ level = 14, text = "Business clients +20%", bonus = 0.20 },
+			{ level = 20, text = "Limo service: +1 fare", extraSteps = 1 },
+			{ level = 25, text = "VIP chauffeur +25%", bonus = 0.25 },
+		},
+	},
+	Warehouse = {
+		id = "Warehouse",
+		name = "Warehouse",
+		icon = "🏭",
+		color = c(90, 140, 210),
+		blurb = "Carry boxes from the shelves to the truck bay. Load quickly to build a combo. Trains Strength.",
+		requirement = "None",
+		stepWord = "boxes",
+		baseSteps = 8,
+		stepPay = 26,
+		stepPayMin = 1.0, -- no combo
+		stepPayMax = 1.5, -- max combo
+		completionBonus = 40,
+		unlocks = {
+			{ level = 3, text = "Forklift cert: +10% per box", bonus = 0.10 },
+			{ level = 6, text = "Big orders: +2 boxes", extraSteps = 2 },
+			{ level = 12, text = "Shift lead +15%", bonus = 0.15 },
+			{ level = 18, text = "Overtime: +2 boxes", extraSteps = 2 },
+			{ level = 25, text = "Floor manager +25%", bonus = 0.25 },
+		},
+	},
+	Construction = {
+		id = "Construction",
+		name = "Construction",
+		icon = "🏗️",
+		color = c(240, 150, 30),
+		blurb = "Haul bricks, planks and beams to the highlighted spots and watch the building rise. Trains Strength.",
+		requirement = "None",
+		stepWord = "pieces",
+		baseSteps = 5,
+		stepPay = 44,
+		stepPayMin = 1.0,
+		stepPayMax = 1.0,
+		completionBonus = 50,
+		unlocks = {
+			{ level = 4, text = "Union card +10%", bonus = 0.10 },
+			{ level = 8, text = "Bigger jobs: +1 piece", extraSteps = 1 },
+			{ level = 14, text = "Skilled trade +20%", bonus = 0.20 },
+			{ level = 20, text = "Site lead: +2 pieces", extraSteps = 2 },
+			{ level = 25, text = "Foreman +25%", bonus = 0.25 },
+		},
+	},
+	Security = {
+		id = "Security",
+		name = "Security",
+		icon = "🛡️",
+		color = c(70, 90, 140),
+		blurb = "Walk the patrol route on foot before time runs out and check out anything suspicious. Trains Stamina and Speed.",
+		requirement = "Patrol on foot",
+		stepWord = "checkpoints",
+		baseSteps = 6,
+		stepPay = 30,
+		stepPayMin = 1.0,
+		stepPayMax = 1.4, -- suspicious checks pay extra
+		completionBonus = 45,
+		unlocks = {
+			{ level = 3, text = "Licensed guard +10%", bonus = 0.10 },
+			{ level = 7, text = "Longer patrol: +1 checkpoint", extraSteps = 1 },
+			{ level = 12, text = "Night watch +15%", bonus = 0.15 },
+			{ level = 18, text = "Extended patrol: +2 checkpoints", extraSteps = 2 },
+			{ level = 25, text = "Head of Security +25%", bonus = 0.25 },
+		},
+	},
+} :: { [string]: JobDef }
+
+-- Job XP needed to go from `level` to `level + 1`.
+function JobsConfig.xpToNext(level: number): number
+	return 50 + 35 * level
+end
+
+-- Pay multiplier from job level alone: 1.0 at level 1, 2.8 at level 25.
+function JobsConfig.levelMult(level: number): number
+	return 1 + (math.clamp(level, 1, JobsConfig.MAX_LEVEL) - 1) * 0.075
+end
+
+-- Total pay multiplier (level + unlock bonuses).
+function JobsConfig.payMult(jobId: string, level: number): number
+	local def = JobsConfig.JOBS[jobId]
+	local bonus = 0
+	for _, u in def.unlocks do
+		if level >= u.level and u.bonus then
+			bonus += u.bonus
+		end
+	end
+	return JobsConfig.levelMult(level) * (1 + bonus)
+end
+
+-- Steps (drops / orders / boxes...) in one shift at this job level.
+function JobsConfig.steps(jobId: string, level: number): number
+	local def = JobsConfig.JOBS[jobId]
+	local n = def.baseSteps
+	for _, u in def.unlocks do
+		if level >= u.level and u.extraSteps then
+			n += u.extraSteps
+		end
+	end
+	return n
+end
+
+-- Base pay for one step before the per-step factor (distance, tip, combo...).
+function JobsConfig.stepPay(jobId: string, level: number): number
+	return JobsConfig.JOBS[jobId].stepPay * JobsConfig.payMult(jobId, level)
+end
+
+function JobsConfig.completionBonus(jobId: string, level: number): number
+	return math.floor(JobsConfig.JOBS[jobId].completionBonus * JobsConfig.payMult(jobId, level))
+end
+
+-- What a full shift pays at this level: (min, max).
+function JobsConfig.payRange(jobId: string, level: number): (number, number)
+	local def = JobsConfig.JOBS[jobId]
+	local steps = JobsConfig.steps(jobId, level)
+	local per = JobsConfig.stepPay(jobId, level)
+	local bonus = JobsConfig.completionBonus(jobId, level)
+	local low = math.floor(steps * per * def.stepPayMin + bonus)
+	local high = math.floor(steps * per * def.stepPayMax + bonus)
+	-- round to a tidy $5
+	return math.floor(low / 5) * 5, math.ceil(high / 5) * 5
+end
+
+-- Rewards per completed step / per finished shift.
+JobsConfig.JOB_XP_PER_STEP = 12
+JobsConfig.JOB_XP_SHIFT_BONUS = 25
+JobsConfig.PLAYER_XP_PER_STEP = 8
+JobsConfig.PLAYER_XP_SHIFT_BONUS = 25
+JobsConfig.REP_PER_SHIFT = 3
+
+-- Vehicle kinds that are NOT cars (anything else that is non-empty counts as a car).
+JobsConfig.NON_CAR_KINDS = { [""] = true, Bike = true, Scooter = true, Motorcycle = true }
+
+function JobsConfig.isCarKind(kind: any): boolean
+	return type(kind) == "string" and not JobsConfig.NON_CAR_KINDS[kind]
+end
+
+-- Fixed start locations (also used for the phone's GPS button).
+JobsConfig.START = {
+	Delivery = Vector3.new(-140, 3, 150),
+	FoodDelivery = Vector3.new(86, 3, 36),
+	Taxi = Vector3.new(-40, 3, -30),
+	Warehouse = Vector3.new(85, 3, 150),
+	Construction = Vector3.new(175, 3, 149),
+	Security = Vector3.new(-40, 3, -30),
+}
+JobsConfig.START_NAMES = {
+	Delivery = "Delivery Depot",
+	FoodDelivery = "Mama's Kitchen counter",
+	Taxi = "Job Center taxi rank",
+	Warehouse = "Warehouse",
+	Construction = "Construction Site",
+	Security = "Job Center",
+}
+JobsConfig.JOB_CENTER = Vector3.new(-40, 0, -48)
+
+return JobsConfig
+]=====])
+put(folder, 'ModuleScript', 'ShopsConfig', [=====[
+-- CITY GRIND: shop catalog and the procedural outfit builder
+-- (sections 49, 74, 75, 76, 77, 110).
+--
+-- Lives in ReplicatedStorage.CityGrind.ShopsConfig so the server prices and
+-- validates from exactly the table the client renders. Clients only ever send
+-- item ids; every price is read from here on the server.
+--
+-- No catalog asset ids are used. Every cosmetic is procedural:
+--   * clothing recolours the body parts and adds welded trim pieces
+--     (hoods, cuffs, stripes, soles, printed jersey numbers...)
+--   * accessories and barber hair are real Accessory instances made of Parts
+--     with SpecialMesh Sphere / Cylinder shapes sized from the Head.
+-- ShopsConfig.Look.build runs on the server (the look everyone sees) and on the
+-- client (the local try-on preview), so a preview always matches the result.
+
+local ShopsConfig = {}
+
+local function rgb(r: number, g: number, b: number): Color3
+	return Color3.fromRGB(r, g, b)
+end
+
+-- Resolves an Enum.Material by name, falling back when an engine build lacks it.
+local function material(name: string?, fallback: Enum.Material): Enum.Material
+	if not name then
+		return fallback
+	end
+	local ok, m = pcall(function()
+		return (Enum.Material :: any)[name]
+	end)
+	return if ok and m then m else fallback
+end
+ShopsConfig.material = material
+
+---------------------------------------------------------------------------
+-- Places
+---------------------------------------------------------------------------
+-- Interior names (the Player attribute "Interior" while inside).
+ShopsConfig.INTERIORS = {
+	Threads = "Threads Clothing",
+	Barber = "Fresh Cuts Barber",
+	Mart = "Corner Mart",
+	Kitchen = "Mama's Kitchen",
+}
+
+---------------------------------------------------------------------------
+-- Clothing catalog (Threads Clothing)
+---------------------------------------------------------------------------
+ShopsConfig.SLOTS = { "top", "bottom", "shoes", "hat", "face", "neck", "ears", "wrist", "band", "back" }
+ShopsConfig.SLOT_LABELS = {
+	top = "Tops",
+	bottom = "Bottoms",
+	shoes = "Shoes",
+	hat = "Headwear",
+	face = "Eyewear",
+	neck = "Chains",
+	ears = "Earrings",
+	wrist = "Watches",
+	band = "Wristbands",
+	back = "Bags",
+}
+-- Filter groups used by the shop UI.
+ShopsConfig.SLOT_GROUP = {
+	top = "Tops",
+	bottom = "Bottoms",
+	shoes = "Shoes",
+	hat = "Accessories",
+	face = "Accessories",
+	neck = "Accessories",
+	ears = "Accessories",
+	wrist = "Accessories",
+	band = "Accessories",
+	back = "Accessories",
+}
+ShopsConfig.GROUPS = { "Tops", "Bottoms", "Shoes", "Accessories" }
+-- Slots that can be swapped but never left empty.
+ShopsConfig.REQUIRED_SLOTS = { bottom = true }
+ShopsConfig.CATEGORIES = { "Streetwear", "Athletic", "Casual", "Luxury", "Vintage", "Minimalist" }
+ShopsConfig.CATEGORY_COLORS = {
+	Streetwear = rgb(255, 120, 60),
+	Athletic = rgb(90, 170, 255),
+	Casual = rgb(110, 210, 140),
+	Luxury = rgb(235, 190, 80),
+	Vintage = rgb(200, 120, 200),
+	Minimalist = rgb(200, 200, 210),
+}
+
+-- Section 1: every new player owns and wears these "basic clothes".
+ShopsConfig.STARTER = { top = "basic_tee", bottom = "basic_joggers", shoes = "basic_sneakers" }
+
+export type Variant = { name: string, c1: Color3, c2: Color3 }
+export type Item = {
+	id: string,
+	name: string,
+	slot: string,
+	kind: string,
+	category: string,
+	price: number,
+	desc: string,
+	variants: { Variant },
+	material: string?, -- Enum.Material name for the main colour (default Fabric)
+	text: string?, -- printed graphic text
+	style: string?, -- sub-style (e.g. "aviator", "pom", "iced")
+}
+
+local function v(name: string, c1: Color3, c2: Color3?): Variant
+	return { name = name, c1 = c1, c2 = c2 or c1 }
+end
+
+local WHITE = rgb(240, 240, 238)
+local BLACK = rgb(30, 30, 34)
+local GREY = rgb(150, 150, 156)
+local NAVY = rgb(35, 45, 85)
+local RED = rgb(200, 40, 45)
+local ROYAL = rgb(40, 80, 200)
+local GOLD = rgb(225, 180, 70)
+local SILVER = rgb(200, 205, 212)
+local DIAMOND = rgb(220, 240, 255)
+
+local ITEM_LIST: { Item } = {
+	-- Minimalist (the starter basics live here too)
+	{ id = "basic_tee", name = "Plain Tee", slot = "top", kind = "tee", category = "Minimalist", price = 15, desc = "A clean cotton tee. The city starts here.", variants = { v("White", WHITE), v("Black", BLACK), v("Heather Grey", GREY), v("Navy", NAVY) } },
+	{ id = "basic_joggers", name = "Everyday Joggers", slot = "bottom", kind = "joggers", category = "Minimalist", price = 25, desc = "Soft joggers with ribbed cuffs.", variants = { v("Grey", rgb(125, 125, 132), rgb(95, 95, 100)), v("Black", BLACK, rgb(20, 20, 22)), v("Navy", NAVY, rgb(25, 30, 60)) } },
+	{ id = "basic_sneakers", name = "Clean Sneakers", slot = "shoes", kind = "sneakers", category = "Minimalist", price = 30, desc = "Plain low-tops that go with everything.", variants = { v("White", WHITE, rgb(250, 250, 250)), v("Black", BLACK, WHITE), v("Grey", GREY, WHITE) } },
+	{ id = "min_longsleeve", name = "Essential Long Sleeve", slot = "top", kind = "longsleeve", category = "Minimalist", price = 35, desc = "Long sleeves, no logos, no noise.", variants = { v("Cream", rgb(235, 225, 205)), v("Charcoal", rgb(60, 62, 68)), v("Olive", rgb(100, 110, 70)) } },
+	{ id = "min_chinos", name = "Slim Chinos", slot = "bottom", kind = "chinos", category = "Minimalist", price = 45, desc = "Tapered chinos for any day.", variants = { v("Khaki", rgb(190, 165, 120)), v("Black", BLACK), v("Stone", rgb(170, 165, 155)) } },
+	{ id = "min_beanie", name = "Ribbed Beanie", slot = "hat", kind = "beanie", category = "Minimalist", price = 20, desc = "A snug ribbed knit.", variants = { v("Black", BLACK), v("Oatmeal", rgb(215, 200, 175)), v("Rust", rgb(170, 80, 45)) } },
+	{ id = "min_studs", name = "Silver Studs", slot = "ears", kind = "studs", category = "Minimalist", price = 40, desc = "Small silver studs for both ears.", material = "Metal", variants = { v("Silver", SILVER) } },
+	{ id = "min_watch", name = "Steel Watch", slot = "wrist", kind = "watch", category = "Minimalist", price = 120, desc = "Brushed steel with a leather strap.", material = "Metal", variants = { v("Black Dial", SILVER, rgb(25, 25, 28)), v("White Dial", SILVER, rgb(245, 245, 245)) } },
+
+	-- Streetwear
+	{ id = "st_hoodie", name = "Block Hoodie", slot = "top", kind = "hoodie", category = "Streetwear", price = 85, desc = "Heavyweight hoodie with a kangaroo pocket.", variants = { v("Black", BLACK, WHITE), v("Red", RED, WHITE), v("Forest", rgb(40, 85, 55), WHITE), v("Purple", rgb(95, 55, 150), WHITE) } },
+	{ id = "st_graphic", name = "CITY GRIND Tee", slot = "top", kind = "graphictee", category = "Streetwear", price = 40, desc = "Rep the grind.", text = "CITY GRIND", variants = { v("White", WHITE, BLACK), v("Black", BLACK, rgb(255, 120, 60)), v("Sand", rgb(215, 195, 160), rgb(80, 50, 30)) } },
+	{ id = "st_puffer", name = "Cloud Puffer", slot = "top", kind = "puffer", category = "Streetwear", price = 220, desc = "A quilted puffer jacket for cold nights.", material = "SmoothPlastic", variants = { v("Black", BLACK, rgb(200, 200, 200)), v("Orange", rgb(240, 120, 40), BLACK), v("Silver", rgb(195, 198, 205), BLACK) } },
+	{ id = "st_cargo", name = "Utility Cargos", slot = "bottom", kind = "cargo", category = "Streetwear", price = 70, desc = "Loose cargos with side pockets.", variants = { v("Olive", rgb(95, 100, 65)), v("Black", BLACK), v("Sand", rgb(190, 170, 130)) } },
+	{ id = "st_baggyjeans", name = "Baggy Jeans", slot = "bottom", kind = "jeans", category = "Streetwear", price = 65, desc = "Relaxed denim.", variants = { v("Light Wash", rgb(125, 160, 200)), v("Dark Wash", rgb(40, 55, 95)), v("Black Denim", rgb(40, 42, 48)) } },
+	{ id = "st_hightops", name = "Court Hightops", slot = "shoes", kind = "hightops", category = "Streetwear", price = 140, desc = "Ankle-high court shoes.", variants = { v("Red / White", RED, WHITE), v("Black / White", BLACK, WHITE), v("Royal / White", ROYAL, WHITE) } },
+	{ id = "st_cap", name = "Flat Brim Cap", slot = "hat", kind = "cap", category = "Streetwear", price = 35, desc = "Structured cap, flat brim.", variants = { v("Black", BLACK, BLACK), v("Red", RED, BLACK), v("Royal", ROYAL, WHITE) } },
+	{ id = "st_bucket", name = "Bucket Hat", slot = "hat", kind = "bucket", category = "Streetwear", price = 30, desc = "Soft bucket hat.", variants = { v("Black", BLACK, rgb(60, 60, 60)), v("Tan", rgb(200, 175, 130), rgb(120, 95, 60)), v("Lilac", rgb(185, 160, 220), WHITE) } },
+	{ id = "st_chain", name = "Cuban Link Chain", slot = "neck", kind = "chain", category = "Streetwear", price = 450, desc = "Heavy link chain with a medallion.", material = "Foil", variants = { v("Gold", GOLD, GOLD), v("Silver", SILVER, SILVER) } },
+	{ id = "st_sling", name = "Sling Bag", slot = "back", kind = "sling", category = "Streetwear", price = 55, desc = "Worn across the chest.", variants = { v("Black", BLACK, rgb(60, 60, 66)), v("Camo Green", rgb(85, 95, 60), BLACK) } },
+
+	-- Athletic
+	{ id = "ath_jersey", name = "Neighborhood Jersey", slot = "top", kind = "jersey", category = "Athletic", price = 60, desc = "Your name and number on the back.", text = "23", variants = { v("Red / White", RED, WHITE), v("Royal / White", ROYAL, WHITE), v("Black / Gold", BLACK, GOLD), v("Green / White", rgb(30, 130, 70), WHITE) } },
+	{ id = "ath_tank", name = "Training Tank", slot = "top", kind = "tank", category = "Athletic", price = 25, desc = "Sleeveless and breathable.", variants = { v("Black", BLACK), v("White", WHITE), v("Volt", rgb(210, 240, 40)) } },
+	{ id = "ath_shorts", name = "Ball Shorts", slot = "bottom", kind = "ballshorts", category = "Athletic", price = 35, desc = "Long mesh shorts for the court.", variants = { v("Red / White", RED, WHITE), v("Black / White", BLACK, WHITE), v("Royal / White", ROYAL, WHITE) } },
+	{ id = "ath_track", name = "Track Pants", slot = "bottom", kind = "trackpants", category = "Athletic", price = 55, desc = "Two side stripes, all business.", variants = { v("Black / White", BLACK, WHITE), v("Navy / White", NAVY, WHITE), v("Red / White", RED, WHITE) } },
+	{ id = "ath_runners", name = "Runner Pro", slot = "shoes", kind = "runners", category = "Athletic", price = 90, desc = "Light runners with a bright accent.", variants = { v("Volt", rgb(210, 240, 40), BLACK), v("Grey / Orange", GREY, rgb(255, 120, 40)), v("White / Blue", WHITE, ROYAL) } },
+	{ id = "ath_headband", name = "Sport Headband", slot = "hat", kind = "headband", category = "Athletic", price = 15, desc = "Keeps the sweat out of your eyes.", variants = { v("White", WHITE, RED), v("Black", BLACK, WHITE), v("Red", RED, WHITE) } },
+	{ id = "ath_wristband", name = "Wristband", slot = "band", kind = "sweatband", category = "Athletic", price = 15, desc = "Terry wristband for your right arm.", variants = { v("White", WHITE, RED), v("Black", BLACK, WHITE), v("Red", RED, WHITE) } },
+	{ id = "ath_backpack", name = "Gym Backpack", slot = "back", kind = "backpack", category = "Athletic", price = 60, desc = "Room for shoes, a ball and a towel.", variants = { v("Black", BLACK, rgb(70, 70, 76)), v("Red", RED, BLACK), v("Grey", GREY, BLACK) } },
+
+	-- Casual
+	{ id = "cas_polo", name = "Weekend Polo", slot = "top", kind = "polo", category = "Casual", price = 45, desc = "A collar for when it matters a little.", variants = { v("Navy", NAVY, WHITE), v("White", WHITE, NAVY), v("Forest", rgb(40, 90, 60), WHITE) } },
+	{ id = "cas_striped", name = "Striped Tee", slot = "top", kind = "stripedtee", category = "Casual", price = 30, desc = "Bold stripes, relaxed fit.", variants = { v("White / Navy", WHITE, NAVY), v("Red / White", RED, WHITE), v("Mustard / Black", rgb(220, 170, 50), BLACK) } },
+	{ id = "cas_shorts", name = "Chino Shorts", slot = "bottom", kind = "shorts", category = "Casual", price = 30, desc = "Above-the-knee chino shorts.", variants = { v("Khaki", rgb(190, 165, 120)), v("Navy", NAVY), v("Olive", rgb(100, 105, 70)) } },
+	{ id = "cas_jeans", name = "Classic Jeans", slot = "bottom", kind = "jeans", category = "Casual", price = 55, desc = "Straight-leg denim.", variants = { v("Mid Wash", rgb(70, 100, 150)), v("Dark Wash", rgb(35, 48, 85)) } },
+	{ id = "cas_slides", name = "Pool Slides", slot = "shoes", kind = "slides", category = "Casual", price = 20, desc = "Slip on, slip off.", variants = { v("Black", BLACK, rgb(50, 50, 55)), v("White", WHITE, rgb(220, 220, 220)), v("Red", RED, WHITE) } },
+	{ id = "cas_glasses", name = "Round Glasses", slot = "face", kind = "glasses", category = "Casual", price = 50, desc = "Clear lenses, round frames.", variants = { v("Black", BLACK), v("Tortoise", rgb(110, 65, 35)), v("Gold", GOLD) } },
+	{ id = "cas_backcap", name = "Backwards Cap", slot = "hat", kind = "backcap", category = "Casual", price = 30, desc = "Dad cap, worn backwards.", variants = { v("Navy", NAVY, NAVY), v("White", WHITE, WHITE), v("Green", rgb(40, 110, 60), rgb(40, 110, 60)) } },
+
+	-- Luxury
+	{ id = "lux_leather", name = "Leather Jacket", slot = "top", kind = "jacket", category = "Luxury", price = 1200, desc = "Real-feel leather over a crisp tee.", material = "Leather", variants = { v("Black", rgb(25, 25, 28), WHITE), v("Brown", rgb(95, 55, 35), BLACK) } },
+	{ id = "lux_silk", name = "Silk Shirt", slot = "top", kind = "shirt", category = "Luxury", price = 600, desc = "Smooth silk with a sharp collar.", material = "SmoothPlastic", variants = { v("Champagne", rgb(235, 215, 170), GOLD), v("Burgundy", rgb(110, 25, 40), GOLD), v("Emerald", rgb(20, 105, 70), GOLD) } },
+	{ id = "lux_trousers", name = "Tailored Trousers", slot = "bottom", kind = "chinos", category = "Luxury", price = 450, desc = "Pressed wool trousers.", variants = { v("Charcoal", rgb(55, 57, 62)), v("Black", BLACK), v("Cream", rgb(230, 220, 200)) } },
+	{ id = "lux_boots", name = "Designer Boots", slot = "shoes", kind = "boots", category = "Luxury", price = 900, desc = "Polished leather boots.", material = "Leather", variants = { v("Black", rgb(25, 25, 28), rgb(45, 35, 30)), v("Tan", rgb(165, 110, 60), rgb(70, 45, 30)) } },
+	{ id = "lux_shades", name = "Aviator Shades", slot = "face", kind = "sunglasses", style = "aviator", category = "Luxury", price = 350, desc = "Teardrop lenses in a thin metal frame.", variants = { v("Gold / Smoke", GOLD, rgb(30, 30, 35)), v("Silver / Blue", SILVER, rgb(40, 80, 140)) } },
+	{ id = "lux_icechain", name = "Iced Out Chain", slot = "neck", kind = "chain", style = "iced", category = "Luxury", price = 2500, desc = "Every link set with stones. The top of the city.", material = "Glass", variants = { v("Platinum", DIAMOND, DIAMOND), v("Gold / Ice", GOLD, DIAMOND) } },
+	{ id = "lux_diamond", name = "Diamond Studs", slot = "ears", kind = "studs", style = "iced", category = "Luxury", price = 800, desc = "Two stones that catch every light.", material = "Glass", variants = { v("Diamond", DIAMOND) } },
+	{ id = "lux_goldwatch", name = "Gold Watch", slot = "wrist", kind = "watch", category = "Luxury", price = 1500, desc = "Solid gold, champagne dial.", material = "Foil", variants = { v("Gold", GOLD, rgb(240, 225, 180)), v("Rose Gold", rgb(220, 150, 130), rgb(245, 235, 225)) } },
+
+	-- Vintage
+	{ id = "vin_varsity", name = "Varsity Jacket", slot = "top", kind = "varsity", category = "Vintage", price = 180, desc = "Wool body, contrast sleeves, chenille letter.", text = "C", variants = { v("Maroon / Cream", rgb(110, 25, 35), rgb(235, 225, 200)), v("Navy / Gold", NAVY, GOLD), v("Green / White", rgb(30, 90, 50), WHITE) } },
+	{ id = "vin_trackjacket", name = "Retro Track Jacket", slot = "top", kind = "trackjacket", category = "Vintage", price = 75, desc = "Zip-up with stripes down the sleeves.", variants = { v("Teal / White", rgb(30, 140, 150), WHITE), v("Purple / Yellow", rgb(90, 50, 140), rgb(250, 210, 60)), v("Black / Red", BLACK, RED) } },
+	{ id = "vin_denim", name = "Washed Denim", slot = "bottom", kind = "jeans", category = "Vintage", price = 60, desc = "Faded like it's been around.", variants = { v("Faded Blue", rgb(150, 175, 205)), v("Stonewash", rgb(105, 130, 165)) } },
+	{ id = "vin_canvas", name = "Canvas Classics", slot = "shoes", kind = "canvas", category = "Vintage", price = 45, desc = "Canvas low-tops with a rubber toe.", variants = { v("Red", RED, WHITE), v("Black", BLACK, WHITE), v("Cream", rgb(235, 225, 200), WHITE) } },
+	{ id = "vin_shades", name = "Retro Round Shades", slot = "face", kind = "sunglasses", style = "round", category = "Vintage", price = 40, desc = "Little round tinted lenses.", variants = { v("Black", BLACK, rgb(25, 25, 30)), v("Tortoise", rgb(110, 65, 35), rgb(70, 50, 30)) } },
+	{ id = "vin_beanie", name = "Pom Beanie", slot = "hat", kind = "beanie", style = "pom", category = "Vintage", price = 25, desc = "Chunky knit with a pom-pom.", variants = { v("Mustard", rgb(215, 165, 50), rgb(240, 235, 220)), v("Navy", NAVY, RED) } },
+	{ id = "vin_rucksack", name = "Canvas Rucksack", slot = "back", kind = "backpack", category = "Vintage", price = 70, desc = "Waxed canvas with leather straps.", variants = { v("Tan", rgb(175, 145, 100), rgb(90, 55, 35)), v("Olive", rgb(95, 100, 65), rgb(90, 55, 35)) } },
+}
+
+ShopsConfig.ITEM_LIST = ITEM_LIST
+ShopsConfig.ITEMS = {} :: { [string]: Item }
+for _, item in ITEM_LIST do
+	ShopsConfig.ITEMS[item.id] = item
+end
+
+---------------------------------------------------------------------------
+-- Barber (section 75)
+---------------------------------------------------------------------------
+export type Option = { id: string, name: string, price: number, desc: string? }
+
+-- id "" keeps the player's own avatar hair.
+ShopsConfig.HAIR_STYLES = {
+	{ id = "", name = "My Own Hair", price = 0, desc = "Keep your avatar's hair." },
+	{ id = "bald", name = "Clean Shave", price = 25, desc = "Smooth all over." },
+	{ id = "buzz", name = "Buzz Cut", price = 25, desc = "Even and short." },
+	{ id = "fade", name = "Fade", price = 45, desc = "Short on top, faded to skin." },
+	{ id = "waves", name = "360 Waves", price = 60, desc = "Brushed ridges all around." },
+	{ id = "curlytop", name = "Curly Top", price = 80, desc = "Curls on top, tapered sides." },
+	{ id = "afro", name = "Afro", price = 100, desc = "Big, round and proud." },
+	{ id = "braids", name = "Cornrow Braids", price = 160, desc = "Neat rows front to back." },
+	{ id = "dreads", name = "Dreads", price = 200, desc = "Long locs all around." },
+} :: { Option }
+
+ShopsConfig.HAIR_COLORS = {
+	{ id = "black", name = "Black", price = 0, color = rgb(28, 24, 22) },
+	{ id = "darkbrown", name = "Dark Brown", price = 0, color = rgb(60, 40, 28) },
+	{ id = "brown", name = "Brown", price = 10, color = rgb(110, 72, 45) },
+	{ id = "ginger", name = "Ginger", price = 30, color = rgb(185, 90, 40) },
+	{ id = "blonde", name = "Blonde", price = 25, color = rgb(225, 190, 110) },
+	{ id = "platinum", name = "Platinum", price = 40, color = rgb(235, 230, 220) },
+	{ id = "blue", name = "Electric Blue", price = 50, color = rgb(40, 100, 230) },
+	{ id = "pink", name = "Pink", price = 50, color = rgb(240, 110, 180) },
+	{ id = "green", name = "Mint Green", price = 50, color = rgb(90, 210, 150) },
+} :: { Option & { color: Color3 } }
+
+ShopsConfig.FACIAL_HAIR = {
+	{ id = "", name = "Clean", price = 0 },
+	{ id = "moustache", name = "Moustache", price = 15 },
+	{ id = "goatee", name = "Goatee", price = 20 },
+	{ id = "beard", name = "Full Beard", price = 35 },
+} :: { Option }
+
+ShopsConfig.MIN_CUT_PRICE = 25
+
+local function find(list: { any }, id: string): any
+	for _, entry in list do
+		if entry.id == id then
+			return entry
+		end
+	end
+	return nil
+end
+ShopsConfig.findOption = find
+
+-- Price of a barber visit. The colour only costs money when it is actually
+-- used (a barber style or facial hair). Every visit costs at least $25.
+function ShopsConfig.cutPrice(hair: string, hairColor: string, facial: string): number?
+	local style, colour, beard = find(ShopsConfig.HAIR_STYLES, hair), find(ShopsConfig.HAIR_COLORS, hairColor), find(ShopsConfig.FACIAL_HAIR, facial)
+	if not style or not colour or not beard then
+		return nil
+	end
+	local total = style.price + beard.price
+	if (hair ~= "" and hair ~= "bald") or facial ~= "" then
+		total += colour.price
+	end
+	return math.max(ShopsConfig.MIN_CUT_PRICE, total)
+end
+
+---------------------------------------------------------------------------
+-- Corner Mart (section 49 "buy drinks") and Mama's Kitchen
+---------------------------------------------------------------------------
+-- Effects: refill = full stamina refill (StaminaRefill remote),
+-- boost = seconds of StaminaBoostUntil, wellFed = seconds of WellFedUntil,
+-- strengthXP = Strength stat XP (limited by PROTEIN_COOLDOWN).
+export type Food = { id: string, name: string, icon: string, price: number, desc: string, refill: boolean?, boost: number?, wellFed: number?, strengthXP: number? }
+
+ShopsConfig.MART = {
+	{ id = "water", name = "Bottled Water", icon = "💧", price = 3, desc = "Restores all your stamina.", refill = true },
+	{ id = "chips", name = "Hot Chips", icon = "🌶️", price = 4, desc = "Restores all stamina + 3 min Well Fed.", refill = true, wellFed = 180 },
+	{ id = "energy", name = "Volt Energy Drink", icon = "⚡", price = 5, desc = "Restores all stamina + 20s Energized.", refill = true, boost = 20 },
+	{ id = "sports", name = "Sports Drink", icon = "🥤", price = 8, desc = "Restores all stamina + 60s Hydrated.", refill = true, boost = 60 },
+	{ id = "protein", name = "Protein Bar", icon = "🍫", price = 10, desc = "+15 Strength training XP and a stamina refill. One every 5 min.", refill = true, strengthXP = 15 },
+} :: { Food }
+ShopsConfig.PROTEIN_COOLDOWN = 300
+
+export type FoodPiece = { shape: string, size: Vector3, offset: Vector3, color: Color3 }
+export type Meal = Food & { pieces: { FoodPiece } }
+
+ShopsConfig.MEALS = {
+	{ id = "grilledcheese", name = "Grilled Cheese & Soup", icon = "🥪", price = 12, desc = "Full stamina + 5 min Well Fed.", refill = true, wellFed = 300, pieces = {
+		{ shape = "Block", size = Vector3.new(0.7, 0.18, 0.7), offset = Vector3.new(-0.35, 0.14, 0), color = rgb(220, 165, 70) },
+		{ shape = "Cylinder", size = Vector3.new(0.5, 0.25, 0.6), offset = Vector3.new(0.4, 0.16, 0), color = rgb(200, 60, 40) },
+	} },
+	{ id = "burger", name = "Smash Burger & Fries", icon = "🍔", price = 16, desc = "Full stamina + 8 min Well Fed.", refill = true, wellFed = 480, pieces = {
+		{ shape = "Cylinder", size = Vector3.new(0.6, 0.16, 0.6), offset = Vector3.new(-0.3, 0.12, 0), color = rgb(215, 150, 70) },
+		{ shape = "Cylinder", size = Vector3.new(0.62, 0.12, 0.62), offset = Vector3.new(-0.3, 0.25, 0), color = rgb(90, 50, 30) },
+		{ shape = "Ball", size = Vector3.new(0.6, 0.25, 0.6), offset = Vector3.new(-0.3, 0.38, 0), color = rgb(220, 155, 70) },
+		{ shape = "Block", size = Vector3.new(0.4, 0.2, 0.35), offset = Vector3.new(0.4, 0.14, 0), color = rgb(245, 205, 90) },
+	} },
+	{ id = "chicken", name = "Fried Chicken Plate", icon = "🍗", price = 20, desc = "Full stamina + 10 min Well Fed.", refill = true, wellFed = 600, pieces = {
+		{ shape = "Ball", size = Vector3.new(0.45, 0.3, 0.35), offset = Vector3.new(-0.3, 0.17, -0.15), color = rgb(185, 115, 45) },
+		{ shape = "Ball", size = Vector3.new(0.45, 0.3, 0.35), offset = Vector3.new(-0.2, 0.17, 0.2), color = rgb(170, 100, 40) },
+		{ shape = "Ball", size = Vector3.new(0.5, 0.22, 0.45), offset = Vector3.new(0.35, 0.13, 0), color = rgb(240, 225, 120) },
+	} },
+	{ id = "jerk", name = "Jerk Chicken & Rice", icon = "🍛", price = 24, desc = "Full stamina + 12 min Well Fed.", refill = true, wellFed = 720, pieces = {
+		{ shape = "Ball", size = Vector3.new(0.7, 0.25, 0.6), offset = Vector3.new(0.25, 0.14, 0), color = rgb(245, 240, 225) },
+		{ shape = "Ball", size = Vector3.new(0.5, 0.25, 0.4), offset = Vector3.new(-0.3, 0.16, 0), color = rgb(120, 45, 25) },
+		{ shape = "Ball", size = Vector3.new(0.25, 0.12, 0.25), offset = Vector3.new(-0.1, 0.12, 0.3), color = rgb(60, 150, 60) },
+	} },
+	{ id = "soul", name = "Soul Food Platter", icon = "🍽️", price = 32, desc = "Full stamina + 16 min Well Fed.", refill = true, wellFed = 960, pieces = {
+		{ shape = "Ball", size = Vector3.new(0.45, 0.25, 0.4), offset = Vector3.new(-0.35, 0.15, -0.15), color = rgb(240, 180, 60) },
+		{ shape = "Ball", size = Vector3.new(0.4, 0.2, 0.4), offset = Vector3.new(0.3, 0.13, -0.2), color = rgb(40, 100, 45) },
+		{ shape = "Block", size = Vector3.new(0.4, 0.2, 0.3), offset = Vector3.new(0.05, 0.13, 0.3), color = rgb(225, 175, 80) },
+		{ shape = "Ball", size = Vector3.new(0.4, 0.3, 0.35), offset = Vector3.new(-0.1, 0.17, 0.05), color = rgb(160, 95, 40) },
+	} },
+	{ id = "steak", name = "Steak Dinner", icon = "🥩", price = 40, desc = "Full stamina + 20 min Well Fed.", refill = true, wellFed = 1200, pieces = {
+		{ shape = "Ball", size = Vector3.new(0.8, 0.2, 0.55), offset = Vector3.new(-0.15, 0.13, 0), color = rgb(110, 50, 35) },
+		{ shape = "Ball", size = Vector3.new(0.35, 0.25, 0.35), offset = Vector3.new(0.45, 0.15, -0.15), color = rgb(235, 215, 160) },
+		{ shape = "Ball", size = Vector3.new(0.3, 0.15, 0.3), offset = Vector3.new(0.4, 0.12, 0.25), color = rgb(50, 140, 50) },
+	} },
+} :: { Meal }
+
+ShopsConfig.EAT_SECONDS = 6
+
+---------------------------------------------------------------------------
+-- Look builder (shared by server apply and client preview)
+---------------------------------------------------------------------------
+export type LookData = {
+	equipped: { [string]: string },
+	colours: { [string]: number },
+	hair: string,
+	hairColor: string,
+	facial: string,
+}
+
+-- ctx.isServer: accessories go through Humanoid:AddAccessory; else welded locally.
+-- ctx.folder: where trim pieces go. ctx.strip(character) removes/hides the
+-- avatar's own clothing. ctx.hide(accessory) hides one of the avatar's own
+-- accessories. ctx.setColor(part, color, material) paints a body part.
+export type Ctx = {
+	isServer: boolean,
+	folder: Instance,
+	playerName: string,
+	strip: (Model) -> (),
+	hide: (Accessory) -> (),
+	setColor: (BasePart, Color3, Enum.Material) -> (),
+}
+
+local Look = {}
+ShopsConfig.Look = Look
+
+Look.R15_PARTS = { "UpperTorso", "LowerTorso", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot" }
+Look.R6_PARTS = { "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
+
+-- R6 limbs are split into the same named segments as R15:
+-- { part, centre Y as a fraction of the part height, height fraction }.
+local R6_SEGMENTS = {
+	UpperTorso = { "Torso", 0.1, 0.8 },
+	LowerTorso = { "Torso", -0.4, 0.2 },
+	LeftUpperArm = { "Left Arm", 0.25, 0.5 },
+	LeftLowerArm = { "Left Arm", -0.165, 0.33 },
+	LeftHand = { "Left Arm", -0.415, 0.17 },
+	RightUpperArm = { "Right Arm", 0.25, 0.5 },
+	RightLowerArm = { "Right Arm", -0.165, 0.33 },
+	RightHand = { "Right Arm", -0.415, 0.17 },
+	LeftUpperLeg = { "Left Leg", 0.25, 0.5 },
+	LeftLowerLeg = { "Left Leg", -0.175, 0.35 },
+	LeftFoot = { "Left Leg", -0.425, 0.15 },
+	RightUpperLeg = { "Right Leg", 0.25, 0.5 },
+	RightLowerLeg = { "Right Leg", -0.175, 0.35 },
+	RightFoot = { "Right Leg", -0.425, 0.15 },
+}
+local R6_GROUPS = {
+	Torso = { "UpperTorso", "LowerTorso" },
+	["Left Arm"] = { "LeftUpperArm", "LeftLowerArm", "LeftHand" },
+	["Right Arm"] = { "RightUpperArm", "RightLowerArm", "RightHand" },
+	["Left Leg"] = { "LeftUpperLeg", "LeftLowerLeg", "LeftFoot" },
+	["Right Leg"] = { "RightUpperLeg", "RightLowerLeg", "RightFoot" },
+}
+
+local SLEEVES = {
+	tee = "short",
+	graphictee = "short",
+	stripedtee = "short",
+	polo = "short",
+	tank = "none",
+	jersey = "none",
+	hoodie = "long",
+	longsleeve = "long",
+	shirt = "long",
+	jacket = "long",
+	varsity = "long",
+	puffer = "long",
+	trackjacket = "long",
+}
+local SHORT_BOTTOMS = { shorts = true, ballshorts = true }
+
+local ACCESSORY_SLOT_BY_TYPE = {
+	Hat = "hat",
+	Hair = "hair",
+	Face = "face",
+	Neck = "neck",
+	Back = "back",
+	Waist = "back",
+}
+local ACCESSORY_SLOT_BY_ATTACHMENT = {
+	HairAttachment = "hair",
+	HatAttachment = "hat",
+	FaceFrontAttachment = "face",
+	FaceCenterAttachment = "face",
+	NeckAttachment = "neck",
+	BodyBackAttachment = "back",
+	WaistBackAttachment = "back",
+}
+
+-- Which CITY GRIND slot an avatar's own accessory competes with (nil = none).
+function Look.accessorySlot(accessory: Accessory): string?
+	local byType = ACCESSORY_SLOT_BY_TYPE[accessory.AccessoryType.Name]
+	if byType then
+		return byType
+	end
+	local handle = accessory:FindFirstChild("Handle")
+	if handle then
+		for _, child in handle:GetChildren() do
+			if child:IsA("Attachment") and ACCESSORY_SLOT_BY_ATTACHMENT[child.Name] then
+				return ACCESSORY_SLOT_BY_ATTACHMENT[child.Name]
+			end
+		end
+	end
+	return nil
+end
+
+-- True for layered clothing (shirts/jackets/pants made with WrapLayer).
+function Look.isLayeredClothing(accessory: Accessory): boolean
+	return accessory:FindFirstChildWhichIsA("WrapLayer", true) ~= nil
+end
+
+-- The visible size of the head (classic heads are a Part with a Head mesh).
+function Look.headSize(head: BasePart): Vector3
+	local mesh = head:FindFirstChildOfClass("SpecialMesh")
+	if mesh and mesh.MeshType == Enum.MeshType.Head then
+		return Vector3.new(1.2, 1.2, 1.2) * (mesh.Scale / 1.25)
+	elseif mesh then
+		return Vector3.new(1.2, 1.2, 1.2)
+	end
+	if head:IsA("MeshPart") then
+		return head.Size
+	end
+	return Vector3.new(1.2, 1.2, 1.2)
+end
+
+-- The item definition and variant worn in a slot, or nil.
+function Look.worn(look: LookData, slot: string): (Item?, Variant?)
+	local id = look.equipped[slot]
+	local item = id and ShopsConfig.ITEMS[id]
+	if not item or item.slot ~= slot then
+		return nil, nil
+	end
+	local variant = item.variants[look.colours[slot] or 1] or item.variants[1]
+	return item, variant
+end
+
+function Look.hairColor(id: string): Color3
+	local entry = find(ShopsConfig.HAIR_COLORS, id)
+	return if entry then entry.color else ShopsConfig.HAIR_COLORS[1].color
+end
+
+local function darker(c: Color3, amount: number): Color3
+	return c:Lerp(Color3.new(0, 0, 0), amount)
+end
+local function lighter(c: Color3, amount: number): Color3
+	return c:Lerp(Color3.new(1, 1, 1), amount)
+end
+
+type Spec = {
+	size: Vector3,
+	cf: CFrame,
+	color: Color3,
+	material: Enum.Material?,
+	mesh: string?, -- "Sphere" | "Cylinder" (SpecialMesh, stretches with the part)
+	shape: Enum.PartType?,
+	transparency: number?,
+	reflectance: number?,
+}
+
+local function newPart(spec: Spec): Part
+	local p = Instance.new("Part")
+	p.Name = "CGPiece"
+	p.Anchored = false
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Massless = true
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	if spec.shape then
+		p.Shape = spec.shape
+	end
+	p.Size = Vector3.new(math.max(spec.size.X, 0.02), math.max(spec.size.Y, 0.02), math.max(spec.size.Z, 0.02))
+	p.Color = spec.color
+	p.Material = spec.material or Enum.Material.SmoothPlastic
+	p.Transparency = spec.transparency or 0
+	p.Reflectance = spec.reflectance or 0
+	if spec.mesh then
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = if spec.mesh == "Cylinder" then Enum.MeshType.Cylinder else Enum.MeshType.Sphere
+		mesh.Parent = p
+	end
+	return p
+end
+
+-- A vertical disc / cylinder (SpecialMesh Cylinder's axis is X, so turn it upright).
+local function vdisc(pos: Vector3, height: number, width: number, depth: number, color: Color3, mat: Enum.Material?): Spec
+	return { size = Vector3.new(height, width, depth), cf = CFrame.new(pos) * CFrame.Angles(0, 0, math.pi / 2), color = color, material = mat, mesh = "Cylinder" }
+end
+-- A disc facing forward (axis along Z).
+local function fdisc(pos: Vector3, thickness: number, height: number, width: number, color: Color3, mat: Enum.Material?): Spec
+	return { size = Vector3.new(thickness, height, width), cf = CFrame.new(pos) * CFrame.Angles(0, math.pi / 2, 0), color = color, material = mat, mesh = "Cylinder" }
+end
+
+-- Builds the full look on a character. Safe to call repeatedly; callers clear
+-- the previous build first (server) or restore it (client preview).
+function Look.build(character: Model, look: LookData, ctx: Ctx)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local head = character:FindFirstChild("Head")
+	if not humanoid or not head or not head:IsA("BasePart") then
+		return
+	end
+	local r6 = humanoid.RigType == Enum.HumanoidRigType.R6
+	local skin = head.Color
+	local folder = ctx.folder
+	local hs = Look.headSize(head)
+
+	type Seg = { part: BasePart, cf: CFrame, size: Vector3 }
+	local function seg(name: string): Seg?
+		if name == "Head" then
+			return { part = head, cf = CFrame.identity, size = hs }
+		end
+		if r6 then
+			local d = R6_SEGMENTS[name]
+			local p = d and character:FindFirstChild(d[1])
+			if not p or not p:IsA("BasePart") then
+				return nil
+			end
+			return { part = p, cf = CFrame.new(0, p.Size.Y * d[2], 0), size = Vector3.new(p.Size.X, p.Size.Y * d[3], p.Size.Z) }
+		end
+		local p = character:FindFirstChild(name)
+		if p and p:IsA("BasePart") then
+			return { part = p, cf = CFrame.identity, size = p.Size }
+		end
+		return nil
+	end
+
+	-- A trim piece welded to a body segment (offset is relative to the segment centre).
+	local function piece(segName: string, spec: Spec): Part?
+		local s = seg(segName)
+		if not s then
+			return nil
+		end
+		local p = newPart(spec)
+		local c0 = s.cf * spec.cf
+		p.CFrame = s.part.CFrame * c0
+		local weld = Instance.new("Weld")
+		weld.Part0 = s.part
+		weld.Part1 = p
+		weld.C0 = c0
+		weld.Parent = p
+		p.Parent = folder
+		return p
+	end
+	local function box(segName: string, size: Vector3, offset: Vector3, color: Color3, mat: Enum.Material?): Part?
+		return piece(segName, { size = size, cf = CFrame.new(offset), color = color, material = mat })
+	end
+
+	-- A real Accessory built from parts. specs[1] becomes the Handle.
+	local function accessory(slot: string, accType: Enum.AccessoryType, attachName: string, segName: string, specs: { Spec })
+		local s = seg(segName)
+		if not s or #specs == 0 then
+			return
+		end
+		local acc = Instance.new("Accessory")
+		acc.Name = "CG_" .. slot
+		acc.AccessoryType = accType
+		acc:SetAttribute("CityGrind", true)
+		acc:SetAttribute("CGSlot", slot)
+		local o = s.cf * specs[1].cf -- handle offset from the body part
+		local handle = newPart(specs[1])
+		handle.Name = "Handle"
+		handle.CFrame = s.part.CFrame * o
+		handle.Parent = acc
+		for i = 2, #specs do
+			local spec = specs[i]
+			local p = newPart(spec)
+			local rel = s.cf * spec.cf
+			p.CFrame = s.part.CFrame * rel
+			local weld = Instance.new("Weld")
+			weld.Part0 = handle
+			weld.Part1 = p
+			weld.C0 = o:Inverse() * rel
+			weld.Parent = p
+			p.Parent = acc
+		end
+		local charAttachment = s.part:FindFirstChild(attachName)
+		if ctx.isServer and charAttachment and charAttachment:IsA("Attachment") then
+			local attachment = Instance.new("Attachment")
+			attachment.Name = attachName
+			attachment.CFrame = o:Inverse() * charAttachment.CFrame
+			attachment.Parent = handle
+			humanoid:AddAccessory(acc)
+		else
+			local weld = Instance.new("Weld")
+			weld.Part0 = s.part
+			weld.Part1 = handle
+			weld.C0 = o
+			weld.Parent = handle
+			acc.Parent = if ctx.isServer then character else folder
+		end
+	end
+
+	-- Text printed flat on the front or back of a segment (jersey numbers, logos).
+	local function printOn(segName: string, back: boolean, build: (Frame) -> ())
+		local s = seg(segName)
+		if not s then
+			return
+		end
+		local offset = if back then CFrame.new(0, 0, s.size.Z / 2 + 0.035) * CFrame.Angles(0, math.pi, 0) else CFrame.new(0, 0, -s.size.Z / 2 - 0.035)
+		local p = piece(segName, { size = Vector3.new(s.size.X * 0.9, s.size.Y * 0.9, 0.05), cf = offset, color = Color3.new(1, 1, 1), transparency = 1 })
+		if not p then
+			return
+		end
+		p.Name = "CGPrint"
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = Enum.NormalId.Front
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 60
+		gui.LightInfluence = 1
+		gui.Parent = p
+		local frame = Instance.new("Frame")
+		frame.BackgroundTransparency = 1
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.Parent = gui
+		build(frame)
+	end
+	local function printLabel(parent: Frame, text: string, pos: UDim2, size: UDim2, color: Color3, stroke: Color3?)
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = pos
+		label.Size = size
+		label.Text = text
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBlack
+		label.TextColor3 = color
+		label.TextStrokeColor3 = stroke or Color3.new(0, 0, 0)
+		label.TextStrokeTransparency = if stroke then 0 else 1
+		label.Parent = parent
+	end
+
+	-------------------------------------------------------------------------
+	-- 1. Remove the avatar's own clothing and hide accessories we replace.
+	-------------------------------------------------------------------------
+	ctx.strip(character)
+	local filled: { [string]: boolean } = {}
+	for _, slot in ShopsConfig.SLOTS do
+		if (look.equipped[slot] or "") ~= "" then
+			filled[slot] = true
+		end
+	end
+	if look.hair ~= "" then
+		filled.hair = true
+	end
+	for _, child in character:GetChildren() do
+		if child:IsA("Accessory") and not child:GetAttribute("CityGrind") then
+			local slot = Look.accessorySlot(child)
+			if slot and filled[slot] then
+				ctx.hide(child)
+			end
+		end
+	end
+
+	-------------------------------------------------------------------------
+	-- 2. Body colours. paint[segment] = colour/material; unpainted = skin.
+	-------------------------------------------------------------------------
+	type Paint = { color: Color3, material: Enum.Material }
+	local paint: { [string]: Paint } = {}
+	local function cover(names: { string }, color: Color3, mat: Enum.Material)
+		for _, name in names do
+			paint[name] = { color = color, material = mat }
+		end
+	end
+
+	local top, topV = Look.worn(look, "top")
+	local bottom, bottomV = Look.worn(look, "bottom")
+	local shoes, shoesV = Look.worn(look, "shoes")
+	local FABRIC = Enum.Material.Fabric
+
+	if top and topV then
+		local m = material(top.material, FABRIC)
+		cover({ "UpperTorso", "LowerTorso" }, topV.c1, m)
+		local sleeves = SLEEVES[top.kind] or "short"
+		local armColor = if top.kind == "varsity" then topV.c2 else topV.c1
+		if sleeves ~= "none" then
+			cover({ "LeftUpperArm", "RightUpperArm" }, armColor, m)
+		end
+		if sleeves == "long" then
+			cover({ "LeftLowerArm", "RightLowerArm" }, armColor, m)
+		end
+	end
+	if bottom and bottomV then
+		local m = material(bottom.material, FABRIC)
+		cover({ "LeftUpperLeg", "RightUpperLeg" }, bottomV.c1, m)
+		if not SHORT_BOTTOMS[bottom.kind] then
+			cover({ "LeftLowerLeg", "RightLowerLeg" }, bottomV.c1, m)
+		end
+		if not top then
+			cover({ "LowerTorso" }, bottomV.c1, m)
+		end
+	end
+	if shoes and shoesV and shoes.kind ~= "slides" then
+		cover({ "LeftFoot", "RightFoot" }, shoesV.c1, material(shoes.material, FABRIC))
+	end
+
+	local SKIN_MAT = Enum.Material.Plastic
+	if r6 then
+		-- One R6 limb holds several segments: paint it whole when they all match,
+		-- otherwise keep it skin and wrap the painted segments in overlay boxes.
+		for partName, segments in R6_GROUPS do
+			local part = character:FindFirstChild(partName)
+			if part and part:IsA("BasePart") then
+				local first = paint[segments[1]]
+				local uniform = first ~= nil
+				for _, name in segments do
+					local p = paint[name]
+					if not p or not first or p.color ~= first.color or p.material ~= first.material then
+						uniform = false
+					end
+				end
+				if uniform and first then
+					ctx.setColor(part, first.color, first.material)
+				else
+					ctx.setColor(part, skin, SKIN_MAT)
+					for _, name in segments do
+						local p = paint[name]
+						local s = seg(name)
+						if p and s then
+							box(name, s.size + Vector3.new(0.04, 0.01, 0.04), Vector3.zero, p.color, p.material)
+						end
+					end
+				end
+			end
+		end
+	else
+		for _, name in Look.R15_PARTS do
+			local part = character:FindFirstChild(name)
+			if part and part:IsA("BasePart") then
+				local p = paint[name]
+				ctx.setColor(part, if p then p.color else skin, if p then p.material else SKIN_MAT)
+			end
+		end
+	end
+
+	-------------------------------------------------------------------------
+	-- 3. Clothing trim
+	-------------------------------------------------------------------------
+	local ut = seg("UpperTorso")
+	local lt = seg("LowerTorso")
+	local ua = seg("LeftUpperArm")
+	local la = seg("LeftLowerArm")
+	local ul = seg("LeftUpperLeg")
+	local ll = seg("LeftLowerLeg")
+	local ft = seg("LeftFoot")
+
+	local function collar(color: Color3, height: number, width: number, mat: Enum.Material?)
+		if ut then
+			piece("UpperTorso", vdisc(Vector3.new(0, ut.size.Y / 2 + height / 2 - 0.05, 0.02), height, ut.size.X * width, ut.size.Z * 0.9, color, mat))
+		end
+	end
+	local function ring(segName: string, s: Seg?, y: number, height: number, grow: number, color: Color3, mat: Enum.Material?)
+		if s then
+			box(segName, Vector3.new(s.size.X + grow, height, s.size.Z + grow), Vector3.new(0, y, 0), color, mat)
+		end
+	end
+	local function both(fn: (side: number, prefix: string) -> ())
+		fn(-1, "Left")
+		fn(1, "Right")
+	end
+
+	if top and topV and ut then
+		local k, c1, c2 = top.kind, topV.c1, topV.c2
+		local m = material(top.material, FABRIC)
+		local X, Y, Z = ut.size.X, ut.size.Y, ut.size.Z
+		local front = -Z / 2
+		if k == "hoodie" then
+			piece("UpperTorso", { size = Vector3.new(X * 0.62, Y * 0.34, Z * 0.75), cf = CFrame.new(0, Y * 0.44, Z * 0.3), color = darker(c1, 0.08), material = m, mesh = "Sphere" })
+			box("UpperTorso", Vector3.new(X * 0.55, Y * 0.22, 0.05), Vector3.new(0, -Y * 0.3, front - 0.025), darker(c1, 0.12), m)
+			for _, side in { -1, 1 } do
+				box("UpperTorso", Vector3.new(0.05, Y * 0.3, 0.05), Vector3.new(side * X * 0.08, Y * 0.22, front - 0.03), c2, Enum.Material.SmoothPlastic)
+			end
+			both(function(_, prefix)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.07, 0.14, 0.04, darker(c1, 0.15), m)
+			end)
+			ring("LowerTorso", lt, -(lt and lt.size.Y or 0.4) * 0.15, (lt and lt.size.Y or 0.4) * 0.7, 0.05, darker(c1, 0.15), m)
+		elseif k == "jersey" then
+			for _, side in { -1, 1 } do
+				box("UpperTorso", Vector3.new(0.03, Y * 0.9, Z * 0.7), Vector3.new(side * (X / 2 + 0.015), -Y * 0.03, 0), c2, m)
+			end
+			collar(c2, 0.08, 0.42, m)
+			local number = top.text or "23"
+			local name = string.upper(ctx.playerName):sub(1, 12)
+			printOn("UpperTorso", true, function(frame)
+				printLabel(frame, name, UDim2.fromScale(0.1, 0.06), UDim2.fromScale(0.8, 0.18), c2)
+				printLabel(frame, number, UDim2.fromScale(0.15, 0.26), UDim2.fromScale(0.7, 0.62), c2, darker(c1, 0.4))
+			end)
+			printOn("UpperTorso", false, function(frame)
+				printLabel(frame, number, UDim2.fromScale(0.3, 0.18), UDim2.fromScale(0.4, 0.42), c2, darker(c1, 0.4))
+			end)
+		elseif k == "graphictee" then
+			local text = top.text or "CITY GRIND"
+			printOn("UpperTorso", false, function(frame)
+				printLabel(frame, text, UDim2.fromScale(0.08, 0.2), UDim2.fromScale(0.84, 0.3), c2)
+				printLabel(frame, "EST. NEIGHBORHOOD", UDim2.fromScale(0.2, 0.52), UDim2.fromScale(0.6, 0.1), c2)
+			end)
+		elseif k == "stripedtee" then
+			for _, f in { 0.28, 0.02, -0.24 } do
+				ring("UpperTorso", ut, Y * f, Y * 0.09, 0.03, c2, m)
+			end
+			both(function(_, prefix)
+				ring(prefix .. "UpperArm", ua, -(ua and ua.size.Y or 1) * 0.15, (ua and ua.size.Y or 1) * 0.12, 0.03, c2, m)
+			end)
+		elseif k == "polo" then
+			collar(darker(c1, 0.06), 0.13, 0.55, m)
+			box("UpperTorso", Vector3.new(0.16, Y * 0.3, 0.03), Vector3.new(0, Y * 0.32, front - 0.015), c2, m)
+			for i = 0, 1 do
+				piece("UpperTorso", { size = Vector3.new(0.07, 0.07, 0.04), cf = CFrame.new(0, Y * (0.4 - i * 0.14), front - 0.04), color = WHITE, mesh = "Sphere" })
+			end
+			both(function(_, prefix)
+				ring(prefix .. "UpperArm", ua, -(ua and ua.size.Y or 1) / 2 + 0.06, 0.1, 0.03, c2, m)
+			end)
+		elseif k == "shirt" then
+			collar(c1, 0.14, 0.58, m)
+			for i = 0, 3 do
+				piece("UpperTorso", { size = Vector3.new(0.07, 0.07, 0.04), cf = CFrame.new(0, Y * (0.32 - i * 0.2), front - 0.02), color = c2, material = Enum.Material.Foil, mesh = "Sphere" })
+			end
+			both(function(_, prefix)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.08, 0.16, 0.04, c1, m)
+			end)
+		elseif k == "longsleeve" then
+			both(function(_, prefix)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.07, 0.12, 0.03, darker(c2, 0.08), m)
+			end)
+		elseif k == "jacket" then
+			box("UpperTorso", Vector3.new(X * 0.26, Y * 0.97, 0.03), Vector3.new(0, -Y * 0.01, front - 0.012), c2, FABRIC)
+			for _, side in { -1, 1 } do
+				piece("UpperTorso", { size = Vector3.new(X * 0.15, Y * 0.42, 0.04), cf = CFrame.new(side * X * 0.17, Y * 0.24, front - 0.025) * CFrame.Angles(0, 0, side * 0.3), color = darker(c1, 0.15), material = m })
+				box("UpperTorso", Vector3.new(0.04, Y * 0.55, 0.035), Vector3.new(side * X * 0.14, -Y * 0.22, front - 0.02), SILVER, Enum.Material.Metal)
+			end
+			collar(darker(c1, 0.1), 0.16, 0.6, m)
+			ring("LowerTorso", lt, 0, (lt and lt.size.Y or 0.4) * 0.8, 0.05, darker(c1, 0.1), m)
+			both(function(_, prefix)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.08, 0.14, 0.04, darker(c1, 0.1), m)
+			end)
+		elseif k == "varsity" then
+			collar(c2, 0.14, 0.55, m)
+			ring("LowerTorso", lt, 0, (lt and lt.size.Y or 0.4) * 0.8, 0.05, c1, m)
+			ring("LowerTorso", lt, 0, 0.06, 0.06, c2, m)
+			both(function(_, prefix)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.09, 0.16, 0.04, c1, m)
+				ring(prefix .. "LowerArm", la, -(la and la.size.Y or 1) / 2 + 0.09, 0.04, 0.05, c2, m)
+			end)
+			for i = 0, 3 do
+				piece("UpperTorso", { size = Vector3.new(0.08, 0.08, 0.04), cf = CFrame.new(0, Y * (0.3 - i * 0.2), front - 0.02), color = c2, mesh = "Sphere" })
+			end
+			local letter = top.text or "C"
+			printOn("UpperTorso", false, function(frame)
+				printLabel(frame, letter, UDim2.fromScale(0.08, 0.1), UDim2.fromScale(0.3, 0.38), c2, darker(c1, 0.3))
+			end)
+		elseif k == "puffer" then
+			box("UpperTorso", Vector3.new(X + 0.22, Y * 1.02, Z + 0.22), Vector3.zero, c1, m)
+			for _, f in { 0.3, 0.04, -0.22 } do
+				ring("UpperTorso", ut, Y * f, 0.05, 0.25, darker(c1, 0.25), m)
+			end
+			box("UpperTorso", Vector3.new(0.05, Y, 0.02), Vector3.new(0, 0, front - 0.12), c2, Enum.Material.Metal)
+			collar(c1, 0.32, 0.64, m)
+			ring("LowerTorso", lt, 0, (lt and lt.size.Y or 0.4), 0.22, c1, m)
+			both(function(_, prefix)
+				if ua then
+					ring(prefix .. "UpperArm", ua, 0, ua.size.Y, 0.14, c1, m)
+					ring(prefix .. "UpperArm", ua, -ua.size.Y * 0.1, 0.05, 0.16, darker(c1, 0.25), m)
+				end
+				if la then
+					ring(prefix .. "LowerArm", la, la.size.Y * 0.08, la.size.Y * 0.84, 0.1, c1, m)
+				end
+			end)
+		elseif k == "trackjacket" then
+			collar(c1, 0.2, 0.58, m)
+			box("UpperTorso", Vector3.new(0.05, Y, 0.02), Vector3.new(0, 0, front - 0.012), c2, Enum.Material.SmoothPlastic)
+			both(function(side, prefix)
+				for _, s in { { prefix .. "UpperArm", ua }, { prefix .. "LowerArm", la } } do
+					local sg = s[2] :: Seg?
+					if sg then
+						box(s[1], Vector3.new(0.03, sg.size.Y, sg.size.Z * 0.12), Vector3.new(side * (sg.size.X / 2 + 0.015), 0, -sg.size.Z * 0.1), c2, m)
+						box(s[1], Vector3.new(0.03, sg.size.Y, sg.size.Z * 0.12), Vector3.new(side * (sg.size.X / 2 + 0.015), 0, sg.size.Z * 0.1), c2, m)
+					end
+				end
+			end)
+		end
+	end
+
+	if bottom and bottomV and ul then
+		local k, c1, c2 = bottom.kind, bottomV.c1, bottomV.c2
+		local m = material(bottom.material, FABRIC)
+		local function stripes(segName: string, s: Seg?, side: number, color: Color3, count: number)
+			if not s then
+				return
+			end
+			for i = 1, count do
+				local z = if count == 1 then 0 else (i - 1.5) * s.size.Z * 0.18
+				box(segName, Vector3.new(0.03, s.size.Y, s.size.Z * 0.1), Vector3.new(side * (s.size.X / 2 + 0.015), 0, z), color, m)
+			end
+		end
+		both(function(side, prefix)
+			local up, low = prefix .. "UpperLeg", prefix .. "LowerLeg"
+			if k == "shorts" then
+				ring(up, ul, -ul.size.Y / 2 + 0.06, 0.12, 0.04, darker(c1, 0.12), m)
+			elseif k == "ballshorts" then
+				ring(up, ul, 0, ul.size.Y, 0.06, c1, m)
+				if ll then
+					ring(low, ll, ll.size.Y * 0.4, ll.size.Y * 0.2, 0.06, c1, m)
+					ring(low, ll, ll.size.Y * 0.31, 0.06, 0.07, c2, m)
+				end
+				stripes(up, ul, side, c2, 1)
+			elseif k == "joggers" then
+				if ll then
+					ring(low, ll, -ll.size.Y / 2 + 0.1, 0.2, 0.06, c2, m)
+				end
+			elseif k == "trackpants" then
+				stripes(up, ul, side, c2, 2)
+				stripes(low, ll, side, c2, 2)
+				if ll then
+					ring(low, ll, -ll.size.Y / 2 + 0.06, 0.12, 0.04, darker(c1, 0.2), m)
+				end
+			elseif k == "jeans" then
+				box(up, Vector3.new(ul.size.X * 0.5, ul.size.Y * 0.28, 0.03), Vector3.new(0, ul.size.Y * 0.28, ul.size.Z / 2 + 0.015), darker(c1, 0.12), m)
+				box(up, Vector3.new(0.02, ul.size.Y, 0.04), Vector3.new(side * (ul.size.X / 2 + 0.01), 0, 0), lighter(c1, 0.25), m)
+				if ll then
+					box(low, Vector3.new(0.02, ll.size.Y, 0.04), Vector3.new(side * (ll.size.X / 2 + 0.01), 0, 0), lighter(c1, 0.25), m)
+					ring(low, ll, -ll.size.Y / 2 + 0.07, 0.14, 0.05, lighter(c1, 0.1), m)
+				end
+			elseif k == "cargo" then
+				box(up, Vector3.new(0.07, ul.size.Y * 0.42, ul.size.Z * 0.62), Vector3.new(side * (ul.size.X / 2 + 0.035), -ul.size.Y * 0.12, 0), darker(c1, 0.08), m)
+				box(up, Vector3.new(0.09, 0.08, ul.size.Z * 0.66), Vector3.new(side * (ul.size.X / 2 + 0.045), ul.size.Y * 0.1, 0), darker(c1, 0.22), m)
+				if ll then
+					ring(low, ll, -ll.size.Y / 2 + 0.08, 0.16, 0.06, darker(c1, 0.1), m)
+				end
+			elseif k == "chinos" then
+				if ll then
+					box(low, Vector3.new(0.02, ll.size.Y, 0.02), Vector3.new(0, 0, -ll.size.Z / 2 - 0.01), darker(c1, 0.15), m)
+				end
+			end
+		end)
+	end
+
+	if shoes and shoesV and ft then
+		local k, c1, c2 = shoes.kind, shoesV.c1, shoesV.c2
+		local m = material(shoes.material, FABRIC)
+		local fs = ft.size
+		both(function(side, prefix)
+			local footName, lowName = prefix .. "Foot", prefix .. "LowerLeg"
+			-- sole + rounded toe for everything; then per-style details
+			box(footName, Vector3.new(fs.X + 0.06, 0.14, fs.Z + 0.2), Vector3.new(0, -fs.Y / 2 + 0.02, -0.06), c2, Enum.Material.SmoothPlastic)
+			if k == "slides" then
+				box(footName, Vector3.new(fs.X + 0.07, fs.Y * 0.55, fs.Z * 0.45), Vector3.new(0, 0.02, -fs.Z * 0.12), c1, m)
+				return
+			end
+			piece(footName, { size = Vector3.new(fs.X + 0.02, fs.Y * 0.95, 0.5), cf = CFrame.new(0, -fs.Y * 0.05, -fs.Z / 2), color = if k == "canvas" then c2 else c1, material = m, mesh = "Sphere" })
+			box(footName, Vector3.new(fs.X * 0.4, 0.04, fs.Z * 0.5), Vector3.new(0, fs.Y / 2 + 0.01, -fs.Z * 0.12), if k == "boots" then darker(c1, 0.3) else lighter(c2, 0.3), m)
+			if k == "hightops" and ll then
+				ring(lowName, ll, -ll.size.Y / 2 + ll.size.Y * 0.16, ll.size.Y * 0.32, 0.08, c1, m)
+				ring(lowName, ll, -ll.size.Y / 2 + ll.size.Y * 0.32, 0.05, 0.09, c2, m)
+			elseif k == "boots" and ll then
+				ring(lowName, ll, -ll.size.Y / 2 + ll.size.Y * 0.25, ll.size.Y * 0.5, 0.1, c1, m)
+			elseif k == "runners" then
+				box(footName, Vector3.new(0.03, fs.Y * 0.5, fs.Z * 0.6), Vector3.new(side * (fs.X / 2 + 0.015), 0, 0), c2, m)
+			elseif k == "sneakers" or k == "canvas" then
+				box(footName, Vector3.new(fs.X + 0.03, 0.05, fs.Z + 0.03), Vector3.new(0, -fs.Y / 2 + 0.11, 0), c2, m)
+			end
+		end)
+	end
+
+	-------------------------------------------------------------------------
+	-- 4. Accessories (real Accessory instances)
+	-------------------------------------------------------------------------
+	-- Head geometry is in "head units": x/y/z are fractions of the head size,
+	-- y = 0.5 is the top of the head, z = -0.5 the face.
+	local function H(x: number, y: number, z: number): Vector3
+		return Vector3.new(x * hs.X, y * hs.Y, z * hs.Z)
+	end
+	local function ellipsoid(cx: number, cy: number, cz: number, rx: number, ry: number, rz: number, color: Color3, mat: Enum.Material?): Spec
+		return { size = H(rx * 2, ry * 2, rz * 2), cf = CFrame.new(H(cx, cy, cz)), color = color, material = mat, mesh = "Sphere" }
+	end
+
+	-- Hats grow to sit on top of big hair.
+	local hatScale = if look.hair == "afro" then 1.45 elseif look.hair == "dreads" or look.hair == "curlytop" or look.hair == "braids" then 1.1 else 1
+	local hatLift = (hatScale - 1) * 0.45
+
+	local hat, hatV = Look.worn(look, "hat")
+	if hat and hatV then
+		local c1, c2 = hatV.c1, hatV.c2
+		local m = material(hat.material, FABRIC)
+		local k = hatScale
+		local function HH(x: number, y: number, z: number): Vector3
+			return H(x * k, hatLift + y * k, z * k)
+		end
+		local specs: { Spec } = {}
+		if hat.kind == "cap" or hat.kind == "backcap" then
+			specs = {
+				{ size = HH(1.12, 0.8, 1.2), cf = CFrame.new(HH(0, 0.3, 0.03)), color = c1, material = m, mesh = "Sphere" },
+				{ size = Vector3.new(0.06, hs.X * k * 0.95, hs.Z * k * 0.95), cf = CFrame.new(HH(0, 0.17, -0.48)) * CFrame.Angles(if hat.kind == "cap" then -0.06 else -0.12, 0, 0) * CFrame.Angles(0, 0, math.pi / 2), color = c2, material = m, mesh = "Cylinder" },
+				{ size = HH(0.12, 0.07, 0.12), cf = CFrame.new(HH(0, 0.69, 0.03)), color = c2, material = m, mesh = "Sphere" },
+			}
+			if hat.kind == "backcap" then
+				for _, spec in specs do
+					spec.cf = CFrame.Angles(0, math.pi, 0) * spec.cf
+				end
+			end
+		elseif hat.kind == "beanie" then
+			local tall = if hat.style == "pom" then 1.0 else 0.9
+			specs = {
+				{ size = HH(1.22, tall, 1.24), cf = CFrame.new(HH(0, 0.29, 0.02)), color = c1, material = m, mesh = "Sphere" },
+				vdisc(HH(0, 0.14, 0.02), hs.Y * k * 0.24, hs.X * k * 1.27, hs.Z * k * 1.29, darker(c1, 0.1), m),
+			}
+			if hat.style == "pom" then
+				table.insert(specs, { size = HH(0.34, 0.34, 0.34), cf = CFrame.new(HH(0, 0.29 + tall / 2 + 0.1, 0.02)), color = c2, material = m, mesh = "Sphere" })
+			end
+		elseif hat.kind == "bucket" then
+			specs = {
+				vdisc(HH(0, 0.44, 0.02), hs.Y * k * 0.44, hs.X * k * 1.24, hs.Z * k * 1.26, c1, m),
+				{ size = HH(1.95, 0.16, 1.95), cf = CFrame.new(HH(0, 0.22, 0.02)), color = c1, material = m, mesh = "Sphere" },
+				vdisc(HH(0, 0.31, 0.02), hs.Y * k * 0.08, hs.X * k * 1.26, hs.Z * k * 1.28, c2, m),
+				{ size = HH(1.1, 0.14, 1.12), cf = CFrame.new(HH(0, 0.66, 0.02)), color = c1, material = m, mesh = "Sphere" },
+			}
+		elseif hat.kind == "headband" then
+			specs = {
+				{ size = HH(1.06, 0.17, 1.06), cf = CFrame.new(HH(0, 0.27, 0)), color = c1, material = m },
+				{ size = HH(0.2, 0.08, 0.03), cf = CFrame.new(HH(0, 0.27, -0.545)), color = c2, material = m },
+			}
+		end
+		accessory("hat", Enum.AccessoryType.Hat, "HatAttachment", "Head", specs)
+	end
+
+	local face, faceV = Look.worn(look, "face")
+	if face and faceV then
+		local c1, c2 = faceV.c1, faceV.c2
+		local eye = 0.08
+		local zf = -0.5
+		local specs: { Spec } = {
+			{ size = Vector3.new(hs.X * 0.12, 0.035, 0.035), cf = CFrame.new(H(0, eye + 0.03, zf) + Vector3.new(0, 0, -0.045)), color = c1, material = Enum.Material.Metal },
+		}
+		for _, side in { -1, 1 } do
+			local lensPos = H(side * 0.2, eye, zf) + Vector3.new(0, 0, -0.045)
+			if face.kind == "glasses" then
+				table.insert(specs, fdisc(lensPos, 0.035, hs.Y * 0.27, hs.X * 0.3, c1, Enum.Material.SmoothPlastic))
+				local lens = fdisc(lensPos + Vector3.new(0, 0, -0.02), 0.02, hs.Y * 0.22, hs.X * 0.25, rgb(215, 235, 245), Enum.Material.Glass)
+				lens.transparency = 0.45
+				table.insert(specs, lens)
+			elseif face.style == "aviator" then
+				table.insert(specs, { size = Vector3.new(hs.X * 0.33, hs.Y * 0.27, 0.04), cf = CFrame.new(lensPos + Vector3.new(0, -0.02, -0.01)) * CFrame.Angles(0, 0, side * 0.12), color = c2, material = Enum.Material.Glass, mesh = "Sphere", transparency = 0.1, reflectance = 0.35 })
+				table.insert(specs, { size = Vector3.new(hs.X * 0.3, 0.03, 0.03), cf = CFrame.new(lensPos + Vector3.new(0, hs.Y * 0.12, 0)), color = c1, material = Enum.Material.Metal })
+			elseif face.style == "round" then
+				table.insert(specs, fdisc(lensPos, 0.035, hs.Y * 0.26, hs.X * 0.28, c1, Enum.Material.SmoothPlastic))
+				local lens = fdisc(lensPos + Vector3.new(0, 0, -0.02), 0.02, hs.Y * 0.22, hs.X * 0.24, c2, Enum.Material.Glass)
+				lens.transparency = 0.1
+				lens.reflectance = 0.25
+				table.insert(specs, lens)
+			else
+				table.insert(specs, { size = Vector3.new(hs.X * 0.32, hs.Y * 0.2, 0.04), cf = CFrame.new(lensPos), color = c2, material = Enum.Material.Glass, transparency = 0.1, reflectance = 0.3 })
+			end
+			-- hinge + temple running back along the side of the head
+			table.insert(specs, { size = Vector3.new(hs.X * 0.16, 0.03, 0.03), cf = CFrame.new(H(side * 0.42, eye + 0.03, zf) + Vector3.new(side * 0.02, 0, -0.045)), color = c1, material = Enum.Material.Metal })
+			table.insert(specs, { size = Vector3.new(0.03, 0.03, hs.Z * 0.55), cf = CFrame.new(H(side * 0.5, eye + 0.03, -0.24) + Vector3.new(side * 0.035, 0, 0)), color = c1, material = Enum.Material.Metal })
+		end
+		accessory("face", Enum.AccessoryType.Face, "FaceFrontAttachment", "Head", specs)
+	end
+
+	local ears, earsV = Look.worn(look, "ears")
+	if ears and earsV then
+		local m = material(ears.material, Enum.Material.Metal)
+		local specs: { Spec } = {}
+		for _, side in { -1, 1 } do
+			table.insert(specs, { size = Vector3.new(0.11, 0.11, 0.11) * hs.X, cf = CFrame.new(H(side * 0.5, -0.06, 0.06) + Vector3.new(side * 0.02, 0, 0)), color = earsV.c1, material = m, mesh = "Sphere", reflectance = if ears.style == "iced" then 0.5 else 0.2 })
+		end
+		accessory("ears", Enum.AccessoryType.Face, "FaceCenterAttachment", "Head", specs)
+	end
+
+	local neck, neckV = Look.worn(look, "neck")
+	if neck and neckV and ut then
+		local m = material(neck.material, Enum.Material.Foil)
+		local X, Y, Z = ut.size.X, ut.size.Y, ut.size.Z
+		local iced = neck.style == "iced"
+		local dip = Y * 0.32
+		local bottomY = Y / 2 - 0.04 - dip
+		local specs: { Spec } = {
+			fdisc(Vector3.new(0, bottomY - 0.16, -Z / 2 - 0.05), 0.05, 0.3, 0.3, neckV.c2, m),
+		}
+		specs[1].reflectance = if iced then 0.5 else 0.3
+		local links = 15
+		for i = 0, links - 1 do
+			local t = -1 + 2 * i / (links - 1)
+			table.insert(specs, {
+				size = Vector3.one * (if iced then 0.12 else 0.1),
+				cf = CFrame.new(t * X * 0.2, Y / 2 - 0.04 - (1 - t * t) * dip, -Z / 2 - 0.03),
+				color = if iced then neckV.c2 else neckV.c1,
+				material = m,
+				mesh = "Sphere",
+				reflectance = if iced then 0.5 else 0.3,
+			})
+		end
+		-- the chain going round the back of the neck
+		table.insert(specs, vdisc(Vector3.new(0, Y / 2 + 0.01, 0.05), 0.07, X * 0.44, Z * 0.86, neckV.c1, m))
+		accessory("neck", Enum.AccessoryType.Neck, "NeckAttachment", "UpperTorso", specs)
+	end
+
+	local function wristItem(slot: string, prefix: string, side: number)
+		local item, variant = Look.worn(look, slot)
+		local arm = seg(prefix .. "LowerArm")
+		if not item or not variant or not arm then
+			return
+		end
+		local A = arm.size
+		local y = -A.Y / 2 + 0.16
+		local attach = if r6 then prefix .. "GripAttachment" else prefix .. "WristRigAttachment"
+		local specs: { Spec }
+		if item.kind == "watch" then
+			local m = material(item.material, Enum.Material.Metal)
+			specs = {
+				{ size = Vector3.new(0.06, 0.34, 0.34), cf = CFrame.new(side * (A.X / 2 + 0.05), y, 0), color = variant.c1, material = m, shape = Enum.PartType.Cylinder, reflectance = 0.2 },
+				{ size = Vector3.new(0.02, 0.26, 0.26), cf = CFrame.new(side * (A.X / 2 + 0.085), y, 0), color = variant.c2, material = Enum.Material.SmoothPlastic, shape = Enum.PartType.Cylinder },
+				{ size = Vector3.new(A.X + 0.06, 0.18, A.Z + 0.06), cf = CFrame.new(0, y, 0), color = if item.material == "Metal" then rgb(60, 40, 30) else variant.c1, material = if item.material == "Metal" then FABRIC else m },
+			}
+		else
+			specs = {
+				{ size = Vector3.new(A.X + 0.1, 0.32, A.Z + 0.1), cf = CFrame.new(0, y + 0.04, 0), color = variant.c1, material = FABRIC },
+				{ size = Vector3.new(A.X + 0.11, 0.06, A.Z + 0.11), cf = CFrame.new(0, y + 0.04, 0), color = variant.c2, material = FABRIC },
+			}
+		end
+		accessory(slot, Enum.AccessoryType.Unknown, attach, prefix .. "LowerArm", specs)
+	end
+	wristItem("wrist", "Left", -1)
+	wristItem("band", "Right", 1)
+
+	local bag, bagV = Look.worn(look, "back")
+	if bag and bagV and ut then
+		local c1, c2 = bagV.c1, bagV.c2
+		local m = material(bag.material, FABRIC)
+		local X, Y, Z = ut.size.X, ut.size.Y, ut.size.Z
+		local specs: { Spec }
+		if bag.kind == "sling" then
+			specs = {
+				{ size = Vector3.new(X * 0.5, 0.5, 0.34), cf = CFrame.new(X * 0.1, -Y * 0.32, Z / 2 + 0.17) * CFrame.Angles(0, 0, -0.25), color = c1, material = m },
+				{ size = Vector3.new(X * 0.4, 0.05, 0.36), cf = CFrame.new(X * 0.1, -Y * 0.25, Z / 2 + 0.17) * CFrame.Angles(0, 0, -0.25), color = c2, material = Enum.Material.Metal },
+				{ size = Vector3.new(0.13, Y * 1.3, 0.04), cf = CFrame.new(0, 0, -Z / 2 - 0.025) * CFrame.Angles(0, 0, 0.8), color = c2, material = m },
+				{ size = Vector3.new(0.13, Y * 1.3, 0.04), cf = CFrame.new(0, 0, Z / 2 + 0.025) * CFrame.Angles(0, 0, -0.8), color = c2, material = m },
+			}
+		else
+			specs = {
+				{ size = Vector3.new(X * 0.72, Y * 0.78, 0.5), cf = CFrame.new(0, -Y * 0.05, Z / 2 + 0.26), color = c1, material = m },
+				{ size = Vector3.new(X * 0.72, 0.36, 0.5), cf = CFrame.new(0, Y * 0.34, Z / 2 + 0.26), color = c1, material = m, mesh = "Sphere" },
+				{ size = Vector3.new(X * 0.56, Y * 0.3, 0.16), cf = CFrame.new(0, -Y * 0.2, Z / 2 + 0.58), color = c2, material = m },
+				{ size = Vector3.new(X * 0.56, 0.04, 0.17), cf = CFrame.new(0, -Y * 0.08, Z / 2 + 0.58), color = SILVER, material = Enum.Material.Metal },
+			}
+			for _, side in { -1, 1 } do
+				table.insert(specs, { size = Vector3.new(0.14, Y * 0.9, 0.05), cf = CFrame.new(side * X * 0.22, -Y * 0.02, -Z / 2 - 0.025), color = c2, material = m })
+				table.insert(specs, { size = Vector3.new(0.14, 0.06, Z + 0.1), cf = CFrame.new(side * X * 0.22, Y / 2 + 0.02, 0), color = c2, material = m })
+			end
+		end
+		accessory("back", Enum.AccessoryType.Back, "BodyBackAttachment", "UpperTorso", specs)
+	end
+
+	-------------------------------------------------------------------------
+	-- 5. Barber: hair + facial hair
+	-------------------------------------------------------------------------
+	local hairColor = Look.hairColor(look.hairColor)
+	local HAIR_MAT = Enum.Material.Fabric
+	local hairSpecs: { Spec } = {}
+	local function addHair(spec: Spec)
+		table.insert(hairSpecs, spec)
+	end
+	-- Short base cap: a top dome plus a back piece down to the nape.
+	local function cap(thick: number, color: Color3)
+		addHair(ellipsoid(0, 0.28, 0.02, 0.54 + thick, 0.31 + thick, 0.555 + thick, color, HAIR_MAT))
+		addHair(ellipsoid(0, 0.08, 0.1, 0.525 + thick, 0.3, 0.45 + thick, color, HAIR_MAT))
+	end
+	-- Point on the top dome's surface (lateral fraction s, angle phi from the top).
+	local function domePoint(s: number, phi: number, grow: number): Vector3
+		local w = math.sqrt(math.max(0, 1 - s * s))
+		return Vector3.new(0.56 * s, 0.28 + (0.33 + grow) * w * math.cos(phi), 0.02 + (0.57 + grow) * w * math.sin(phi))
+	end
+
+	local style = look.hair
+	if style == "buzz" then
+		cap(0, hairColor)
+	elseif style == "fade" then
+		addHair(ellipsoid(0, 0.31, 0.02, 0.545, 0.34, 0.56, hairColor, HAIR_MAT))
+		addHair(ellipsoid(0, 0.1, 0.06, 0.515, 0.22, 0.5, hairColor:Lerp(skin, 0.55), HAIR_MAT))
+	elseif style == "waves" then
+		cap(0.005, hairColor)
+		local ridge = lighter(hairColor, 0.22)
+		for _, y in { 0.55, 0.48, 0.41, 0.34 } do
+			local f = math.sqrt(math.max(0, 1 - ((y - 0.28) / 0.315) ^ 2))
+			addHair(vdisc(H(0, y, 0.02), 0.022 * hs.Y, hs.X * (1.09 * f + 0.025), hs.Z * (1.12 * f + 0.025), ridge, HAIR_MAT))
+		end
+	elseif style == "curlytop" then
+		cap(0, hairColor)
+		addHair(ellipsoid(0, 0.52, 0.02, 0.48, 0.24, 0.5, hairColor, HAIR_MAT))
+		local n = 0
+		for _, ringDef in { { 0.28, 9 }, { 0.62, 6 }, { 1.0, 1 } } do
+			local elev, count = ringDef[1], ringDef[2]
+			for i = 1, count do
+				n += 1
+				local theta = (i / count) * math.pi * 2 + elev
+				local r = math.cos(elev * math.pi / 2)
+				local pos = Vector3.new(0.47 * r * math.sin(theta), 0.52 + 0.24 * math.sin(elev * math.pi / 2), 0.02 + 0.49 * r * math.cos(theta))
+				addHair(ellipsoid(pos.X, pos.Y, pos.Z, 0.12, 0.11, 0.12, if n % 2 == 0 then hairColor else lighter(hairColor, 0.08), HAIR_MAT))
+			end
+		end
+	elseif style == "afro" then
+		addHair(ellipsoid(0, 0.52, 0.16, 0.78, 0.62, 0.74, hairColor, HAIR_MAT))
+		for i = 1, 12 do
+			local theta = i / 12 * math.pi * 2
+			local elev = if i % 2 == 0 then 0.35 else 0.75
+			local pos = Vector3.new(0.7 * math.cos(elev) * math.sin(theta), 0.52 + 0.56 * math.sin(elev), 0.16 + 0.66 * math.cos(elev) * math.cos(theta))
+			addHair(ellipsoid(pos.X, pos.Y, pos.Z, 0.17, 0.16, 0.17, lighter(hairColor, 0.05), HAIR_MAT))
+		end
+	elseif style == "braids" then
+		cap(0, darker(hairColor, 0.15))
+		local rows = { -0.62, -0.37, -0.12, 0.12, 0.37, 0.62 }
+		for _, s in rows do
+			local steps = 7
+			for i = 0, steps - 1 do
+				local phi = math.rad(-72 + i * (210 / (steps - 1)))
+				local p = domePoint(s, phi, 0.03)
+				local ahead = domePoint(s, phi + 0.1, 0.03)
+				local world, worldAhead = H(p.X, p.Y, p.Z), H(ahead.X, ahead.Y, ahead.Z)
+				addHair({ size = Vector3.new(0.1 * hs.X, 0.1 * hs.X, 0.2 * hs.Z), cf = CFrame.lookAt(world, worldAhead), color = hairColor, material = HAIR_MAT, mesh = "Sphere" })
+			end
+		end
+	elseif style == "dreads" then
+		cap(0.02, hairColor)
+		for layer = 0, 1 do
+			local count = if layer == 0 then 15 else 11
+			local spread = math.rad(if layer == 0 then 125 else 110)
+			for i = 0, count - 1 do
+				local psi = -spread + 2 * spread * i / (count - 1)
+				local radius = 0.58 + layer * 0.05
+				local length = (0.95 - layer * 0.2) * hs.Y
+				local out = Vector3.new(math.sin(psi), 0, math.cos(psi))
+				local topPoint = H(radius * out.X, 0.22 + layer * 0.12, 0.02 + radius * out.Z)
+				local tilt = 0.14 + layer * 0.06
+				local up = Vector3.new(0, math.cos(tilt), 0) - out * math.sin(tilt)
+				local centre = topPoint - up * (length / 2)
+				local tangent = Vector3.new(math.cos(psi), 0, -math.sin(psi))
+				addHair({
+					size = Vector3.new(0.14 * hs.X, length, 0.14 * hs.X),
+					cf = CFrame.fromMatrix(centre, tangent, up),
+					color = if i % 3 == 0 then lighter(hairColor, 0.06) else hairColor,
+					material = HAIR_MAT,
+					mesh = "Sphere",
+				})
+			end
+		end
+	end
+	if #hairSpecs > 0 then
+		accessory("hair", Enum.AccessoryType.Hair, "HairAttachment", "Head", hairSpecs)
+	end
+
+	local facial = look.facial
+	if facial ~= "" then
+		local beard: { Spec } = {}
+		local function moustache()
+			for _, side in { -1, 1 } do
+				table.insert(beard, { size = H(0.24, 0.085, 0.08), cf = CFrame.new(H(side * 0.1, -0.08, -0.5)) * CFrame.Angles(0, 0, side * 0.22), color = hairColor, material = HAIR_MAT, mesh = "Sphere" })
+			end
+		end
+		moustache()
+		if facial == "goatee" then
+			table.insert(beard, ellipsoid(0, -0.36, -0.46, 0.13, 0.11, 0.07, hairColor, HAIR_MAT))
+			for _, side in { -1, 1 } do
+				table.insert(beard, ellipsoid(side * 0.17, -0.21, -0.485, 0.035, 0.12, 0.03, hairColor, HAIR_MAT))
+			end
+		elseif facial == "beard" then
+			table.insert(beard, ellipsoid(0, -0.36, -0.08, 0.54, 0.27, 0.48, hairColor, HAIR_MAT))
+			for _, side in { -1, 1 } do
+				table.insert(beard, ellipsoid(side * 0.51, -0.05, 0.02, 0.03, 0.22, 0.1, hairColor, HAIR_MAT))
+			end
+		end
+		accessory("facial", Enum.AccessoryType.Face, "FaceFrontAttachment", "Head", beard)
+	end
+end
+
+return ShopsConfig
+]=====])
+put(folder, 'ModuleScript', 'VehiclesConfig', [=====[
+-- CITY GRIND: vehicle catalog, paint/mod options and the shared arcade physics.
+-- Lives in ReplicatedStorage.CityGrind.VehiclesConfig. The server builds the
+-- models (server/Vehicles); whoever simulates a vehicle (the driver's client
+-- while driving, the server while it is empty) runs VehiclesConfig.step on it.
+--
+-- Physics model ("raycast car"): one invisible collider box (the Chassis) plus a
+-- heavy, low ballast part. Each suspension point casts a ray down; a spring and
+-- damper push the chassis up. Drive, braking and sideways grip are forces at the
+-- centre of mass, steering is a yaw torque toward a target turn rate, and an
+-- AlignOrientation keeps the vehicle upright (and leans two-wheelers into turns).
+
+local Config = require(script.Parent:WaitForChild("Config"))
+
+local VehiclesConfig = {}
+
+-- Budget Wheels lot (CityBuilder: lot 90x70 centred here, showroom at z+24).
+VehiclesConfig.LOT_CENTER = Vector3.new(190, 0, 85)
+VehiclesConfig.LOT_GPS = Vector3.new(190, 0, 70)
+VehiclesConfig.LOT_Y = 0.3 -- top of the lot's asphalt
+VehiclesConfig.SHOP_RANGE = 75 -- buying is only allowed this close to the lot
+VehiclesConfig.MODS_POS = Vector3.new(157, 0.3, 108) -- Paint & Mods bay on the lot
+VehiclesConfig.MODS_RANGE = 30
+
+VehiclesConfig.SPAWN_COOLDOWN = 8
+VehiclesConfig.MOD_PRICES = { paint = 150, rim = 250, glow = 400 }
+
+-- Where vehicles may be spawned (inside the city ground, outside interiors).
+VehiclesConfig.CITY_MIN = Vector3.new(-292, -20, -222)
+VehiclesConfig.CITY_MAX = Vector3.new(292, 60, 222)
+
+-- Speed shown on the speedometer = studs/s * this.
+VehiclesConfig.MPH_PER_STUD = 1.1
+
+VehiclesConfig.PAINTS = {
+	{ name = "Arctic White", color = Color3.fromRGB(235, 236, 240) },
+	{ name = "Midnight Black", color = Color3.fromRGB(28, 28, 32) },
+	{ name = "Racing Red", color = Color3.fromRGB(200, 30, 35) },
+	{ name = "Ocean Blue", color = Color3.fromRGB(30, 90, 200) },
+	{ name = "Lime Green", color = Color3.fromRGB(120, 210, 50) },
+	{ name = "Sunset Orange", color = Color3.fromRGB(255, 130, 30) },
+	{ name = "Royal Purple", color = Color3.fromRGB(110, 50, 170) },
+	{ name = "Gunmetal", color = Color3.fromRGB(95, 100, 110) },
+}
+
+VehiclesConfig.RIMS = {
+	{ name = "Chrome", color = Color3.fromRGB(200, 205, 215), material = Enum.Material.Metal },
+	{ name = "Matte Black", color = Color3.fromRGB(25, 25, 28), material = Enum.Material.SmoothPlastic },
+	{ name = "Gold", color = Color3.fromRGB(230, 180, 50), material = Enum.Material.Metal },
+	{ name = "White", color = Color3.fromRGB(240, 240, 240), material = Enum.Material.SmoothPlastic },
+	{ name = "Red", color = Color3.fromRGB(210, 40, 40), material = Enum.Material.SmoothPlastic },
+	{ name = "Blue", color = Color3.fromRGB(40, 120, 230), material = Enum.Material.SmoothPlastic },
+}
+
+-- Index 1 is "no underglow".
+VehiclesConfig.GLOWS = {
+	{ name = "None", color = Color3.fromRGB(40, 40, 45) },
+	{ name = "Ice Blue", color = Color3.fromRGB(80, 200, 255) },
+	{ name = "Hot Pink", color = Color3.fromRGB(255, 60, 200) },
+	{ name = "Toxic Green", color = Color3.fromRGB(80, 255, 90) },
+	{ name = "Fire Red", color = Color3.fromRGB(255, 50, 40) },
+	{ name = "Violet", color = Color3.fromRGB(150, 70, 255) },
+	{ name = "Pure White", color = Color3.fromRGB(255, 255, 255) },
+}
+
+export type Spec = {
+	id: string,
+	name: string,
+	kind: string, -- "Bike" | "Scooter" | "Motorcycle" | "Car" (Player attribute "Driving")
+	class: string,
+	style: string, -- body builder used by the server
+	blurb: string,
+	price: number,
+	level: number,
+	rep: number,
+	topSpeed: number, -- studs/s
+	reverseSpeed: number,
+	accel: number, -- studs/s^2 from standstill
+	brake: number, -- studs/s^2
+	handling: number, -- max yaw rate, rad/s
+	grip: number, -- max sideways acceleration, studs/s^2
+	gripRate: number, -- how fast sideways sliding is cancelled (1/s)
+	steerAngle: number, -- radians at low speed
+	lean: number, -- two-wheeler lean into turns (radians), 0 for cars
+	seats: number, -- total seats including the driver
+	mass: number, -- ballast mass
+	defaultPaint: number,
+	-- geometry (studs). Ground-space: y = 0 is the road, -z is the front.
+	width: number,
+	length: number,
+	height: number, -- top of the collider box
+	clearance: number, -- bottom of the collider box
+	wheelRadius: number,
+	wheelWidth: number,
+	wheelbase: number,
+	track: number, -- distance between left/right suspension points
+	travel: number, -- suspension travel
+	sag: number, -- compression at rest
+	twoWheel: boolean,
+}
+
+local function spec(s: { [string]: any }): Spec
+	s.reverseSpeed = s.reverseSpeed or math.max(14, s.topSpeed * 0.3)
+	s.level = s.level or 1
+	s.rep = s.rep or 0
+	s.lean = s.lean or 0
+	s.clearance = s.clearance or 1
+	s.twoWheel = s.twoWheel or false
+	return s :: any
+end
+
+VehiclesConfig.CATALOG = {
+	spec({
+		id = "Bike", name = "Pedal Bike", kind = "Bike", class = "Bicycle", style = "bicycle",
+		blurb = "Cheap, quiet and fits anywhere. Beats walking.",
+		price = 350, topSpeed = 30, accel = 16, brake = 40, handling = 2.4, grip = 75, gripRate = 9,
+		steerAngle = 0.7, lean = 0.28, seats = 1, mass = 55, defaultPaint = 5,
+		width = 1.2, length = 5.4, height = 3.0, clearance = 1.0, wheelRadius = 1.3, wheelWidth = 0.22,
+		wheelbase = 4.0, track = 0.9, travel = 0.6, sag = 0.25, twoWheel = true,
+	}),
+	spec({
+		id = "Scooter", name = "City Scooter", kind = "Scooter", class = "Scooter", style = "scooter",
+		blurb = "Zippy little scooter with room for a friend.",
+		price = 900, topSpeed = 45, accel = 22, brake = 45, handling = 2.3, grip = 85, gripRate = 9,
+		steerAngle = 0.65, lean = 0.26, seats = 2, mass = 70, defaultPaint = 4,
+		width = 1.6, length = 5.6, height = 3.0, clearance = 0.9, wheelRadius = 0.9, wheelWidth = 0.5,
+		wheelbase = 4.0, track = 1.0, travel = 0.7, sag = 0.3, twoWheel = true,
+	}),
+	spec({
+		id = "Economy", name = "Volt Hatch", kind = "Car", class = "Economy", style = "hatch",
+		blurb = "Reliable four-seat hatchback. Your first real car.",
+		price = 4500, topSpeed = 70, accel = 26, brake = 55, handling = 1.5, grip = 95, gripRate = 7,
+		steerAngle = 0.6, seats = 4, mass = 220, defaultPaint = 1,
+		width = 6.4, length = 13, height = 6.0, clearance = 1.0, wheelRadius = 1.25, wheelWidth = 1.0,
+		wheelbase = 8.4, track = 5.6, travel = 1.0, sag = 0.45,
+	}),
+	spec({
+		id = "Motorcycle", name = "Viper 600", kind = "Motorcycle", class = "Motorcycle", style = "motorcycle",
+		blurb = "Sport bike. Quick off the line and leans into corners.",
+		price = 9000, topSpeed = 85, accel = 42, brake = 62, handling = 2.0, grip = 105, gripRate = 8,
+		steerAngle = 0.55, lean = 0.34, seats = 2, mass = 110, defaultPaint = 3,
+		width = 1.8, length = 7.2, height = 3.2, clearance = 1.0, wheelRadius = 1.25, wheelWidth = 0.6,
+		wheelbase = 5.4, track = 1.0, travel = 0.8, sag = 0.33, twoWheel = true,
+	}),
+	spec({
+		id = "SUV", name = "Summit SUV", kind = "Car", class = "SUV", style = "suv",
+		blurb = "Big, tall and roomy. Seats five.",
+		price = 18000, topSpeed = 75, accel = 30, brake = 55, handling = 1.3, grip = 90, gripRate = 6.5,
+		steerAngle = 0.58, seats = 5, mass = 300, defaultPaint = 8,
+		width = 7.0, length = 14.5, height = 7.4, clearance = 1.3, wheelRadius = 1.5, wheelWidth = 1.1,
+		wheelbase = 9.4, track = 6.0, travel = 1.2, sag = 0.5,
+	}),
+	spec({
+		id = "Sports", name = "Stinger GT", kind = "Car", class = "Sports", style = "coupe",
+		blurb = "Low, loud, fast. Turns heads on every block.",
+		price = 60000, topSpeed = 110, accel = 50, brake = 75, handling = 1.8, grip = 125, gripRate = 8,
+		steerAngle = 0.55, seats = 2, mass = 230, defaultPaint = 3,
+		width = 6.6, length = 13.6, height = 5.4, clearance = 1.0, wheelRadius = 1.25, wheelWidth = 1.1,
+		wheelbase = 8.6, track = 5.8, travel = 0.8, sag = 0.35,
+	}),
+	spec({
+		id = "Supercar", name = "Apex X1", kind = "Car", class = "Supercar", style = "supercar",
+		blurb = "Open-top hypercar. Only City Famous drivers get the keys.",
+		price = 350000, level = 30, rep = 2500, topSpeed = 140, accel = 65, brake = 90, handling = 2.0,
+		grip = 140, gripRate = 9, steerAngle = 0.52, seats = 2, mass = 240, defaultPaint = 6,
+		width = 7.0, length = 14, height = 4.6, clearance = 0.95, wheelRadius = 1.3, wheelWidth = 1.3,
+		wheelbase = 9.0, track = 6.0, travel = 0.7, sag = 0.3,
+	}),
+} :: { Spec }
+
+VehiclesConfig.byId = {} :: { [string]: Spec }
+for i, s in VehiclesConfig.CATALOG do
+	VehiclesConfig.byId[s.id] = s
+	;(s :: any).order = i
+end
+
+-- Bars on the purchase panel are a fraction of these.
+VehiclesConfig.STAT_MAX = { topSpeed = 140, accel = 65, handling = 2.4, brake = 90, grip = 140 }
+
+function VehiclesConfig.groundOffset(s: Spec): number
+	return (s.height + s.clearance) / 2 -- chassis centre height above the road
+end
+
+function VehiclesConfig.requirementText(s: Spec): string?
+	if s.level <= 1 and s.rep <= 0 then
+		return nil
+	end
+	local parts = {}
+	if s.level > 1 then
+		table.insert(parts, "Level " .. s.level)
+	end
+	if s.rep > 0 then
+		local rankName = s.rep .. " rep"
+		for _, rank in Config.REPUTATION_RANKS do
+			if rank.min == s.rep then
+				rankName = rank.name .. " (" .. s.rep .. " rep)"
+			end
+		end
+		table.insert(parts, rankName)
+	end
+	return table.concat(parts, " + ")
+end
+
+---------------------------------------------------------------------------
+-- Physics
+---------------------------------------------------------------------------
+local DAMPING_RATIO = 0.62
+local YAW_GAIN = 9 -- 1/s, how hard yaw chases the target turn rate
+local STEER_RATE = 4.5 -- steering input smoothing (full lock in ~0.22 s)
+local COAST_DECEL = 3 -- studs/s^2 rolling resistance with a driver aboard
+local PARKED_DECEL = 30 -- studs/s^2 when nobody is driving (handbrake)
+-- Only part of the springs' pitch/roll torque is applied; the AlignOrientation
+-- (solved inside the physics step, so it is stable at any frame rate) does the
+-- rest. Full spring torque on a light, narrow body can oscillate at low FPS.
+local SUSPENSION_TORQUE_SCALE = 0.35
+local EDGE_OFFSET = 0.7 -- extra rays at +-0.7 * radius ahead/behind each wheel
+local EDGE_CORRECTION = 1 - math.sqrt(1 - EDGE_OFFSET * EDGE_OFFSET)
+
+export type Sim = {
+	model: Model,
+	chassis: BasePart,
+	spec: Spec,
+	force: VectorForce,
+	torque: Torque,
+	align: AlignOrientation,
+	susp: { Attachment },
+	params: RaycastParams,
+	yawFactor: number,
+	steer: number,
+	grounded: number,
+	flipTime: number,
+}
+
+-- Distance from `origin` straight down (along -up) to where the wheel would touch,
+-- or nil when nothing is within `len`. Extra rays just ahead and behind the wheel
+-- let it "see" a curb edge early so it rolls up instead of slamming into it.
+function VehiclesConfig.groundDistance(origin: Vector3, up: Vector3, look: Vector3, radius: number, len: number, params: RaycastParams, edgeRays: boolean): number?
+	local down = -up * len
+	local best: number? = nil
+	local hit = workspace:Raycast(origin, down, params)
+	if hit then
+		best = hit.Distance
+	end
+	if edgeRays then
+		local correction = radius * EDGE_CORRECTION
+		for _, dir in { 1, -1 } do
+			local edgeHit = workspace:Raycast(origin + look * (dir * EDGE_OFFSET * radius), down, params)
+			if edgeHit then
+				local d = edgeHit.Distance + correction
+				if d <= len and (best == nil or d < best) then
+					best = d
+				end
+			end
+		end
+	end
+	return best
+end
+
+function VehiclesConfig.newSim(model: Model): Sim?
+	local chassis = model.PrimaryPart
+	local s = VehiclesConfig.byId[model:GetAttribute("VehicleId") or ""]
+	if not chassis or not s then
+		return nil
+	end
+	local force = chassis:FindFirstChild("DriveForce")
+	local torque = chassis:FindFirstChild("DriveTorque")
+	local align = chassis:FindFirstChild("Upright")
+	if not (force and torque and align) then
+		return nil
+	end
+	local susp = {}
+	for _, child in chassis:GetChildren() do
+		if child:IsA("Attachment") and child.Name == "Susp" then
+			table.insert(susp, child)
+		end
+	end
+	if #susp == 0 then
+		return nil
+	end
+	-- selene: allow(undefined_variable)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { model }
+	params.RespectCanCollide = true
+	params.IgnoreWater = true
+	local ballast = model:FindFirstChild("Ballast")
+	local bsize = if ballast and ballast:IsA("BasePart") then ballast.Size else chassis.Size
+	return {
+		model = model,
+		chassis = chassis,
+		spec = s,
+		force = force :: VectorForce,
+		torque = torque :: Torque,
+		align = align :: AlignOrientation,
+		susp = susp,
+		params = params,
+		-- yaw inertia per unit mass of the (box-shaped) ballast
+		yawFactor = (bsize.X * bsize.X + bsize.Z * bsize.Z) / 12,
+		steer = 0,
+		grounded = 0,
+		flipTime = 0,
+	}
+end
+
+-- Rays ignore the vehicle itself and every character (`ignore`).
+function VehiclesConfig.setIgnore(sim: Sim, ignore: { Instance })
+	local list = table.clone(ignore)
+	table.insert(list, sim.model)
+	sim.params.FilterDescendantsInstances = list
+end
+
+-- A CFrame whose X axis points along `x` (AlignOrientation's primary axis).
+local function axisCFrame(x: Vector3): CFrame
+	local ref = if math.abs(x.Y) < 0.9 then Vector3.yAxis else Vector3.zAxis
+	local y = ref - x * ref:Dot(x)
+	return CFrame.fromMatrix(Vector3.zero, x, y.Unit)
+end
+VehiclesConfig.axisCFrame = axisCFrame
+
+-- One physics tick. throttle/steer are -1..1 (VehicleSeat.ThrottleFloat/SteerFloat).
+function VehiclesConfig.step(sim: Sim, dt: number, throttle: number, steer: number, hasDriver: boolean)
+	dt = math.clamp(dt, 1 / 240, 1 / 15)
+	local s = sim.spec
+	local chassis = sim.chassis
+	local cf = chassis.CFrame
+	local up, look, right = cf.UpVector, cf.LookVector, cf.RightVector
+	local mass = chassis.AssemblyMass
+	local com = chassis.AssemblyCenterOfMass
+	local vel = chassis.AssemblyLinearVelocity
+	local angVel = chassis.AssemblyAngularVelocity
+	local g = workspace.Gravity
+
+	local n = #sim.susp
+	local travel, sag, radius = s.travel, s.sag, s.wheelRadius
+	local rayLen = travel + radius
+	local k = g / (n * sag) -- spring per unit mass: rest compression == sag
+	local c = 2 * DAMPING_RATIO * math.sqrt(g / sag) / n
+
+	local force = Vector3.zero
+	local torque = Vector3.zero
+	local grounded = 0
+	for _, att in sim.susp do
+		local origin = att.WorldPosition
+		local dist = VehiclesConfig.groundDistance(origin, up, look, radius, rayLen, sim.params, true)
+		if dist then
+			grounded += 1
+			local compression = rayLen - dist
+			local pointVel = vel + angVel:Cross(origin - com)
+			local f = k * compression - c * pointVel:Dot(up)
+			if compression > travel then
+				f += k * 4 * (compression - travel) -- bump stop
+			end
+			if f > 0 then
+				local fv = up * (f * mass)
+				force += fv
+				torque += (origin - com):Cross(fv) * SUSPENSION_TORQUE_SCALE
+			end
+		end
+	end
+	sim.grounded = grounded
+
+	-- smooth digital steering so keyboard players don't twitch
+	sim.steer += math.clamp(steer - sim.steer, -dt * STEER_RATE, dt * STEER_RATE)
+
+	local vf = vel:Dot(look)
+	local vr = vel:Dot(right)
+	local speed = math.abs(vf)
+	local yawRate = angVel:Dot(up)
+	local inertia = mass * sim.yawFactor
+
+	if grounded > 0 then
+		local gf = grounded / n
+		local top = s.topSpeed
+		local a
+		if throttle > 0.05 then
+			if vf < -0.5 then
+				a = math.min(s.brake * throttle, -vf / dt) -- braking out of reverse
+			else
+				a = s.accel * throttle * math.max(0, 1 - (vf / top) ^ 2)
+			end
+		elseif throttle < -0.05 then
+			if vf > 0.5 then
+				a = -math.min(s.brake * -throttle, vf / dt)
+			else
+				local back = math.max(-vf, 0) / s.reverseSpeed
+				a = -s.accel * 0.6 * -throttle * math.max(0, 1 - back * back)
+			end
+		else
+			local decel = if hasDriver then COAST_DECEL + 0.0025 * vf * vf else PARKED_DECEL
+			a = -math.sign(vf) * math.min(decel, speed / dt)
+		end
+		if vf > top then
+			a -= (vf - top) * 1.5
+		elseif vf < -s.reverseSpeed - 2 then
+			a += (-vf - s.reverseSpeed) * 1.5
+		end
+
+		-- tyres cancel sideways sliding up to the grip limit (lets you drift at speed)
+		local slideLimit = math.abs(vr) / dt
+		local aLat = math.clamp(-vr * s.gripRate, -s.grip, s.grip)
+		aLat = math.clamp(aLat, -slideLimit, slideLimit)
+		force += (look * a + right * aLat) * (mass * gf)
+
+		-- steering: chase a bicycle-model yaw rate, softened at speed
+		local steerAngle = s.steerAngle * (1 - 0.55 * math.min(speed / top, 1))
+		local targetYaw = -sim.steer * vf * math.tan(steerAngle) / s.wheelbase
+		targetYaw = math.clamp(targetYaw, -s.handling, s.handling)
+		torque += up * ((targetYaw - yawRate) * YAW_GAIN * inertia * gf)
+	else
+		torque += up * (-yawRate * 1.5 * inertia) -- a little air damping
+	end
+
+	-- stay upright; two-wheelers lean into the turn
+	local targetUp = Vector3.yAxis
+	if s.lean > 0 then
+		local flatRight = Vector3.new(right.X, 0, right.Z)
+		if flatRight.Magnitude > 0.1 then
+			local lean = sim.steer * s.lean * math.clamp(vf / 18, 0, 1)
+			targetUp = Vector3.yAxis * math.cos(lean) + flatRight.Unit * math.sin(lean)
+		end
+	end
+	sim.align.CFrame = axisCFrame(targetUp)
+
+	-- flipped and stuck: put it back on its wheels
+	if up.Y < 0.25 then
+		sim.flipTime += dt
+	else
+		sim.flipTime = 0
+	end
+	if sim.flipTime > 1.5 and vel.Magnitude < 15 then
+		sim.flipTime = 0
+		local flat = Vector3.new(look.X, 0, look.Z)
+		if flat.Magnitude < 0.1 then
+			flat = Vector3.new(up.X, 0, up.Z)
+		end
+		if flat.Magnitude < 0.1 then
+			flat = -Vector3.zAxis
+		end
+		local pos = chassis.Position + Vector3.new(0, 3, 0)
+		chassis.CFrame = CFrame.lookAt(pos, pos + flat.Unit)
+		chassis.AssemblyLinearVelocity = Vector3.zero
+		chassis.AssemblyAngularVelocity = Vector3.zero
+		force = Vector3.zero
+		torque = Vector3.zero
+	end
+
+	sim.force.Force = force
+	sim.torque.Torque = torque
+end
+
+-- Zeroes the drive forces (used when a simulator hands the vehicle off).
+function VehiclesConfig.idle(sim: Sim)
+	sim.force.Force = Vector3.zero
+	sim.torque.Torque = Vector3.zero
+	sim.align.CFrame = axisCFrame(Vector3.yAxis)
+end
+
+return VehiclesConfig
 ]=====])
 local server = put(SSS, 'Script', 'CityGrindServer', [=====[
 -- CITY GRIND: server entry point (ServerScriptService.CityGrindServer).
@@ -478,6 +3418,1180 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 end)
+]=====])
+put(server, 'ModuleScript', 'Apartments', [=====[
+-- CITY GRIND: apartments, real estate and furniture (spec sections 48, 73, 77, 110).
+--
+-- Every player owns a Studio at Maple Court from the start. Bigger homes are
+-- bought from Maple Realty (kiosk outside the building, or the phone's Home app).
+-- A player's home is built on demand in its own slot high above the city
+-- (Places.apartmentSlot) the first time they walk through the front door, and
+-- destroyed when they leave the server.
+--
+-- Furniture is bought into an inventory and placed on a 1-stud grid. The
+-- client only proposes (item, x, z, floor, rotation); this module checks
+-- ownership, counts, bounds, blocked fixtures and overlaps with
+-- ApartmentsConfig's own size table before anything is saved or built.
+--
+-- Remotes:  ApartmentsRequest (RemoteFunction, client -> server)
+--           ApartmentsEvent   (RemoteEvent, server -> client)
+-- Player attributes: HomeTier (active home's display name),
+--           HomeUnit (UserId of the unit's owner while inside a unit, else 0)
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Cfg = require(shared:WaitForChild("ApartmentsConfig"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Places = require(script.Parent:WaitForChild("Places"))
+local Net = require(script.Parent:WaitForChild("Net"))
+
+local Apartments = {}
+
+local INTERIOR = "Apartment"
+local MAX_SLOTS = 60
+
+---------------------------------------------------------------------------
+-- Saved data
+---------------------------------------------------------------------------
+PlayerData.registerSection("apartments", function()
+	return {
+		ownedTiers = { Studio = true },
+		activeTier = "Studio",
+		inventory = { basic_bed = 1, floor_lamp = 1 },
+		-- placements[tierId] = { { u = uid, id = itemId, x, z, f = floor, r = degrees } }
+		placements = {
+			Studio = {
+				{ u = 1, id = "basic_bed", x = 10, z = -7, f = 1, r = 0 },
+				{ u = 2, id = "floor_lamp", x = 6, z = -11, f = 1, r = 0 },
+			},
+		},
+		nextUid = 3,
+		onboarded = false,
+	}
+end)
+
+---------------------------------------------------------------------------
+-- Runtime state
+---------------------------------------------------------------------------
+type Unit = {
+	owner: Player,
+	slot: number,
+	origin: Vector3,
+	tierId: string,
+	model: Model?,
+	furniture: Folder?,
+	pieces: { [number]: Model },
+	allowedGuests: { [number]: boolean }, -- UserIds the owner lets in (Phase 4 invites)
+}
+
+local units: { [Player]: Unit } = {}
+local slotOwner: { [number]: Player } = {}
+local inside: { [Player]: Unit } = {} -- which unit each player is standing in
+
+local root: Folder
+local unitsFolder: Folder
+local Event: RemoteEvent
+local StaminaRefill: RemoteEvent
+
+local function data(player: Player): any
+	return PlayerData.section(player, "apartments")
+end
+
+local function placementsFor(sec: any, tierId: string): { any }
+	local list = sec.placements[tierId]
+	if type(list) ~= "table" then
+		list = {}
+		sec.placements[tierId] = list
+	end
+	return list
+end
+
+local function placedCount(list: { any }, itemId: string): number
+	local n = 0
+	for _, p in list do
+		if p.id == itemId then
+			n += 1
+		end
+	end
+	return n
+end
+
+-- Repairs a save: unknown tiers/items dropped, impossible placements removed.
+local function sanitize(sec: any)
+	if type(sec.ownedTiers) ~= "table" then
+		sec.ownedTiers = {}
+	end
+	for id in sec.ownedTiers do
+		if not Cfg.TIER_BY_ID[id] then
+			sec.ownedTiers[id] = nil
+		end
+	end
+	sec.ownedTiers.Studio = true
+	if type(sec.activeTier) ~= "string" or not sec.ownedTiers[sec.activeTier] then
+		sec.activeTier = "Studio"
+	end
+	if type(sec.inventory) ~= "table" then
+		sec.inventory = {}
+	end
+	for id, count in sec.inventory do
+		if not Cfg.ITEM_BY_ID[id] or type(count) ~= "number" or count < 0 then
+			sec.inventory[id] = nil
+		else
+			sec.inventory[id] = math.min(math.floor(count), Cfg.MAX_PER_ITEM)
+		end
+	end
+	if type(sec.placements) ~= "table" then
+		sec.placements = {}
+	end
+	if type(sec.nextUid) ~= "number" then
+		sec.nextUid = 1
+	end
+	for tierId, list in sec.placements do
+		local tier = Cfg.TIER_BY_ID[tierId]
+		if not tier or type(list) ~= "table" then
+			sec.placements[tierId] = nil
+			continue
+		end
+		local kept = {}
+		local seen = {}
+		for _, p in list do
+			if type(p) == "table" and type(p.u) == "number" and not seen[p.u] and #kept < tier.maxItems then
+				local owned = sec.inventory[p.id] or 0
+				local ok = Cfg.validatePlacement(tierId, p.id, p.x, p.z, p.f, p.r, kept, nil)
+				if ok and placedCount(kept, p.id) < owned then
+					seen[p.u] = true
+					table.insert(kept, { u = p.u, id = p.id, x = p.x, z = p.z, f = p.f, r = p.r })
+					sec.nextUid = math.max(sec.nextUid, p.u + 1)
+				end
+			end
+		end
+		sec.placements[tierId] = kept
+	end
+	sec.onboarded = sec.onboarded == true
+end
+
+-- What the client is allowed to see about its home.
+local function stateFor(player: Player): any
+	local sec = data(player)
+	if not sec then
+		return nil
+	end
+	local placed = {}
+	for _, p in placementsFor(sec, sec.activeTier) do
+		table.insert(placed, { u = p.u, id = p.id, x = p.x, z = p.z, f = p.f, r = p.r })
+	end
+	return {
+		ownedTiers = table.clone(sec.ownedTiers),
+		activeTier = sec.activeTier,
+		inventory = table.clone(sec.inventory),
+		placements = placed,
+		onboarded = sec.onboarded,
+	}
+end
+
+local function pushState(player: Player)
+	local state = stateFor(player)
+	if state and player.Parent then
+		Event:FireClient(player, "State", state)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Guests (owner-only for now; Phase 4 fills allowedGuests through invites)
+---------------------------------------------------------------------------
+function Apartments.canEnterUnit(visitor: Player, unit: Unit): boolean
+	return visitor == unit.owner or unit.allowedGuests[visitor.UserId] == true
+end
+
+function Apartments.setGuestAllowed(owner: Player, userId: number, allowed: boolean)
+	local unit = units[owner]
+	if unit then
+		unit.allowedGuests[userId] = if allowed then true else nil
+	end
+end
+
+local function setInside(player: Player, unit: Unit?)
+	inside[player] = unit
+	player:SetAttribute("HomeUnit", if unit then unit.owner.UserId else 0)
+end
+
+local function sendOutside(player: Player)
+	setInside(player, nil)
+	if player:GetAttribute("Interior") == INTERIOR then
+		Places.leave(player, Cfg.OUTSIDE)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Room shells
+---------------------------------------------------------------------------
+local part = Cfg.part
+local V = Vector3.new
+local rgb = Color3.fromRGB
+
+local function ceilingLight(parent: Instance, pos: Vector3, range: number)
+	local lamp = part(parent, "CeilingLight", V(3, 0.2, 3), CFrame.new(pos), rgb(255, 250, 235), Enum.Material.Neon, { CanCollide = false })
+	local light = Instance.new("PointLight")
+	light.Range = range
+	light.Brightness = 1.1
+	light.Color = rgb(255, 244, 225)
+	light.Parent = lamp
+end
+
+-- One wall running from (x0,z0) to (x1,z1) (axis aligned), y from y0 to y1.
+-- mode: solid | accent | window (sill + window band) | tall (floor-to-ceiling
+-- window with a low sill) | glass (a full glass wall with thin mullions).
+local function wall(parent: Instance, O: Vector3, x0: number, z0: number, x1: number, z1: number, y0: number, y1: number, mode: string, style: any)
+	local alongX = math.abs(x1 - x0) > math.abs(z1 - z0)
+	local length = if alongX then math.abs(x1 - x0) else math.abs(z1 - z0)
+	local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+	local function slab(name: string, from: number, to: number, color: Color3, material: Enum.Material, props: any?)
+		local h = to - from
+		local size = if alongX then V(length, h, 1) else V(1, h, length)
+		return part(parent, name, size, CFrame.new(O + V(cx, from + h / 2, cz)), color, material, props)
+	end
+	local wallColor, wallMat = style.wallColor, style.wallMat
+	if mode == "accent" then
+		slab("Wall", y0, y1, style.accentColor, style.accentMat)
+		return
+	elseif mode == "solid" then
+		slab("Wall", y0, y1, wallColor, wallMat)
+		return
+	end
+	local sill, top
+	if mode == "window" then
+		sill, top = y0 + 3.5, y1 - 2.5
+	elseif mode == "tall" then
+		sill, top = y0 + 1, y1 - 1.5
+	else
+		sill, top = y0 + 0.4, y1 - 0.4
+	end
+	slab("Wall", y0, sill, wallColor, wallMat)
+	slab("Wall", top, y1, wallColor, wallMat)
+	slab("Window", sill, top, rgb(170, 210, 240), Enum.Material.Glass, { Transparency = if mode == "glass" then 0.75 else 0.55 })
+	-- mullions
+	local spacing = if mode == "glass" then 12 else 8
+	local count = math.floor(length / spacing)
+	for i = 1, count - 1 do
+		local t = -length / 2 + i * length / count
+		local pos = if alongX then V(cx + t, (sill + top) / 2, cz) else V(cx, (sill + top) / 2, cz + t)
+		local size = if alongX then V(0.4, top - sill, 1.1) else V(1.1, top - sill, 0.4)
+		part(parent, "Mullion", size, CFrame.new(O + pos), if mode == "glass" then rgb(30, 30, 34) else rgb(240, 240, 240), Enum.Material.Metal)
+	end
+end
+
+local function floorPart(parent: Instance, O: Vector3, x0: number, z0: number, x1: number, z1: number, topY: number, f: number, color: Color3, material: Enum.Material, thickness: number?)
+	local t = thickness or 1
+	local p = part(parent, "Floor", V(x1 - x0, t, z1 - z0), CFrame.new(O + V((x0 + x1) / 2, topY - t / 2, (z0 + z1) / 2)), color, material)
+	p:SetAttribute("FloorIndex", f)
+	return p
+end
+
+-- Built-in fixtures, one per blocked rect kind.
+local function fixture(parent: Instance, O: Vector3, tier: any, rect: any)
+	local style = tier.style
+	local y = Cfg.floorY(tier, rect.f) or 0
+	local x0, z0, x1, z1 = rect.x0, rect.z0, rect.x1, rect.z1
+	local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+	local w, d = x1 - x0, z1 - z0
+	local function at(x: number, py: number, z: number): CFrame
+		return CFrame.new(O + V(x, y + py, z))
+	end
+	local kind = rect.kind
+	if kind == "wall" then
+		part(parent, "Partition", V(w, tier.height, d), at(cx, tier.height / 2, cz), style.wallColor, style.wallMat)
+	elseif kind == "kitchen" or kind == "island" then
+		local overhang = if kind == "island" then 0.4 else 0
+		part(parent, "Cabinets", V(w - 0.2, 3.2, d - 0.2), at(cx, 1.6, cz), style.cabinet, Enum.Material.Wood)
+		part(parent, "Countertop", V(w + overhang, 0.3, d + overhang), at(cx, 3.35, cz), style.counter, Enum.Material.Marble)
+		local alongX = w >= d
+		local function along(t: number): (number, number)
+			if alongX then
+				return cx + t * w, cz
+			end
+			return cx, cz + t * d
+		end
+		local sx, sz = along(-0.25)
+		part(parent, "Sink", V(if alongX then 2.2 else 1.4, 0.1, if alongX then 1.4 else 2.2), at(sx, 3.55, sz), rgb(170, 170, 178), Enum.Material.Metal)
+		local fx, fz = along(-0.25)
+		part(parent, "Faucet", V(0.2, 1, 0.2), at(fx + (if alongX then 0 else -0.6), 4, fz + (if alongX then -0.6 else 0)), rgb(170, 170, 178), Enum.Material.Metal)
+		local hx, hz = along(0.22)
+		part(parent, "Cooktop", V(if alongX then 2.6 else 1.8, 0.08, if alongX then 1.8 else 2.6), at(hx, 3.54, hz), rgb(20, 20, 22), Enum.Material.Glass)
+		if kind == "island" then
+			for _, t in { -0.3, 0, 0.3 } do
+				local px, pz = along(t)
+				part(parent, "PendantCord", V(0.08, 4, 0.08), at(px, tier.height - 2, pz), rgb(30, 30, 30), Enum.Material.Metal, { CanCollide = false })
+				local bulb = part(parent, "Pendant", V(1, 1, 1), at(px, tier.height - 4.2, pz), rgb(255, 225, 170), Enum.Material.Neon, { Shape = Enum.PartType.Ball, CanCollide = false })
+				local light = Instance.new("PointLight")
+				light.Range = 12
+				light.Brightness = 0.8
+				light.Color = rgb(255, 215, 160)
+				light.Parent = bulb
+			end
+		end
+	elseif kind == "fireplace" then
+		-- chimney against the west wall, hearth and fire facing east
+		part(parent, "Chimney", V(w - 1, tier.height, d), at(x0 + (w - 1) / 2, tier.height / 2, cz), rgb(120, 115, 110), Enum.Material.Cobblestone)
+		part(parent, "Hearth", V(1, 0.4, d), at(x1 - 0.5, 0.2, cz), rgb(70, 70, 75), Enum.Material.Slate)
+		local box = part(parent, "Firebox", V(0.2, 3, d - 3), at(x1 - 0.95, 2, cz), rgb(15, 12, 10), Enum.Material.SmoothPlastic)
+		part(parent, "Mantel", V(1, 0.4, d), at(x1 - 0.5, 4.6, cz), rgb(90, 60, 40), Enum.Material.Wood)
+		local logs = part(parent, "Logs", V(0.6, 0.5, d - 4), at(x1 - 0.5, 0.65, cz), rgb(90, 55, 30), Enum.Material.Wood, { CanCollide = false })
+		local fire = Instance.new("Fire")
+		fire.Size = 3
+		fire.Heat = 4
+		fire.Parent = logs
+		local light = Instance.new("PointLight")
+		light.Color = rgb(255, 150, 60)
+		light.Range = 16
+		light.Brightness = 1.5
+		light.Parent = box
+	elseif kind == "hottub" then
+		part(parent, "TubRim", V(w, 2.6, d), at(cx, 1.3, cz), rgb(235, 235, 240), Enum.Material.Marble)
+		local water = part(parent, "TubWater", V(w - 1.6, 0.3, d - 1.6), at(cx, 2.5, cz), rgb(60, 190, 230), Enum.Material.Glass, { Transparency = 0.25, CanCollide = false })
+		for i = 1, 4 do
+			-- jets: small glowing discs in the water
+			local a = i / 4 * math.pi * 2
+			part(parent, "Jet", V(0.1, 0.6, 0.6), at(cx + math.cos(a) * (w / 2 - 1.6), 2.55, cz + math.sin(a) * (d / 2 - 1.6)) * CFrame.Angles(0, 0, math.pi / 2), rgb(200, 240, 255), Enum.Material.Neon, { Shape = Enum.PartType.Cylinder, CanCollide = false })
+		end
+		local light = Instance.new("PointLight")
+		light.Color = rgb(80, 200, 255)
+		light.Range = 12
+		light.Parent = water
+	elseif kind == "pool" then
+		part(parent, "PoolDeck", V(w, 0.2, d), at(cx, 0.1, cz), rgb(225, 220, 205), Enum.Material.Slate)
+		local px0, pz0, px1, pz1 = x0 + 2, z0 + 2, x1 - 2, z1 - 2
+		local pw, pd = px1 - px0, pz1 - pz0
+		local pcx, pcz = (px0 + px1) / 2, (pz0 + pz1) / 2
+		local rimH = 3
+		part(parent, "PoolRim", V(pw + 2, rimH, 1), at(pcx, rimH / 2, pz0 - 0.5), rgb(245, 245, 245), Enum.Material.Marble)
+		part(parent, "PoolRim", V(pw + 2, rimH, 1), at(pcx, rimH / 2, pz1 + 0.5), rgb(245, 245, 245), Enum.Material.Marble)
+		part(parent, "PoolRim", V(1, rimH, pd), at(px0 - 0.5, rimH / 2, pcz), rgb(245, 245, 245), Enum.Material.Marble)
+		part(parent, "PoolRim", V(1, rimH, pd), at(px1 + 0.5, rimH / 2, pcz), rgb(245, 245, 245), Enum.Material.Marble)
+		part(parent, "PoolTiles", V(pw, 0.1, pd), at(pcx, 0.25, pcz), rgb(120, 200, 230), Enum.Material.Glass)
+		part(parent, "PoolWater", V(pw, rimH - 0.4, pd), at(pcx, 0.2 + (rimH - 0.4) / 2, pcz), rgb(40, 150, 230), Enum.Material.Glass, { Transparency = 0.4, CanCollide = false })
+		part(parent, "PoolStep", V(6, 1.5, 1), at(pcx, 0.75, pz1 + 1.5), rgb(245, 245, 245), Enum.Material.Marble)
+		for _, t in { -0.3, 0.3 } do
+			local light = Instance.new("PointLight")
+			light.Color = rgb(90, 200, 255)
+			light.Range = 18
+			light.Parent = part(parent, "PoolLight", V(1, 0.2, 1), at(pcx + t * pw, 0.35, pcz), rgb(170, 230, 255), Enum.Material.Neon, { CanCollide = false })
+		end
+	elseif kind == "court" then
+		local cx0, cx1, cz0, cz1 = x0 + 1, x1 - 1, z0 + 1, z1 - 1
+		local ccx, ccz = (cx0 + cx1) / 2, (cz0 + cz1) / 2
+		local cw, cd = cx1 - cx0, cz1 - cz0
+		part(parent, "CourtFloor", V(cw, 0.1, cd), at(ccx, 0.05, ccz), rgb(205, 150, 95), Enum.Material.WoodPlanks)
+		local lineColor = Color3.new(1, 1, 1)
+		local function line(lx: number, lz: number, sx: number, sz: number)
+			part(parent, "CourtLine", V(sx, 0.12, sz), at(lx, 0.06, lz), lineColor, Enum.Material.SmoothPlastic, { CanCollide = false })
+		end
+		line(ccx, cz0 + 0.15, cw, 0.3) -- baseline
+		line(ccx, cz1 - 0.15, cw, 0.3) -- half-court line
+		line(cx0 + 0.15, ccz, 0.3, cd)
+		line(cx1 - 0.15, ccz, 0.3, cd)
+		-- the paint
+		part(parent, "Paint", V(12, 0.11, 15), at(ccx, 0.055, cz0 + 7.5), rgb(40, 90, 160), Enum.Material.SmoothPlastic, { CanCollide = false })
+		local rimZ = cz0 + 4
+		-- three-point arc
+		local radius = 15
+		local segments = 18
+		for i = 0, segments - 1 do
+			local a0 = math.rad(-85 + 170 * i / segments)
+			local a1 = math.rad(-85 + 170 * (i + 1) / segments)
+			local p0 = V(ccx + math.sin(a0) * radius, 0, rimZ + math.cos(a0) * radius)
+			local p1 = V(ccx + math.sin(a1) * radius, 0, rimZ + math.cos(a1) * radius)
+			local mid = (p0 + p1) / 2
+			local seg = (p1 - p0).Magnitude
+			part(parent, "ThreeLine", V(0.3, 0.12, seg + 0.1), CFrame.lookAt(O + V(mid.X, y + 0.06, mid.Z), O + V(p1.X, y + 0.06, p1.Z)), lineColor, Enum.Material.SmoothPlastic, { CanCollide = false })
+		end
+		-- hoop
+		part(parent, "HoopPole", V(0.8, 12, 0.8), at(ccx, 6, cz0 + 0.6), rgb(40, 40, 46), Enum.Material.Metal)
+		part(parent, "HoopArm", V(0.5, 0.5, 2.2), at(ccx, 11.5, cz0 + 1.7), rgb(40, 40, 46), Enum.Material.Metal)
+		part(parent, "Backboard", V(6, 3.5, 0.2), at(ccx, 11.5, cz0 + 2.9), Color3.new(1, 1, 1), Enum.Material.Glass, { Transparency = 0.3 })
+		part(parent, "BoardSquare", V(2, 1.5, 0.22), at(ccx, 11, cz0 + 2.9), rgb(220, 60, 40), Enum.Material.SmoothPlastic, { Transparency = 0.2 })
+		for i = 0, 11 do
+			local a = i / 12 * math.pi * 2
+			part(parent, "Rim", V(0.15, 0.12, 0.5), CFrame.new(O + V(ccx + math.cos(a) * 0.9, y + 10, rimZ + math.sin(a) * 0.9)) * CFrame.Angles(0, -a, 0), rgb(255, 100, 30), Enum.Material.Metal)
+		end
+		part(parent, "Net", V(1.3, 1.6, 1.6), at(ccx, 9.3, rimZ) * CFrame.Angles(0, 0, math.pi / 2), Color3.new(1, 1, 1), Enum.Material.Fabric, { Shape = Enum.PartType.Cylinder, Transparency = 0.5, CanCollide = false })
+		part(parent, "Ball", V(1.5, 1.5, 1.5), at(ccx + 4, 0.85, cz1 - 3), rgb(230, 110, 40), Enum.Material.Plastic, { Shape = Enum.PartType.Ball })
+	elseif kind == "stairs" then
+		-- 17 one-stud steps climbing west to the upper floor (surface y = 17)
+		local steps = 17
+		local run = 1.5
+		local startX = 47.25
+		for i = 1, steps do
+			local xc = startX - run * (i - 0.5)
+			part(parent, "Step", V(run, i, 6), at(xc, i / 2, 26), style.accentColor, style.accentMat)
+		end
+	elseif kind == "stairwell" then
+		-- glass railings around the opening on the upper floor
+		for _, rz in { 22.85, 29.15 } do
+			part(parent, "Railing", V(26.25, 3.5, 0.3), at(34.875, 1.75, rz), rgb(200, 230, 255), Enum.Material.Glass, { Transparency = 0.5 })
+			part(parent, "RailTop", V(26.25, 0.2, 0.4), at(34.875, 3.6, rz), rgb(40, 40, 46), Enum.Material.Metal)
+		end
+	elseif kind == "door" then
+		part(parent, "Doormat", V(5, 0.08, 2.5), at(cx, 0.04, z1 - 1.5), rgb(80, 60, 45), Enum.Material.Fabric, { CanCollide = false })
+	end
+end
+
+local function buildShell(model: Model, tier: any, O: Vector3)
+	local style = tier.style
+	local hw, hd, H = tier.width / 2, tier.depth / 2, tier.height
+	local shell = Instance.new("Folder")
+	shell.Name = "Shell"
+	shell.Parent = model
+
+	floorPart(shell, O, -hw - 1, -hd - 1, hw + 1, hd + 1, 0, 1, style.floorColor, style.floorMat)
+	part(shell, "Ceiling", V(tier.width + 2, 1, tier.depth + 2), CFrame.new(O + V(0, H + 0.5, 0)), rgb(245, 245, 245), Enum.Material.SmoothPlastic)
+	-- outer walls: north, east, west by style; south is solid with the door
+	wall(shell, O, -hw - 1, -hd - 0.5, hw + 1, -hd - 0.5, 0, H, style.north, style)
+	wall(shell, O, hw + 0.5, -hd, hw + 0.5, hd, 0, H, style.east, style)
+	wall(shell, O, -hw - 0.5, -hd, -hw - 0.5, hd, 0, H, style.west, style)
+	wall(shell, O, -hw - 1, hd + 0.5, hw + 1, hd + 0.5, 0, H, "solid", style)
+	-- baseboards
+	part(shell, "Baseboard", V(tier.width, 0.5, 0.2), CFrame.new(O + V(0, 0.25, hd - 0.1)), rgb(250, 250, 250), Enum.Material.Wood, { CanCollide = false })
+
+	if style.neon then
+		for _, z in { -hd + 0.15, hd - 0.15 } do
+			part(shell, "NeonTrim", V(tier.width, 0.25, 0.25), CFrame.new(O + V(0, H - 0.3, z)), style.neon, Enum.Material.Neon, { CanCollide = false })
+		end
+		for _, x in { -hw + 0.15, hw - 0.15 } do
+			part(shell, "NeonTrim", V(0.25, 0.25, tier.depth), CFrame.new(O + V(x, H - 0.3, 0)), style.neon, Enum.Material.Neon, { CanCollide = false })
+		end
+	end
+
+	if tier.id == "Mansion" then
+		-- upper floor slab over the south half, with an opening for the stairs
+		local slabTop = 17
+		local up, upMat = style.upperColor, style.upperMat
+		floorPart(shell, O, -hw, 0, 21.75, hd, slabTop, 2, up, upMat)
+		floorPart(shell, O, 21.75, 0, hw, 23, slabTop, 2, up, upMat)
+		floorPart(shell, O, 21.75, 29, hw, hd, slabTop, 2, up, upMat)
+		-- glass balcony rail along the atrium edge
+		part(shell, "BalconyRail", V(tier.width, 3.5, 0.3), CFrame.new(O + V(0, slabTop + 1.75, 0.25)), rgb(200, 230, 255), Enum.Material.Glass, { Transparency = 0.5 })
+		part(shell, "BalconyTop", V(tier.width, 0.2, 0.4), CFrame.new(O + V(0, slabTop + 3.6, 0.25)), rgb(40, 40, 46), Enum.Material.Metal)
+		-- lights: under the slab, in the tall atrium, and upstairs
+		for x = -hw + 12, hw - 12, 24 do
+			for _, z in { 8, 32 } do
+				ceilingLight(shell, O + V(x, 15.85, z), 26) -- under the slab, clear of the stairwell
+			end
+			for _, z in { 9, 27 } do
+				ceilingLight(shell, O + V(x, H - 0.1, z), 26)
+			end
+			for _, z in { -27, -9 } do
+				ceilingLight(shell, O + V(x, H - 0.1, z), 40)
+			end
+		end
+		-- chandelier over the atrium
+		local chandelier = part(shell, "Chandelier", V(3, 3, 3), CFrame.new(O + V(-10, H - 6, -18)), rgb(255, 240, 200), Enum.Material.Neon, { Shape = Enum.PartType.Ball, CanCollide = false })
+		part(shell, "ChandelierChain", V(0.15, 5, 0.15), CFrame.new(O + V(-10, H - 2.5, -18)), rgb(200, 170, 80), Enum.Material.Metal, { CanCollide = false })
+		local light = Instance.new("PointLight")
+		light.Range = 40
+		light.Brightness = 1.2
+		light.Color = rgb(255, 230, 180)
+		light.Parent = chandelier
+	else
+		local nx = math.max(1, math.floor(tier.width / 20))
+		local nz = math.max(1, math.floor(tier.depth / 20))
+		for i = 1, nx do
+			for j = 1, nz do
+				local x = -hw + (i - 0.5) * tier.width / nx
+				local z = -hd + (j - 0.5) * tier.depth / nz
+				ceilingLight(shell, O + V(x, H - 0.1, z), 26)
+			end
+		end
+	end
+
+	for _, rect in tier.blocked do
+		fixture(shell, O, tier, rect)
+	end
+
+	-- a nameplate over the door
+	local plate = part(shell, "Nameplate", V(8, 1.4, 0.2), CFrame.new(O + V(0, 10.2, hd - 0.15)), rgb(20, 20, 24), Enum.Material.SmoothPlastic)
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.LightInfluence = 0
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 40
+	gui.Parent = plate
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Text = "EXIT  ·  MAPLE COURT"
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBlack
+	label.TextColor3 = rgb(255, 230, 180)
+	label.Parent = gui
+end
+
+---------------------------------------------------------------------------
+-- Furniture pieces
+---------------------------------------------------------------------------
+local function prompt(parent: Instance, action: string, object: string, hold: number?): ProximityPrompt
+	local p = Instance.new("ProximityPrompt")
+	p.ActionText = action
+	p.ObjectText = object
+	p.KeyboardKeyCode = Enum.KeyCode.E
+	p.MaxActivationDistance = 8
+	p.RequiresLineOfSight = false
+	p.HoldDuration = hold or 0
+	p.Parent = parent
+	return p
+end
+
+local function inUnit(player: Player, unit: Unit): boolean
+	return inside[player] == unit and player:GetAttribute("Interior") == INTERIOR
+end
+
+local function setTV(model: Model, on: boolean)
+	model:SetAttribute("On", on)
+	local screen = model:FindFirstChild("Screen") :: BasePart?
+	local gui = screen and screen:FindFirstChild("TVGui") :: SurfaceGui?
+	if gui then
+		gui.Enabled = on
+	end
+end
+
+local function setLamp(model: Model, on: boolean)
+	model:SetAttribute("On", on)
+	local bulb = model:FindFirstChild("Bulb") :: BasePart?
+	if bulb then
+		bulb.Material = if on then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		bulb.Color = if on then rgb(255, 235, 190) else rgb(120, 120, 120)
+		local light = bulb:FindFirstChild("Light") :: PointLight?
+		if light then
+			light.Enabled = on
+		end
+	end
+end
+
+-- Adds the working parts of functional furniture (beds, TVs, lamps).
+local function wireFunctions(unit: Unit, model: Model, item: any)
+	if item.kind == "bed" then
+		local mattress = model:FindFirstChild("Mattress")
+		if not mattress then
+			return
+		end
+		local p = prompt(mattress, "Sleep", item.name, 0.6)
+		p.Triggered:Connect(function(player)
+			if not inUnit(player, unit) or not Net.alive(player) or not Net.allow(player, "AptSleep", 8) then
+				return
+			end
+			Event:FireClient(player, "Sleep")
+			task.delay(1.4, function()
+				if player.Parent and inside[player] == unit then
+					StaminaRefill:FireClient(player)
+					Net.notify(player, "WELL RESTED", "Stamina fully restored.")
+				end
+			end)
+		end)
+	elseif item.kind == "tv" then
+		local bezel = model:FindFirstChild("Bezel")
+		if not bezel then
+			return
+		end
+		local screen = model:FindFirstChild("Screen")
+		if screen then
+			CollectionService:AddTag(screen, "CityGrindTV")
+		end
+		setTV(model, true)
+		local p = prompt(bezel, "Turn Off", "TV")
+		p.Triggered:Connect(function(player)
+			if not inUnit(player, unit) or not Net.allow(player, "AptTV", 0.4) then
+				return
+			end
+			local on = not model:GetAttribute("On")
+			setTV(model, on)
+			p.ActionText = if on then "Turn Off" else "Turn On"
+		end)
+	elseif item.kind == "lamp" then
+		local pole = model:FindFirstChild("Pole")
+		if not pole then
+			return
+		end
+		setLamp(model, true)
+		local p = prompt(pole, "Turn Off", "Lamp")
+		p.Triggered:Connect(function(player)
+			if not inUnit(player, unit) or not Net.allow(player, "AptLamp", 0.3) then
+				return
+			end
+			local on = not model:GetAttribute("On")
+			setLamp(model, on)
+			p.ActionText = if on then "Turn Off" else "Turn On"
+		end)
+	end
+end
+
+local function spawnPiece(unit: Unit, placement: any)
+	local item = Cfg.ITEM_BY_ID[placement.id]
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	if not item or not tier or not unit.furniture then
+		return
+	end
+	local model = Cfg.buildItem(placement.id)
+	if not model then
+		return
+	end
+	model:SetAttribute("PlacementId", placement.u)
+	model:SetAttribute("ItemId", placement.id)
+	model:PivotTo(Cfg.pieceCFrame(unit.origin, tier, item, placement.x, placement.z, placement.f, placement.r))
+	wireFunctions(unit, model, item)
+	model.Parent = unit.furniture
+	unit.pieces[placement.u] = model
+end
+
+---------------------------------------------------------------------------
+-- Units
+---------------------------------------------------------------------------
+local function spawnCFrame(unit: Unit): CFrame
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	local pos = unit.origin + Cfg.spawnOffset(tier)
+	return CFrame.lookAt(pos, pos - Vector3.zAxis)
+end
+
+local function buildUnitModel(unit: Unit)
+	if unit.model then
+		unit.model:Destroy()
+	end
+	table.clear(unit.pieces)
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	local O = unit.origin
+	local model = Instance.new("Model")
+	model.Name = "Unit_" .. unit.owner.UserId
+	model:SetAttribute("OwnerId", unit.owner.UserId)
+	model:SetAttribute("Tier", unit.tierId)
+	model:SetAttribute("Origin", O)
+	model:SetAttribute("Slot", unit.slot)
+	buildShell(model, tier, O)
+
+	-- exit door in the south wall
+	local door = part(model, "ExitDoor", V(6, 9, 0.4), CFrame.new(O + V(0, 4.5, tier.depth / 2 - 0.2)), rgb(45, 35, 30), Enum.Material.Wood)
+	part(model, "DoorKnob", V(0.4, 0.4, 0.3), CFrame.new(O + V(2.2, 4.3, tier.depth / 2 - 0.5)), rgb(220, 180, 60), Enum.Material.Metal)
+	local exitPrompt = prompt(door, "Leave", "Maple Court")
+	exitPrompt.MaxActivationDistance = 10
+	exitPrompt.Triggered:Connect(function(player)
+		if inside[player] == unit then
+			sendOutside(player)
+		end
+	end)
+
+	local furniture = Instance.new("Folder")
+	furniture.Name = "Furniture"
+	furniture.Parent = model
+	unit.furniture = furniture
+	unit.model = model
+
+	local sec = data(unit.owner)
+	if sec then
+		for _, placement in placementsFor(sec, unit.tierId) do
+			spawnPiece(unit, placement)
+		end
+	end
+	model.Parent = unitsFolder
+end
+
+-- The player's unit, built (in a free slot) if it doesn't exist yet.
+local function ensureUnit(player: Player): Unit?
+	local sec = data(player)
+	if not sec then
+		return nil
+	end
+	local unit = units[player]
+	if unit then
+		if unit.tierId ~= sec.activeTier or not unit.model or not unit.model.Parent then
+			unit.tierId = sec.activeTier
+			buildUnitModel(unit)
+		end
+		return unit
+	end
+	local slot
+	for i = 1, MAX_SLOTS do
+		if not slotOwner[i] then
+			slot = i
+			break
+		end
+	end
+	if not slot then
+		return nil
+	end
+	slotOwner[slot] = player
+	unit = {
+		owner = player,
+		slot = slot,
+		origin = Places.apartmentSlot(slot),
+		tierId = sec.activeTier,
+		model = nil,
+		furniture = nil,
+		pieces = {},
+		allowedGuests = {},
+	}
+	units[player] = unit
+	buildUnitModel(unit :: Unit)
+	return unit
+end
+
+-- Rebuilds a unit after moving to another tier; anyone inside moves with it.
+local function rebuildUnit(unit: Unit, tierId: string)
+	unit.tierId = tierId
+	buildUnitModel(unit)
+	local target = spawnCFrame(unit)
+	for player, u in inside do
+		if u == unit then
+			if player == unit.owner or Apartments.canEnterUnit(player, unit) then
+				task.spawn(Places.teleport, player, target)
+			else
+				sendOutside(player)
+			end
+		end
+	end
+end
+
+local function destroyUnit(owner: Player)
+	local unit = units[owner]
+	if not unit then
+		return
+	end
+	for player, u in inside do
+		if u == unit and player ~= owner then
+			sendOutside(player)
+		end
+	end
+	if unit.model then
+		unit.model:Destroy()
+	end
+	units[owner] = nil
+	if slotOwner[unit.slot] == owner then
+		slotOwner[unit.slot] = nil
+	end
+end
+
+local function onEnteredHome(player: Player, unit: Unit)
+	setInside(player, unit)
+	local sec = data(player)
+	if player == unit.owner and sec and not sec.onboarded then
+		sec.onboarded = true
+		PlayerData.markChanged(player)
+		Event:FireClient(player, "Welcome", Cfg.TIER_BY_ID[unit.tierId].name)
+		Net.notify(player, "WELCOME HOME", "This " .. Cfg.TIER_BY_ID[unit.tierId].name .. " is yours. Tap FURNITURE to decorate.")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Requests from the client
+---------------------------------------------------------------------------
+local function standingInOwnUnit(player: Player): Unit?
+	local unit = units[player]
+	if not unit or inside[player] ~= unit or player:GetAttribute("Interior") ~= INTERIOR or not Net.alive(player) then
+		return nil
+	end
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	local reach = math.max(tier.width, tier.depth) / 2 + 10
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not hrp then
+		return nil
+	end
+	local offset = hrp.Position - unit.origin
+	if math.abs(offset.X) > reach or math.abs(offset.Z) > reach or offset.Y < -10 or offset.Y > tier.height + 10 then
+		return nil
+	end
+	return unit
+end
+
+local function readPlacementPayload(payload: any): (boolean, any)
+	if type(payload) ~= "table" then
+		return false, nil
+	end
+	local x, z, f, r = payload.x, payload.z, payload.f, payload.r
+	if type(x) ~= "number" or type(z) ~= "number" or type(f) ~= "number" or type(r) ~= "number" then
+		return false, nil
+	end
+	return true, { x = x, z = z, f = f, r = r }
+end
+
+local handlers: { [string]: (Player, any, any) -> (boolean, string?) } = {}
+
+handlers.GetState = function()
+	return true, nil
+end
+
+handlers.BuyTier = function(player, sec, tierId)
+	local tier = type(tierId) == "string" and Cfg.TIER_BY_ID[tierId]
+	if not tier then
+		return false, "That home doesn't exist."
+	end
+	if sec.ownedTiers[tier.id] then
+		return false, "You already own the " .. tier.name .. "."
+	end
+	local profile = PlayerData.get(player)
+	if not profile then
+		return false, "Your save is still loading."
+	end
+	if profile.level < tier.level then
+		return false, "The " .. tier.name .. " needs Level " .. tier.level .. "."
+	end
+	if profile.reputation < tier.reputation then
+		return false, "The " .. tier.name .. " needs " .. tier.reputation .. " reputation."
+	end
+	if not PlayerData.spendCash(player, tier.price, "Home: " .. tier.name) then
+		return false, "You need $" .. tier.price .. " for the " .. tier.name .. "."
+	end
+	sec.ownedTiers[tier.id] = true
+	sec.activeTier = tier.id
+	PlayerData.markChanged(player)
+	local unit = units[player]
+	if unit then
+		rebuildUnit(unit, tier.id)
+	end
+	return true, "The " .. tier.name .. " is yours. You moved in!"
+end
+
+handlers.MoveIn = function(player, sec, tierId)
+	local tier = type(tierId) == "string" and Cfg.TIER_BY_ID[tierId]
+	if not tier or not sec.ownedTiers[tier.id] then
+		return false, "You don't own that home."
+	end
+	if sec.activeTier == tier.id then
+		return false, "You already live in the " .. tier.name .. "."
+	end
+	sec.activeTier = tier.id
+	PlayerData.markChanged(player)
+	local unit = units[player]
+	if unit then
+		rebuildUnit(unit, tier.id)
+	end
+	return true, "Moved into the " .. tier.name .. "."
+end
+
+handlers.BuyFurniture = function(player, sec, itemId)
+	local item = type(itemId) == "string" and Cfg.ITEM_BY_ID[itemId]
+	if not item then
+		return false, "That item isn't sold here."
+	end
+	local owned = sec.inventory[item.id] or 0
+	if owned >= Cfg.MAX_PER_ITEM then
+		return false, "You own the maximum of " .. Cfg.MAX_PER_ITEM .. "."
+	end
+	if not PlayerData.spendCash(player, item.price, "Furniture: " .. item.name) then
+		return false, "You need $" .. item.price .. " for the " .. item.name .. "."
+	end
+	sec.inventory[item.id] = owned + 1
+	PlayerData.markChanged(player)
+	return true, item.name .. " delivered. Place it from FURNITURE at home."
+end
+
+handlers.Place = function(player, sec, payload)
+	local unit = standingInOwnUnit(player)
+	if not unit then
+		return false, "Go inside your home to place furniture."
+	end
+	local ok, pos = readPlacementPayload(payload)
+	local itemId = type(payload) == "table" and payload.id
+	local item = type(itemId) == "string" and Cfg.ITEM_BY_ID[itemId]
+	if not ok or not item then
+		return false, "Bad placement."
+	end
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	local list = placementsFor(sec, unit.tierId)
+	if #list >= tier.maxItems then
+		return false, "The " .. tier.name .. " holds " .. tier.maxItems .. " pieces. Store something first."
+	end
+	if placedCount(list, item.id) >= (sec.inventory[item.id] or 0) then
+		return false, "You don't have another " .. item.name .. ". Buy one in the Store."
+	end
+	local valid, reason = Cfg.validatePlacement(unit.tierId, item.id, pos.x, pos.z, pos.f, pos.r, list, nil)
+	if not valid then
+		return false, reason
+	end
+	local placement = { u = sec.nextUid, id = item.id, x = pos.x, z = pos.z, f = pos.f, r = pos.r }
+	sec.nextUid += 1
+	table.insert(list, placement)
+	PlayerData.markChanged(player)
+	spawnPiece(unit, placement)
+	return true, nil
+end
+
+local function findPlacement(list: { any }, uid: any): (number?, any)
+	if type(uid) ~= "number" then
+		return nil, nil
+	end
+	for i, p in list do
+		if p.u == uid then
+			return i, p
+		end
+	end
+	return nil, nil
+end
+
+handlers.Move = function(player, sec, payload)
+	local unit = standingInOwnUnit(player)
+	if not unit then
+		return false, "Go inside your home to move furniture."
+	end
+	local ok, pos = readPlacementPayload(payload)
+	if not ok then
+		return false, "Bad placement."
+	end
+	local list = placementsFor(sec, unit.tierId)
+	local _, placement = findPlacement(list, payload.u)
+	if not placement then
+		return false, "That piece isn't here."
+	end
+	local valid, reason = Cfg.validatePlacement(unit.tierId, placement.id, pos.x, pos.z, pos.f, pos.r, list, placement.u)
+	if not valid then
+		return false, reason
+	end
+	placement.x, placement.z, placement.f, placement.r = pos.x, pos.z, pos.f, pos.r
+	PlayerData.markChanged(player)
+	local model = unit.pieces[placement.u]
+	local tier = Cfg.TIER_BY_ID[unit.tierId]
+	local item = Cfg.ITEM_BY_ID[placement.id]
+	if model and model.Parent then
+		model:PivotTo(Cfg.pieceCFrame(unit.origin, tier, item, pos.x, pos.z, pos.f, pos.r))
+	else
+		spawnPiece(unit, placement)
+	end
+	return true, nil
+end
+
+handlers.Store = function(player, sec, uid)
+	local unit = standingInOwnUnit(player)
+	if not unit then
+		return false, "Go inside your home to store furniture."
+	end
+	local list = placementsFor(sec, unit.tierId)
+	local index, placement = findPlacement(list, uid)
+	if not index then
+		return false, "That piece isn't here."
+	end
+	table.remove(list, index)
+	PlayerData.markChanged(player)
+	local model = unit.pieces[placement.u]
+	if model then
+		model:Destroy()
+		unit.pieces[placement.u] = nil
+	end
+	local item = Cfg.ITEM_BY_ID[placement.id]
+	return true, (if item then item.name else "Item") .. " stored."
+end
+
+local COOLDOWNS = {
+	GetState = 0.2,
+	BuyTier = 1,
+	MoveIn = 2,
+	BuyFurniture = 0.35,
+	Place = 0.2,
+	Move = 0.2,
+	Store = 0.2,
+}
+
+---------------------------------------------------------------------------
+-- Outdoor: Maple Realty kiosk
+---------------------------------------------------------------------------
+local function formatCash(n: number): string
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return "$" .. formatted
+end
+
+local function buildRealty(city: Instance)
+	local pos = Cfg.REALTY_POS
+	local m = Instance.new("Model")
+	m.Name = "MapleRealty"
+	m.Parent = root
+	local function at(x: number, y: number, z: number): CFrame
+		return CFrame.new(pos + V(x, y, z))
+	end
+	part(m, "Pad", V(14, 0.3, 9), at(0, 0.15, 0), rgb(200, 195, 185), Enum.Material.Concrete)
+	local desk = part(m, "Desk", V(7, 3.5, 2.5), at(0, 1.9, 0), rgb(150, 105, 70), Enum.Material.Wood)
+	part(m, "DeskTop", V(7.4, 0.3, 2.9), at(0, 3.8, 0), rgb(240, 240, 240), Enum.Material.Marble)
+	part(m, "Brochures", V(1.2, 0.2, 0.9), at(-2, 4.05, -0.3), rgb(255, 120, 60), Enum.Material.SmoothPlastic)
+	part(m, "Laptop", V(1.6, 0.1, 1.1), at(1.6, 4.0, 0), rgb(40, 40, 46), Enum.Material.Metal)
+	part(m, "LaptopScreen", V(1.6, 1, 0.08), at(1.6, 4.5, 0.55), rgb(80, 170, 255), Enum.Material.Neon)
+	for _, x in { -6.5, 6.5 } do
+		part(m, "AwningPost", V(0.4, 9, 0.4), at(x, 4.5, -3.9), rgb(40, 40, 46), Enum.Material.Metal)
+	end
+	part(m, "Awning", V(14, 0.4, 9), at(0, 9.2, 0), rgb(40, 120, 90), Enum.Material.Fabric)
+
+	-- price board behind the desk, facing the street (+z)
+	local board = part(m, "Board", V(12, 5.5, 0.4), at(0, 6.1, -3.6), rgb(20, 22, 28), Enum.Material.SmoothPlastic)
+	board.CFrame *= CFrame.Angles(0, math.pi, 0)
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.LightInfluence = 0
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 40
+	gui.Parent = board
+	local list = Instance.new("Frame")
+	list.BackgroundTransparency = 1
+	list.Size = UDim2.fromScale(1, 1)
+	list.Parent = gui
+	local layout = Instance.new("UIListLayout")
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = list
+	local function row(text: string, color: Color3, height: number, order: number)
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.fromScale(1, height)
+		label.Text = text
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBlack
+		label.TextColor3 = color
+		label.LayoutOrder = order
+		label.Parent = list
+	end
+	row("MAPLE REALTY", rgb(120, 230, 170), 0.24, 0)
+	for i, tier in Cfg.TIERS do
+		local req = ""
+		if tier.level > 1 then
+			req = "  ·  LV " .. tier.level
+		end
+		if tier.reputation > 0 then
+			req ..= " · " .. tier.reputation .. " REP"
+		end
+		local price = if tier.price == 0 then "FREE" else formatCash(tier.price)
+		row(tier.name .. "  " .. price .. req, Color3.new(1, 1, 1), 0.15, i)
+	end
+
+	local browse = prompt(desk, "Browse Homes", "Maple Realty")
+	browse.MaxActivationDistance = 10
+	browse.Triggered:Connect(function(player)
+		if Net.allow(player, "AptRealty", 0.5) then
+			Event:FireClient(player, "OpenRealty")
+		end
+	end)
+	Places.mapPoint(city, "Maple Realty", "Home", pos + V(0, 3, 6))
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Apartments.start(city: Instance)
+	root = Instance.new("Folder")
+	root.Name = "Apartments"
+	root.Parent = city
+	unitsFolder = Instance.new("Folder")
+	unitsFolder.Name = "Units"
+	unitsFolder.Parent = root
+
+	Event = Net.remote("RemoteEvent", "ApartmentsEvent")
+	StaminaRefill = Net.remote("RemoteEvent", "StaminaRefill")
+	local Request = Net.remote("RemoteFunction", "ApartmentsRequest")
+
+	Request.OnServerInvoke = function(player: Player, action: any, payload: any)
+		if type(action) ~= "string" or not handlers[action] then
+			return false, "Unknown request.", nil
+		end
+		if not Net.allow(player, "Apt" .. action, COOLDOWNS[action] or 0.3) then
+			return false, nil, stateFor(player) -- silently ignore spam
+		end
+		local sec = data(player)
+		if not sec then
+			return false, "Your save is still loading.", nil
+		end
+		local ok, message = handlers[action](player, sec, payload)
+		local state = stateFor(player)
+		if ok and action ~= "GetState" then
+			pushState(player)
+		end
+		return ok, message, state
+	end
+
+	-- Front door of Maple Court -> the player's own unit.
+	local door = Places.buildingDoor(city, "Starter Apartments")
+	if not door then
+		door = part(root, "MapleCourtDoor", V(6, 9, 0.4), CFrame.new(-100, 4.5, -64.8), rgb(45, 35, 30), Enum.Material.Wood)
+	end
+	local doorOpts: any
+	doorOpts = {
+		name = INTERIOR,
+		door = door :: BasePart,
+		inside = Cfg.OUTSIDE, -- replaced with the player's own unit in canEnter
+		exitAt = Vector3.new(0, -500, 0),
+		outside = Cfg.OUTSIDE,
+		actionText = "Go Home",
+		parent = root,
+		canEnter = function(player: Player): (boolean, string?)
+			if not PlayerData.isLoaded(player) or not data(player) then
+				return false, "Your save is still loading."
+			end
+			if not Net.alive(player) then
+				return false, nil
+			end
+			local unit = ensureUnit(player)
+			if not unit then
+				return false, "Maple Court is full right now. Try again soon."
+			end
+			if not Apartments.canEnterUnit(player, unit) then
+				return false, "That isn't your unit."
+			end
+			-- Places.door teleports to opts.inside right after this returns.
+			doorOpts.inside = spawnCFrame(unit)
+			return true, nil
+		end,
+		onEnter = function(player: Player)
+			local unit = units[player]
+			if unit then
+				onEnteredHome(player, unit)
+			end
+		end,
+		onExit = function(player: Player)
+			setInside(player, nil)
+		end,
+	}
+	local placesExit = Places.door(doorOpts)
+	-- Each unit has its own exit door, so the shared one Places built is not needed.
+	placesExit:Destroy()
+	local enterPrompt = door:FindFirstChild("Enter" .. INTERIOR)
+	if enterPrompt and enterPrompt:IsA("ProximityPrompt") then
+		enterPrompt.ObjectText = "Maple Court"
+	end
+
+	buildRealty(city)
+
+	PlayerData.onLoaded(function(player)
+		local sec = data(player)
+		if sec then
+			sanitize(sec)
+			PlayerData.markChanged(player)
+			pushState(player)
+		end
+	end)
+	PlayerData.onPublish(function(player, profile)
+		local sec = profile.sections and profile.sections.apartments
+		local tier = sec and Cfg.TIER_BY_ID[sec.activeTier]
+		player:SetAttribute("HomeTier", if tier then tier.name else "Studio")
+	end)
+
+	local function track(player: Player)
+		player:SetAttribute("HomeUnit", 0)
+		player.CharacterAdded:Connect(function()
+			setInside(player, nil) -- respawning always puts you outside
+		end)
+		player:GetAttributeChangedSignal("Interior"):Connect(function()
+			if player:GetAttribute("Interior") ~= INTERIOR and inside[player] then
+				setInside(player, nil)
+			end
+		end)
+	end
+	Players.PlayerAdded:Connect(track)
+	for _, player in Players:GetPlayers() do
+		track(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		inside[player] = nil
+		destroyUnit(player)
+	end)
+end
+
+return Apartments
 ]=====])
 put(server, 'ModuleScript', 'Basketball', [=====[
 -- CITY GRIND: server-owned basketballs (section 70).
@@ -2509,6 +6623,3742 @@ end
 
 return CourtGames
 ]=====])
+put(server, 'ModuleScript', 'Gym', [=====[
+-- CITY GRIND: Iron Box Gym (sections 56, 69, 110, 120).
+-- Builds the gym interior (Places.REGIONS.Gym) and an outside pass kiosk,
+-- gates the door (free trial -> day pass / membership), runs every training
+-- station and judges every rep on the server.
+--
+-- Remotes (ReplicatedStorage.CityGrind.Remotes):
+--   GymSession     server -> client (kind, payload) "start" | "result" | "stop" | "race" | "offer" | "bought"
+--   GymRep         client -> server (pressTime: server clock of the button press)
+--   GymLeave       client -> server ()
+--   GymBuy         client -> server ("pass" | "member")
+--   GymRace        client -> server ("invite" | "accept" | "decline" | "cancel")
+--   GymGetProgress RemoteFunction -> stats, stat XP, membership, fatigue, today's challenge
+-- Player attributes: Training (station kind or ""), GymMember, GymPassUntil,
+-- GymFatigue, GymFatigueAt (mirrors of the saved "gym" section).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local GymConfig = require(shared:WaitForChild("GymConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Places = require(script.Parent:WaitForChild("Places"))
+
+local Gym = {}
+
+local STATIONS = GymConfig.STATIONS
+local INTERIOR = GymConfig.INTERIOR
+
+---------------------------------------------------------------------------
+-- Saved data
+---------------------------------------------------------------------------
+PlayerData.registerSection("gym", function()
+	return {
+		member = false,
+		trialUsed = false,
+		passUntil = 0, -- unix time the day pass runs out
+		fatigue = 0, -- 0-100 at fatigueAt
+		fatigueAt = 0,
+		challengeDay = 0,
+		challengeProgress = 0,
+		challengeDone = false,
+		totalReps = 0,
+		raceWins = 0,
+	}
+end)
+
+PlayerData.onPublish(function(player: Player, data)
+	local g = data.sections and data.sections.gym
+	if not g then
+		return
+	end
+	player:SetAttribute("GymMember", g.member)
+	player:SetAttribute("GymPassUntil", g.passUntil)
+	player:SetAttribute("GymFatigue", g.fatigue)
+	player:SetAttribute("GymFatigueAt", g.fatigueAt)
+end)
+
+---------------------------------------------------------------------------
+-- Remotes
+---------------------------------------------------------------------------
+local GymSession = Net.remote("RemoteEvent", "GymSession")
+local GymRep = Net.remote("RemoteEvent", "GymRep")
+local GymLeave = Net.remote("RemoteEvent", "GymLeave")
+local GymBuy = Net.remote("RemoteEvent", "GymBuy")
+local GymRace = Net.remote("RemoteEvent", "GymRace")
+local GymGetProgress = Net.remote("RemoteFunction", "GymGetProgress")
+
+---------------------------------------------------------------------------
+-- Building helpers
+---------------------------------------------------------------------------
+local function A(x: number, y: number?, z: number?): CFrame
+	return CFrame.Angles(math.rad(x), math.rad(y or 0), math.rad(z or 0))
+end
+
+local RUBBER = (function()
+	local ok, material = pcall(function()
+		return (Enum.Material :: any).Rubber
+	end)
+	return if ok and material then material else Enum.Material.Fabric
+end)()
+
+local STEEL = Color3.fromRGB(170, 172, 178)
+local DARK = Color3.fromRGB(32, 32, 38)
+local IRON_RED = Color3.fromRGB(230, 60, 45)
+
+type PartProps = {
+	name: string?,
+	size: Vector3,
+	cframe: CFrame,
+	color: Color3?,
+	material: Enum.Material?,
+	transparency: number?,
+	collide: boolean?,
+	shape: Enum.PartType?,
+	reflectance: number?,
+	parent: Instance?,
+}
+
+local function part(p: PartProps): BasePart
+	local b = Instance.new("Part")
+	b.Name = p.name or "Part"
+	b.Anchored = true
+	if p.shape then
+		b.Shape = p.shape
+	end
+	b.Size = p.size
+	b.CFrame = p.cframe
+	b.Color = p.color or Color3.fromRGB(160, 160, 160)
+	b.Material = p.material or Enum.Material.SmoothPlastic
+	b.Transparency = p.transparency or 0
+	b.Reflectance = p.reflectance or 0
+	b.CanCollide = if p.collide == nil then true else p.collide
+	b.TopSurface = Enum.SurfaceType.Smooth
+	b.BottomSurface = Enum.SurfaceType.Smooth
+	if p.parent then
+		b.Parent = p.parent
+	end
+	return b
+end
+
+-- A SurfaceGui with one big text label on the Front face of `target`.
+local function sign(target: BasePart, text: string, textColor: Color3, bg: Color3?, font: Enum.Font?): TextLabel
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 40
+	gui.LightInfluence = 0
+	gui.Parent = target
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundColor3 = bg or Color3.new(0, 0, 0)
+	label.BackgroundTransparency = if bg then 0 else 1
+	label.BorderSizePixel = 0
+	label.Text = text
+	label.TextColor3 = textColor
+	label.TextScaled = true
+	label.TextWrapped = true
+	label.Font = font or Enum.Font.GothamBlack
+	label.Parent = gui
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0.04, 0)
+	pad.PaddingRight = UDim.new(0.04, 0)
+	pad.PaddingTop = UDim.new(0.06, 0)
+	pad.PaddingBottom = UDim.new(0.06, 0)
+	pad.Parent = label
+	return label
+end
+
+-- Poster hung at `pos`, its face looking along `facing`.
+local function poster(parent: Instance, pos: Vector3, facing: Vector3, size: Vector2, text: string, textColor: Color3, bg: Color3)
+	local p = part({
+		name = "Poster",
+		size = Vector3.new(size.X, size.Y, 0.15),
+		cframe = CFrame.lookAt(pos, pos + facing),
+		color = bg,
+		collide = false,
+		parent = parent,
+	})
+	sign(p, text, textColor, bg)
+	return p
+end
+
+-- Barbell with plates, bar along the CFrame's X axis. First part is the bar.
+local function barbellParts(cf: CFrame, length: number, parent: Instance?): { BasePart }
+	local parts = {}
+	table.insert(parts, part({ name = "Bar", size = Vector3.new(length, 0.22, 0.22), cframe = cf, shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, collide = false, parent = parent }))
+	for _, side in { -1, 1 } do
+		local edge = length / 2 - 0.55
+		table.insert(parts, part({ name = "Plate", size = Vector3.new(0.3, 1.9, 1.9), cframe = cf * CFrame.new(side * edge, 0, 0), shape = Enum.PartType.Cylinder, color = DARK, material = Enum.Material.Metal, collide = false, parent = parent }))
+		table.insert(parts, part({ name = "Plate", size = Vector3.new(0.26, 1.4, 1.4), cframe = cf * CFrame.new(side * (edge - 0.3), 0, 0), shape = Enum.PartType.Cylinder, color = IRON_RED, material = Enum.Material.Metal, collide = false, parent = parent }))
+		table.insert(parts, part({ name = "Collar", size = Vector3.new(0.2, 0.45, 0.45), cframe = cf * CFrame.new(side * (edge - 0.55), 0, 0), shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, collide = false, parent = parent }))
+	end
+	return parts
+end
+
+-- Dumbbell with the handle along the CFrame's X axis. First part is the handle.
+local function dumbbellParts(cf: CFrame, parent: Instance?): { BasePart }
+	local parts = {}
+	table.insert(parts, part({ name = "Handle", size = Vector3.new(1, 0.2, 0.2), cframe = cf, shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, collide = false, parent = parent }))
+	for _, side in { -1, 1 } do
+		table.insert(parts, part({ name = "Weight", size = Vector3.new(0.32, 0.65, 0.65), cframe = cf * CFrame.new(side * 0.5, 0, 0), shape = Enum.PartType.Cylinder, color = DARK, material = Enum.Material.Metal, collide = false, parent = parent }))
+	end
+	return parts
+end
+
+-- Cable machine handle (a short bar with a grip attachment).
+local function handleParts(cf: CFrame, parent: Instance?): { BasePart }
+	local grip = part({ name = "Handle", size = Vector3.new(0.7, 0.18, 0.18), cframe = cf, shape = Enum.PartType.Cylinder, color = DARK, material = Enum.Material.Metal, collide = false, parent = parent })
+	local att = Instance.new("Attachment")
+	att.Name = "Cable"
+	att.Parent = grip
+	return { grip }
+end
+
+-- Turns built parts into a prop welded to `part0` at offset `c0`.
+local function attachProp(parts: { BasePart }, part0: BasePart, c0: CFrame, holder: Instance): Weld
+	local main = parts[1]
+	local origin = main.CFrame
+	local target = part0.CFrame * c0
+	local model = Instance.new("Model")
+	model.Name = "GymProp"
+	for _, p in parts do
+		p.CFrame = target * origin:ToObjectSpace(p.CFrame)
+		p.Anchored = false
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.Massless = true
+		p.Parent = model
+	end
+	for i = 2, #parts do
+		local wc = Instance.new("WeldConstraint")
+		wc.Part0 = main
+		wc.Part1 = parts[i]
+		wc.Parent = parts[i]
+	end
+	local weld = Instance.new("Weld")
+	weld.Part0 = part0
+	weld.Part1 = main
+	weld.C0 = c0
+	weld.Parent = main
+	model.Parent = holder
+	return weld
+end
+
+---------------------------------------------------------------------------
+-- Poses (R15). Every value is an offset applied to the joint's original C0.
+-- Sign conventions: +X on a shoulder/hip swings the limb forward, +X on an
+-- elbow folds the forearm forward, -X on a knee bends it, -X on Waist leans
+-- forward. Right arm out to the side is +Z, left is -Z.
+---------------------------------------------------------------------------
+local JOINT_NAMES = {
+	"Waist", "Neck",
+	"LeftShoulder", "RightShoulder", "LeftElbow", "RightElbow",
+	"LeftHip", "RightHip", "LeftKnee", "RightKnee", "LeftAnkle", "RightAnkle",
+}
+
+type Pose = {
+	base: { [string]: CFrame },
+	loop: { period: number, joints: { [string]: { CFrame } } }?,
+	rep: { time: number, joints: { [string]: CFrame }, root: Vector3?, bar: CFrame? }?,
+	barRest: CFrame?,
+}
+
+local POSES: { [string]: Pose } = {
+	Treadmill = {
+		base = { Waist = A(-6), LeftElbow = A(85), RightElbow = A(85) },
+		loop = {
+			period = 0.34,
+			joints = {
+				LeftHip = { A(32), A(-28) },
+				RightHip = { A(-28), A(32) },
+				LeftKnee = { A(-15), A(-80) },
+				RightKnee = { A(-80), A(-15) },
+				LeftShoulder = { A(-30), A(35) },
+				RightShoulder = { A(35), A(-30) },
+			},
+		},
+	},
+	Bike = {
+		base = {
+			Waist = A(-22),
+			LeftShoulder = A(62), RightShoulder = A(62),
+			LeftElbow = A(25), RightElbow = A(25),
+		},
+		loop = {
+			period = 0.42,
+			joints = {
+				LeftHip = { A(105), A(62) },
+				RightHip = { A(62), A(105) },
+				LeftKnee = { A(-115), A(-55) },
+				RightKnee = { A(-55), A(-115) },
+			},
+		},
+	},
+	Bench = { -- lying on the back: "forward" points at the ceiling
+		base = { LeftShoulder = A(40), RightShoulder = A(40), LeftElbow = A(110), RightElbow = A(110) },
+		rep = {
+			time = 0.32,
+			joints = { LeftShoulder = A(90), RightShoulder = A(90), LeftElbow = A(0), RightElbow = A(0) },
+			bar = CFrame.new(0, 0.5, -2.5),
+		},
+		barRest = CFrame.new(0, 0.6, -1.4),
+	},
+	Dumbbells = {
+		base = { LeftShoulder = A(0, 0, -8), RightShoulder = A(0, 0, 8), LeftElbow = A(10), RightElbow = A(10) },
+		rep = {
+			time = 0.3,
+			joints = { LeftShoulder = A(12, 0, -8), RightShoulder = A(12, 0, 8), LeftElbow = A(140), RightElbow = A(140) },
+		},
+	},
+	Squat = { -- upper arms out to the sides, forearms back to hold the bar on the traps
+		base = { LeftShoulder = A(0, 0, -85), RightShoulder = A(0, 0, 85), LeftElbow = A(-85), RightElbow = A(-85) },
+		rep = {
+			time = 0.33,
+			root = Vector3.new(0, -1.15, 0),
+			joints = {
+				Waist = A(-25),
+				LeftHip = A(80), RightHip = A(80),
+				LeftKnee = A(-100), RightKnee = A(-100),
+				LeftAnkle = A(20), RightAnkle = A(20),
+			},
+		},
+	},
+	PullUp = { -- hanging with a wide grip; the body rises on each rep
+		base = {
+			LeftShoulder = A(0, 0, -165), RightShoulder = A(0, 0, 165),
+			LeftHip = A(15), RightHip = A(15),
+			LeftKnee = A(-45), RightKnee = A(-45),
+		},
+		rep = {
+			time = 0.33,
+			root = Vector3.new(0, 0.85, 0),
+			joints = {
+				LeftShoulder = A(0, 0, -100), RightShoulder = A(0, 0, 100),
+				LeftElbow = A(0, 0, -80), RightElbow = A(0, 0, 80),
+			},
+		},
+	},
+	Cable = { -- chest fly: arms wide, then together in front
+		base = { LeftShoulder = A(90, 0, -75), RightShoulder = A(90, 0, 75), LeftElbow = A(15), RightElbow = A(15) },
+		rep = {
+			time = 0.32,
+			joints = { LeftShoulder = A(90, 0, -8), RightShoulder = A(90, 0, 8), LeftElbow = A(5), RightElbow = A(5) },
+		},
+	},
+	Abs = { -- lying on the back, knees up, arms overhead
+		base = {
+			LeftShoulder = A(170), RightShoulder = A(170),
+			LeftHip = A(45), RightHip = A(45),
+			LeftKnee = A(-90), RightKnee = A(-90),
+		},
+		rep = {
+			time = 0.3,
+			joints = { Waist = A(-50), Neck = A(-20), LeftShoulder = A(110), RightShoulder = A(110) },
+		},
+	},
+}
+
+---------------------------------------------------------------------------
+-- Stations
+---------------------------------------------------------------------------
+type Station = {
+	kind: string,
+	index: number,
+	cf: CFrame, -- floor point, facing the way the user faces
+	model: Model,
+	prompt: ProximityPrompt,
+	user: Player?,
+	hidden: { BasePart }, -- rack equipment hidden while the user holds it
+	stripes: { BasePart }?,
+	crank: { BasePart }?,
+	pulleys: { Attachment }?,
+	phase: number,
+}
+
+type Session = {
+	player: Player,
+	station: Station,
+	kind: string,
+	character: Model,
+	humanoid: Humanoid,
+	root: BasePart,
+	posed: boolean,
+	joints: { [string]: Motor6D },
+	orig: { [Motor6D]: CFrame },
+	rootCF: CFrame,
+	exitCF: CFrame,
+	loopTweens: { Tween },
+	repTweens: { Tween },
+	props: { Instance },
+	barWeld: Weld?,
+	start: number,
+	seed: number,
+	goodReps: number,
+	lastPress: number,
+	lastGood: number,
+	repTimes: { number },
+	conns: { RBXScriptConnection },
+}
+
+local stations: { Station } = {}
+local treadmills: { Station } = {}
+local sessions: { [Player]: Session } = {}
+local animatedStations: { [Station]: boolean } = {}
+local trialVisit: { [Player]: boolean } = {}
+
+local BELT_LEN = 5.4
+local BELT_STRIPES = 7
+local BELT_Y = 0.72
+local CRANK_HUB = CFrame.new(0, 1.35, -0.55)
+
+-- Where the user stands when they leave, relative to the station.
+local EXIT_OFFSET = {
+	Treadmill = Vector3.new(0, 0, 4.6),
+	Bike = Vector3.new(0, 0, 4),
+	Bench = Vector3.new(2.9, 0, 0),
+	Squat = Vector3.new(0, 0, 4.5),
+	PullUp = Vector3.new(0, 0, 3.5),
+	Dumbbells = Vector3.new(0, 0, 3),
+	Cable = Vector3.new(0, 0, 3.5),
+	Abs = Vector3.new(2.4, 0, 0),
+}
+
+local function newStation(kind: string, cf: CFrame, parent: Instance): Station
+	local model = Instance.new("Model")
+	model.Name = kind .. #stations + 1
+	model.Parent = parent
+	local anchor = part({
+		name = "PromptAnchor",
+		size = Vector3.new(1, 1, 1),
+		cframe = cf * CFrame.new(0, 2.5, 0),
+		transparency = 1,
+		collide = false,
+		parent = model,
+	})
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "Train"
+	prompt.ActionText = "Train"
+	prompt.ObjectText = STATIONS[kind].label
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 7
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = anchor
+	local station: Station = { kind = kind, index = 0, cf = cf, model = model, prompt = prompt, user = nil, hidden = {}, phase = 0 }
+	table.insert(stations, station)
+	return station
+end
+
+local function buildTreadmill(cf: CFrame, parent: Instance): Station
+	local st = newStation("Treadmill", cf, parent)
+	local m = st.model
+	part({ name = "Deck", size = Vector3.new(3.2, 0.6, 6.2), cframe = cf * CFrame.new(0, 0.3, 0), color = DARK, material = Enum.Material.Metal, parent = m })
+	part({ name = "Belt", size = Vector3.new(2.6, 0.1, BELT_LEN + 0.2), cframe = cf * CFrame.new(0, 0.65, 0), color = Color3.fromRGB(18, 18, 20), material = RUBBER, parent = m })
+	local stripes = {}
+	for i = 1, BELT_STRIPES do
+		local z = -BELT_LEN / 2 + (i - 0.5) * BELT_LEN / BELT_STRIPES
+		table.insert(stripes, part({ name = "Stripe", size = Vector3.new(2.4, 0.04, 0.16), cframe = cf * CFrame.new(0, BELT_Y, z), color = Color3.fromRGB(80, 80, 88), collide = false, parent = m }))
+	end
+	st.stripes = stripes
+	part({ name = "FrontHood", size = Vector3.new(3.2, 0.95, 0.9), cframe = cf * CFrame.new(0, 0.48, -3.3), color = Color3.fromRGB(50, 50, 58), material = Enum.Material.Metal, parent = m })
+	part({ name = "Roller", size = Vector3.new(3.2, 0.6, 0.6), cframe = cf * CFrame.new(0, 0.32, 3.1), shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, parent = m })
+	for _, side in { -1, 1 } do
+		part({ name = "Post", size = Vector3.new(0.25, 3.6, 0.25), cframe = cf * CFrame.new(side * 1.45, 2.6, -3.2), color = STEEL, material = Enum.Material.Metal, parent = m })
+		part({ name = "Rail", size = Vector3.new(0.2, 0.2, 2.4), cframe = cf * CFrame.new(side * 1.45, 4.0, -2.1), color = DARK, material = Enum.Material.Metal, collide = false, parent = m })
+	end
+	local console = part({ name = "Console", size = Vector3.new(3.2, 1.3, 0.4), cframe = cf * CFrame.new(0, 4.6, -3.3) * A(-25), color = DARK, material = Enum.Material.Metal, parent = m })
+	local screen = part({ name = "Screen", size = Vector3.new(1.6, 0.6, 0.05), cframe = console.CFrame * CFrame.new(0, 0, -0.22) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(20, 40, 30), material = Enum.Material.Neon, collide = false, parent = m })
+	sign(screen, "IRON BOX RUN", Color3.fromRGB(120, 255, 160), Color3.fromRGB(10, 25, 15), Enum.Font.Code)
+	return st
+end
+
+local function buildBike(cf: CFrame, parent: Instance): Station
+	local st = newStation("Bike", cf, parent)
+	local m = st.model
+	part({ name = "Base", size = Vector3.new(2, 0.3, 4.6), cframe = cf * CFrame.new(0, 0.15, 0), color = DARK, material = Enum.Material.Metal, parent = m })
+	part({ name = "SeatPost", size = Vector3.new(0.35, 2.3, 0.35), cframe = cf * CFrame.new(0, 1.3, 0.9) * A(-12), color = STEEL, material = Enum.Material.Metal, parent = m })
+	part({ name = "Seat", size = Vector3.new(1.3, 0.3, 1.5), cframe = cf * CFrame.new(0, 2.45, 1.0), color = Color3.fromRGB(25, 25, 28), material = Enum.Material.Leather, parent = m })
+	part({ name = "Stem", size = Vector3.new(0.35, 3.3, 0.35), cframe = cf * CFrame.new(0, 1.9, -1.7) * A(15), color = STEEL, material = Enum.Material.Metal, parent = m })
+	part({ name = "Handlebar", size = Vector3.new(2.2, 0.22, 0.22), cframe = cf * CFrame.new(0, 3.55, -2.05), shape = Enum.PartType.Cylinder, color = DARK, material = Enum.Material.Metal, collide = false, parent = m })
+	part({ name = "Flywheel", size = Vector3.new(0.35, 1.9, 1.9), cframe = cf * CFrame.new(0, 1.15, -1.55), shape = Enum.PartType.Cylinder, color = IRON_RED, material = Enum.Material.Metal, parent = m })
+	local screen = part({ name = "Screen", size = Vector3.new(1, 0.6, 0.15), cframe = cf * CFrame.new(0, 3.95, -2.1) * A(-30), color = Color3.fromRGB(20, 40, 30), material = Enum.Material.Neon, collide = false, parent = m })
+	screen.CFrame *= CFrame.Angles(0, math.pi, 0)
+	sign(screen, "RPM", Color3.fromRGB(120, 255, 160), Color3.fromRGB(10, 25, 15), Enum.Font.Code)
+	local hub = cf * CRANK_HUB
+	part({ name = "Hub", size = Vector3.new(0.9, 0.5, 0.5), cframe = hub, shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, collide = false, parent = m })
+	local crank = {}
+	for _ = 1, 2 do
+		table.insert(crank, part({ name = "CrankArm", size = Vector3.new(0.12, 0.15, 0.7), cframe = hub, color = STEEL, material = Enum.Material.Metal, collide = false, parent = m }))
+		table.insert(crank, part({ name = "Pedal", size = Vector3.new(0.5, 0.1, 0.3), cframe = hub, color = DARK, collide = false, parent = m }))
+	end
+	st.crank = crank
+	return st
+end
+
+local function buildBench(cf: CFrame, parent: Instance): Station
+	local st = newStation("Bench", cf, parent)
+	local m = st.model
+	part({ name = "Pad", size = Vector3.new(1.8, 0.45, 6), cframe = cf * CFrame.new(0, 1.62, -0.3), color = Color3.fromRGB(28, 28, 32), material = Enum.Material.Leather, parent = m })
+	part({ name = "Frame", size = Vector3.new(1.2, 0.2, 6), cframe = cf * CFrame.new(0, 1.3, -0.3), color = STEEL, material = Enum.Material.Metal, parent = m })
+	for _, z in { -2.8, 2.2 } do
+		part({ name = "Leg", size = Vector3.new(1.6, 1.3, 0.3), cframe = cf * CFrame.new(0, 0.65, z), color = STEEL, material = Enum.Material.Metal, parent = m })
+	end
+	for _, side in { -1, 1 } do
+		part({ name = "Upright", size = Vector3.new(0.3, 4.7, 0.3), cframe = cf * CFrame.new(side * 1.9, 2.35, 0.9), color = DARK, material = Enum.Material.Metal, parent = m })
+		part({ name = "Hook", size = Vector3.new(0.3, 0.3, 0.6), cframe = cf * CFrame.new(side * 1.9, 4.3, 0.65), color = IRON_RED, material = Enum.Material.Metal, parent = m })
+		part({ name = "Foot", size = Vector3.new(0.6, 0.2, 2), cframe = cf * CFrame.new(side * 1.9, 0.1, 0.9), color = DARK, material = Enum.Material.Metal, parent = m })
+	end
+	st.hidden = barbellParts(cf * CFrame.new(0, 4.55, 0.55), 6.6, m)
+	return st
+end
+
+local function buildSquatRack(cf: CFrame, parent: Instance): Station
+	local st = newStation("Squat", cf, parent)
+	local m = st.model
+	part({ name = "Platform", size = Vector3.new(6, 0.2, 6), cframe = cf * CFrame.new(0, 0.1, 0), color = Color3.fromRGB(120, 85, 55), material = Enum.Material.WoodPlanks, parent = m })
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			part({ name = "Upright", size = Vector3.new(0.35, 8.4, 0.35), cframe = cf * CFrame.new(sx * 2.6, 4.4, sz * 2.2), color = DARK, material = Enum.Material.Metal, parent = m })
+		end
+		part({ name = "TopRail", size = Vector3.new(0.3, 0.3, 4.7), cframe = cf * CFrame.new(sx * 2.6, 8.5, 0), color = DARK, material = Enum.Material.Metal, parent = m })
+		part({ name = "Hook", size = Vector3.new(0.3, 0.3, 0.6), cframe = cf * CFrame.new(sx * 2.6, 5.2, 0.55), color = IRON_RED, material = Enum.Material.Metal, parent = m })
+		part({ name = "Safety", size = Vector3.new(0.25, 0.25, 4.7), cframe = cf * CFrame.new(sx * 2.6, 2.6, 0), color = STEEL, material = Enum.Material.Metal, collide = false, parent = m })
+	end
+	part({ name = "Crossbar", size = Vector3.new(5.5, 0.3, 0.3), cframe = cf * CFrame.new(0, 8.5, 2.2), color = DARK, material = Enum.Material.Metal, parent = m })
+	st.hidden = barbellParts(cf * CFrame.new(0, 5.45, 0.55), 6.8, m)
+	return st
+end
+
+local function buildPullUp(cf: CFrame, parent: Instance): Station
+	local st = newStation("PullUp", cf, parent)
+	local m = st.model
+	for _, side in { -1, 1 } do
+		part({ name = "Upright", size = Vector3.new(0.4, 10, 0.4), cframe = cf * CFrame.new(side * 2.4, 5, 0), color = DARK, material = Enum.Material.Metal, parent = m })
+		part({ name = "Foot", size = Vector3.new(0.8, 0.2, 3), cframe = cf * CFrame.new(side * 2.4, 0.1, 0), color = DARK, material = Enum.Material.Metal, parent = m })
+	end
+	part({ name = "Bar", size = Vector3.new(5.2, 0.28, 0.28), cframe = cf * CFrame.new(0, 9.5, 0), shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, parent = m })
+	part({ name = "Mat", size = Vector3.new(4.4, 0.1, 3), cframe = cf * CFrame.new(0, 0.05, 0), color = Color3.fromRGB(45, 45, 52), material = RUBBER, collide = false, parent = m })
+	return st
+end
+
+local function buildDumbbellSpot(cf: CFrame, parent: Instance): Station
+	local st = newStation("Dumbbells", cf, parent)
+	local m = st.model
+	part({ name = "Rack", size = Vector3.new(3.2, 1.6, 1.2), cframe = cf * CFrame.new(0, 0.8, -2.6), color = DARK, material = Enum.Material.Metal, parent = m })
+	local hidden = {}
+	for _, side in { -1, 1 } do
+		for _, p in dumbbellParts(cf * CFrame.new(side * 0.8, 1.95, -2.6), m) do
+			table.insert(hidden, p)
+		end
+	end
+	st.hidden = hidden
+	part({ name = "Mat", size = Vector3.new(3.4, 0.1, 3.4), cframe = cf * CFrame.new(0, 0.05, 0), color = Color3.fromRGB(45, 45, 52), material = RUBBER, collide = false, parent = m })
+	return st
+end
+
+local function buildCable(cf: CFrame, parent: Instance): Station
+	local st = newStation("Cable", cf, parent)
+	local m = st.model
+	local pulleys = {}
+	for _, side in { -1, 1 } do
+		part({ name = "Tower", size = Vector3.new(1.1, 9, 1.1), cframe = cf * CFrame.new(side * 3.8, 4.5, 0.8), color = DARK, material = Enum.Material.Metal, parent = m })
+		part({ name = "Stack", size = Vector3.new(0.8, 2.6, 0.6), cframe = cf * CFrame.new(side * 3.8, 1.4, 1.5), color = IRON_RED, material = Enum.Material.Metal, parent = m })
+		local pulley = part({ name = "Pulley", size = Vector3.new(0.3, 0.7, 0.7), cframe = cf * CFrame.new(side * 3.15, 5.2, 0.8), shape = Enum.PartType.Cylinder, color = STEEL, material = Enum.Material.Metal, collide = false, parent = m })
+		local att = Instance.new("Attachment")
+		att.Name = "Cable"
+		att.Parent = pulley
+		table.insert(pulleys, att) -- [1] = left (-x), [2] = right (+x)
+	end
+	part({ name = "TopBeam", size = Vector3.new(8.7, 0.6, 1.1), cframe = cf * CFrame.new(0, 9.2, 0.8), color = DARK, material = Enum.Material.Metal, parent = m })
+	st.pulleys = pulleys
+	-- the handles hang on the pulleys when nobody is training
+	local hidden = {}
+	for i, side in { -1, 1 } do
+		for _, p in handleParts(cf * CFrame.new(side * 3.15, 4.6, 0.8), m) do
+			table.insert(hidden, p)
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = pulleys[i]
+			beam.Attachment1 = p:FindFirstChild("Cable") :: Attachment
+			beam.Width0 = 0.07
+			beam.Width1 = 0.07
+			beam.FaceCamera = true
+			beam.Segments = 1
+			beam.Color = ColorSequence.new(Color3.fromRGB(30, 30, 30))
+			beam.Parent = p
+		end
+	end
+	st.hidden = hidden
+	return st
+end
+
+local function buildAbMat(cf: CFrame, parent: Instance): Station
+	local st = newStation("Abs", cf, parent)
+	part({ name = "Mat", size = Vector3.new(3, 0.2, 7), cframe = cf * CFrame.new(0, 0.1, -0.4), color = Color3.fromRGB(40, 110, 200), material = RUBBER, parent = st.model })
+	return st
+end
+
+---------------------------------------------------------------------------
+-- Interior
+---------------------------------------------------------------------------
+local origin: Vector3
+local doorPart: BasePart? = nil
+local deskPos: Vector3
+local gpsTarget = Vector3.new(205, 1, -49)
+local insideCF: CFrame
+local boardLabels: { title: TextLabel, body: TextLabel, reward: TextLabel, timer: TextLabel }? = nil
+
+local function L(x: number, y: number, z: number): Vector3
+	return origin + Vector3.new(x, y, z)
+end
+
+local function at(x: number, z: number): CFrame
+	return CFrame.new(L(x, 0, z))
+end
+
+local function buildInterior(folder: Folder)
+	Places.room("IronBoxInterior", origin, Vector3.new(140, 22, 90), {
+		floorColor = Color3.fromRGB(34, 34, 40),
+		floorMaterial = RUBBER,
+		wallColor = Color3.fromRGB(62, 62, 72),
+		parent = folder,
+	})
+	local decor = Instance.new("Model")
+	decor.Name = "Decor"
+	decor.Parent = folder
+
+	-- red accent stripe around the walls and colored strip lights
+	for _, w in {
+		{ Vector3.new(140, 1, 0.2), L(0, 3.5, -44.9) },
+		{ Vector3.new(140, 1, 0.2), L(0, 3.5, 44.9) },
+		{ Vector3.new(0.2, 1, 90), L(-69.9, 3.5, 0) },
+		{ Vector3.new(0.2, 1, 90), L(69.9, 3.5, 0) },
+	} do
+		part({ name = "Stripe", size = w[1], cframe = CFrame.new(w[2]), color = IRON_RED, material = Enum.Material.SmoothPlastic, collide = false, parent = decor })
+	end
+	for _, x in { -46, 0, 46 } do
+		local strip = part({ name = "LightStrip", size = Vector3.new(30, 0.2, 0.6), cframe = CFrame.new(L(x, 21.8, 0)), color = Color3.fromRGB(255, 90, 70), material = Enum.Material.Neon, collide = false, parent = decor })
+		local light = Instance.new("PointLight")
+		light.Color = Color3.fromRGB(255, 120, 100)
+		light.Range = 18
+		light.Brightness = 0.6
+		light.Parent = strip
+	end
+
+	-- lighter rubber zones under the free weights
+	part({ name = "WeightZone", size = Vector3.new(70, 0.06, 18), cframe = CFrame.new(L(-30, 0.03, -12)), color = Color3.fromRGB(48, 48, 56), material = RUBBER, collide = false, parent = decor })
+	part({ name = "WeightZone", size = Vector3.new(40, 0.06, 18), cframe = CFrame.new(L(48, 0.03, -12)), color = Color3.fromRGB(48, 48, 56), material = RUBBER, collide = false, parent = decor })
+	part({ name = "CardioZone", size = Vector3.new(96, 0.06, 10), cframe = CFrame.new(L(-20, 0.03, -36)), color = Color3.fromRGB(40, 44, 58), material = RUBBER, collide = false, parent = decor })
+
+	-- mirrors on the north wall (the cardio row faces them)
+	for _, mx in { -40, 25 } do
+		part({ name = "Mirror", size = Vector3.new(48, 10, 0.2), cframe = CFrame.new(L(mx, 7.5, -44.85)), color = Color3.fromRGB(200, 215, 225), material = Enum.Material.Glass, reflectance = 0.65, transparency = 0.05, collide = false, parent = decor })
+		part({ name = "MirrorFrame", size = Vector3.new(48.6, 10.6, 0.1), cframe = CFrame.new(L(mx, 7.5, -44.95)), color = DARK, collide = false, parent = decor })
+	end
+
+	-- posters (SurfaceGui text)
+	local white = Color3.fromRGB(245, 245, 245)
+	poster(decor, L(-40, 16.5, -44.8), Vector3.zAxis, Vector2.new(26, 4), "IRON BOX GYM", IRON_RED, Color3.fromRGB(18, 18, 22))
+	poster(decor, L(25, 16.5, -44.8), Vector3.zAxis, Vector2.new(22, 4), "NO DAYS OFF", white, IRON_RED)
+	poster(decor, L(-69.8, 10, -20), Vector3.xAxis, Vector2.new(20, 4), "TRAIN · EAT · SLEEP · REPEAT", white, Color3.fromRGB(30, 30, 36))
+	poster(decor, L(-69.8, 10, 14), Vector3.xAxis, Vector2.new(16, 6), "PERFECT REPS\nBIGGER GAINS", Color3.fromRGB(255, 210, 70), Color3.fromRGB(30, 30, 36))
+	poster(decor, L(69.8, 10, -20), -Vector3.xAxis, Vector2.new(18, 6), "TIRED MUSCLES\nDON'T GROW.\nREST UP.", white, Color3.fromRGB(40, 60, 120))
+	poster(decor, L(69.8, 10, 14), -Vector3.xAxis, Vector2.new(18, 5), "RISE TO THE TOP", IRON_RED, Color3.fromRGB(18, 18, 22))
+	poster(decor, L(0, 14, 44.8), -Vector3.zAxis, Vector2.new(30, 5), "IRON BOX GYM · EST. THE NEIGHBORHOOD", white, Color3.fromRGB(18, 18, 22))
+
+	-- zone signs hanging from the ceiling
+	for _, z in {
+		{ L(-42, 14, -30), "CARDIO" },
+		{ L(-30, 14, -6), "BENCH & SQUAT" },
+		{ L(48, 14, -6), "PULL-UPS" },
+		{ L(-40, 14, 18), "FREE WEIGHTS" },
+		{ L(-8, 14, 18), "CORE" },
+		{ L(45, 14, -30), "CABLES" },
+	} do
+		local p = part({ name = "ZoneSign", size = Vector3.new(12, 2.2, 0.3), cframe = CFrame.lookAt(z[1], z[1] + Vector3.zAxis), color = Color3.fromRGB(18, 18, 22), collide = false, parent = decor })
+		sign(p, z[2], Color3.fromRGB(255, 255, 255), Color3.fromRGB(18, 18, 22))
+		part({ name = "Wire", size = Vector3.new(0.08, 6.8, 0.08), cframe = CFrame.new(z[1] + Vector3.new(0, 4.5, 0)), color = DARK, collide = false, parent = decor })
+	end
+
+	-- dumbbell wall rack (decor) behind the dumbbell spots
+	part({ name = "DumbbellWallRack", size = Vector3.new(34, 2.6, 2), cframe = CFrame.new(L(-48, 1.3, 20)), color = DARK, material = Enum.Material.Metal, parent = decor })
+	for i = 0, 13 do
+		dumbbellParts(CFrame.new(L(-63 + i * 2.3, 2.95, 20)) * CFrame.Angles(0, math.pi / 2, 0), decor)
+	end
+
+	-- lockers, water cooler and a bench by the entrance
+	for i = 0, 7 do
+		local locker = part({ name = "Locker", size = Vector3.new(2.4, 7, 2), cframe = CFrame.new(L(46 + i * 2.6, 3.5, 43.8)), color = if i % 2 == 0 then Color3.fromRGB(60, 90, 140) else Color3.fromRGB(55, 82, 128), material = Enum.Material.Metal, parent = decor })
+		part({ name = "Vent", size = Vector3.new(1.4, 0.4, 0.05), cframe = locker.CFrame * CFrame.new(0, 2.6, -1.02), color = DARK, collide = false, parent = decor })
+	end
+	part({ name = "LockerBench", size = Vector3.new(18, 1.2, 1.6), cframe = CFrame.new(L(55, 0.6, 38)), color = Color3.fromRGB(120, 85, 55), material = Enum.Material.WoodPlanks, parent = decor })
+	part({ name = "CoolerBase", size = Vector3.new(1.6, 3, 1.6), cframe = CFrame.new(L(40, 1.5, 43.5)), color = Color3.fromRGB(230, 230, 235), parent = decor })
+	part({ name = "CoolerJug", size = Vector3.new(1.3, 1.8, 1.3), cframe = CFrame.new(L(40, 3.9, 43.5)), color = Color3.fromRGB(120, 190, 255), material = Enum.Material.Glass, transparency = 0.3, parent = decor })
+
+	-- plants in the corners
+	for _, pos in { L(-66, 0, 41), L(66, 0, -41), L(-66, 0, -41) } do
+		part({ name = "Pot", size = Vector3.new(2, 2, 2), cframe = CFrame.new(pos + Vector3.new(0, 1, 0)), color = Color3.fromRGB(70, 70, 76), material = Enum.Material.Concrete, parent = decor })
+		part({ name = "Leaves", size = Vector3.new(3, 3, 3), cframe = CFrame.new(pos + Vector3.new(0, 3.2, 0)), color = Color3.fromRGB(60, 140, 70), material = Enum.Material.Grass, shape = Enum.PartType.Ball, collide = false, parent = decor })
+	end
+
+	-- front desk
+	deskPos = L(-22, 0, 36)
+	local desk = Instance.new("Model")
+	desk.Name = "FrontDesk"
+	desk.Parent = folder
+	part({ name = "Counter", size = Vector3.new(12, 3.6, 2.4), cframe = CFrame.new(deskPos + Vector3.new(0, 1.8, 0)), color = Color3.fromRGB(28, 28, 34), material = Enum.Material.Metal, parent = desk })
+	part({ name = "Top", size = Vector3.new(12.6, 0.3, 3), cframe = CFrame.new(deskPos + Vector3.new(0, 3.75, 0)), color = Color3.fromRGB(150, 110, 75), material = Enum.Material.Wood, parent = desk })
+	local deskFront = part({ name = "Front", size = Vector3.new(10, 2.2, 0.1), cframe = CFrame.lookAt(deskPos + Vector3.new(0, 1.9, -1.26), deskPos + Vector3.new(0, 1.9, -5)), color = IRON_RED, collide = false, parent = desk })
+	sign(deskFront, "FRONT DESK", Color3.fromRGB(255, 255, 255), IRON_RED)
+	local priceBoard = part({ name = "Prices", size = Vector3.new(12, 5, 0.3), cframe = CFrame.lookAt(L(-22, 8.5, 44.8), L(-22, 8.5, 30)), color = Color3.fromRGB(18, 18, 22), collide = false, parent = desk })
+	sign(
+		priceBoard,
+		string.format("DAY PASS  $%d · %d MIN\nMEMBERSHIP  $%d · FOREVER", GymConfig.DAY_PASS_PRICE, GymConfig.DAY_PASS_SECONDS // 60, GymConfig.MEMBERSHIP_PRICE),
+		Color3.fromRGB(255, 220, 90),
+		Color3.fromRGB(18, 18, 22)
+	)
+	local register = part({ name = "Register", size = Vector3.new(1.4, 1, 1), cframe = CFrame.new(deskPos + Vector3.new(3, 4.4, 0)), color = DARK, parent = desk })
+	local deskPrompt = Instance.new("ProximityPrompt")
+	deskPrompt.Name = "Memberships"
+	deskPrompt.ActionText = "Passes & Membership"
+	deskPrompt.ObjectText = "Front Desk"
+	deskPrompt.KeyboardKeyCode = Enum.KeyCode.E
+	deskPrompt.HoldDuration = 0
+	deskPrompt.MaxActivationDistance = 9
+	deskPrompt.RequiresLineOfSight = false
+	deskPrompt.Parent = register
+	deskPrompt.Triggered:Connect(function(player)
+		if player:GetAttribute("Interior") == INTERIOR and Net.allow(player, "GymDesk", 0.5) then
+			GymSession:FireClient(player, "offer", { where = "desk" })
+		end
+	end)
+
+	-- daily challenge board
+	local board = part({ name = "ChallengeBoard", size = Vector3.new(18, 10, 0.4), cframe = CFrame.new(L(24, 7, 44.6)), color = Color3.fromRGB(18, 18, 22), parent = decor })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 30
+	gui.LightInfluence = 0
+	gui.Parent = board
+	local function boardText(y: number, h: number, color: Color3, font: Enum.Font): TextLabel
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = UDim2.fromScale(0.05, y)
+		label.Size = UDim2.fromScale(0.9, h)
+		label.TextScaled = true
+		label.TextWrapped = true
+		label.Font = font
+		label.TextColor3 = color
+		label.Text = ""
+		label.Parent = gui
+		return label
+	end
+	boardLabels = {
+		title = boardText(0.05, 0.16, IRON_RED, Enum.Font.GothamBlack),
+		body = boardText(0.27, 0.3, Color3.fromRGB(245, 245, 245), Enum.Font.GothamBold),
+		reward = boardText(0.6, 0.15, Color3.fromRGB(110, 230, 120), Enum.Font.GothamBold),
+		timer = boardText(0.8, 0.12, Color3.fromRGB(160, 160, 175), Enum.Font.GothamMedium),
+	}
+
+	-- equipment
+	local equipment = Instance.new("Folder")
+	equipment.Name = "Equipment"
+	equipment.Parent = folder
+	for i, x in { -62, -54, -46, -38, -30, -22 } do
+		local st = buildTreadmill(at(x, -36), equipment)
+		st.index = i
+		table.insert(treadmills, st)
+	end
+	for _, x in { -8, 0, 8, 16 } do
+		buildBike(at(x, -36), equipment)
+	end
+	for _, x in { 36, 54 } do
+		buildCable(at(x, -36), equipment)
+	end
+	for _, x in { -62, -50, -38, -26 } do
+		buildBench(at(x, -12), equipment)
+	end
+	for _, x in { -8, 6, 20 } do
+		buildSquatRack(at(x, -12), equipment)
+	end
+	for _, x in { 38, 48, 58 } do
+		buildPullUp(at(x, -12), equipment)
+	end
+	for _, x in { -62, -54, -46, -38 } do
+		buildDumbbellSpot(at(x, 14), equipment)
+	end
+	for _, x in { -20, -12, -4, 4 } do
+		buildAbMat(at(x, 12), equipment)
+	end
+end
+
+-- Pass kiosk outside, next to the gym door.
+local function buildKiosk(folder: Folder, door: BasePart)
+	local look = door.CFrame.LookVector
+	-- the door's outward side is the one away from the building centre
+	local model = door.Parent
+	local center = if model and model:IsA("Model") then model:GetPivot().Position else door.Position
+	local out = if ((door.Position + look) - center).Magnitude > ((door.Position - look) - center).Magnitude then look else -look
+	local right = out:Cross(Vector3.yAxis).Unit
+	local base = Vector3.new(door.Position.X, door.Position.Y - door.Size.Y / 2, door.Position.Z) + out * 3 + right * 6
+	local kiosk = Instance.new("Model")
+	kiosk.Name = "PassKiosk"
+	kiosk.Parent = folder
+	local body = part({ name = "Body", size = Vector3.new(2.4, 5, 1.4), cframe = CFrame.lookAt(base + Vector3.new(0, 2.5, 0), base + Vector3.new(0, 2.5, 0) + out), color = Color3.fromRGB(28, 28, 34), material = Enum.Material.Metal, parent = kiosk })
+	local screen = part({ name = "Screen", size = Vector3.new(2, 2.6, 0.1), cframe = body.CFrame * CFrame.new(0, 0.7, -0.73), color = Color3.fromRGB(20, 20, 26), collide = false, parent = kiosk })
+	sign(screen, string.format("IRON BOX\nDAY PASS $%d\nMEMBER $%d", GymConfig.DAY_PASS_PRICE, GymConfig.MEMBERSHIP_PRICE), Color3.fromRGB(255, 220, 90), Color3.fromRGB(20, 20, 26))
+	part({ name = "Topper", size = Vector3.new(2.4, 0.6, 1.4), cframe = body.CFrame * CFrame.new(0, 2.8, 0), color = IRON_RED, material = Enum.Material.Neon, collide = false, parent = kiosk })
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "BuyPass"
+	prompt.ActionText = "Buy Pass"
+	prompt.ObjectText = "Iron Box Gym"
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 8
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = body
+	prompt.Triggered:Connect(function(player)
+		if (player:GetAttribute("Interior") or "") == "" and Net.allow(player, "GymKiosk", 0.5) then
+			GymSession:FireClient(player, "offer", { where = "door" })
+		end
+	end)
+	gpsTarget = Vector3.new(door.Position.X, 1, door.Position.Z) + out * 6
+end
+
+---------------------------------------------------------------------------
+-- Access
+---------------------------------------------------------------------------
+local function gymSection(player: Player)
+	return PlayerData.section(player, "gym")
+end
+
+local function hasAccess(player: Player): boolean
+	local g = gymSection(player)
+	if not g then
+		return false
+	end
+	return g.member or g.passUntil > os.time() or trialVisit[player] == true
+end
+
+local function accessText(g): string
+	if g.member then
+		return "Iron Box member"
+	elseif g.passUntil > os.time() then
+		return string.format("Day pass: %d min left", math.ceil((g.passUntil - os.time()) / 60))
+	elseif not g.trialUsed then
+		return "Free trial available"
+	end
+	return "No pass"
+end
+
+local function enterGym(player: Player)
+	player:SetAttribute("Interior", INTERIOR)
+	Places.teleport(player, insideCF)
+end
+
+---------------------------------------------------------------------------
+-- Daily challenge
+---------------------------------------------------------------------------
+local function ensureDay(g): boolean
+	local today = GymConfig.day(os.time())
+	if g.challengeDay ~= today then
+		g.challengeDay = today
+		g.challengeProgress = 0
+		g.challengeDone = false
+		return true
+	end
+	return false
+end
+
+local function challengeInfo(g)
+	local today = GymConfig.day(os.time())
+	local ch = GymConfig.challengeFor(today)
+	local sameDay = g.challengeDay == today
+	return {
+		text = ch.text,
+		station = ch.station,
+		stationLabel = STATIONS[ch.station].label,
+		target = ch.reps,
+		progress = if sameDay then g.challengeProgress else 0,
+		done = sameDay and g.challengeDone,
+		cash = ch.cash,
+		xp = ch.xp,
+		resetsIn = (today + 1) * 86400 - os.time(),
+	}
+end
+
+local function updateBoard()
+	local labels = boardLabels
+	if not labels then
+		return
+	end
+	local today = GymConfig.day(os.time())
+	local ch = GymConfig.challengeFor(today)
+	local left = (today + 1) * 86400 - os.time()
+	labels.title.Text = "DAILY CHALLENGE"
+	labels.body.Text = ch.text .. "\n(" .. STATIONS[ch.station].label .. ")"
+	labels.reward.Text = string.format("REWARD  $%d  +  %d XP", ch.cash, ch.xp)
+	labels.timer.Text = string.format("New challenge in %dh %02dm · progress in your Fitness app", left // 3600, (left % 3600) // 60)
+end
+
+---------------------------------------------------------------------------
+-- Stat progress helpers
+---------------------------------------------------------------------------
+local function progressFor(player: Player, kind: string)
+	local data = PlayerData.get(player)
+	local list = {}
+	if not data then
+		return list
+	end
+	for _, entry in STATIONS[kind].stats do
+		local stat = entry[1]
+		table.insert(list, { stat = stat, value = data.stats[stat] or 1, xp = data.statXP[stat] or 0 })
+	end
+	return list
+end
+
+---------------------------------------------------------------------------
+-- Treadmill races (section 56)
+---------------------------------------------------------------------------
+type Race = { opponent: Player, count: number }
+local races: { [Player]: Race } = {}
+local invites: { [Player]: { from: Player, at: number } } = {} -- keyed by the invited player
+local outgoing: { [Player]: Player } = {} -- inviter -> invited
+local advertised: { [Player]: Player } = {} -- who the "Race" button would challenge
+local lastRaceMsg: { [Player]: string } = {}
+
+local function sendRace(player: Player, state: string, info: { [string]: any }?)
+	local payload = info or {}
+	payload.state = state
+	payload.target = GymConfig.RACE_TARGET
+	local key = state .. ":" .. tostring(payload.opponent) .. ":" .. tostring(payload.mine) .. ":" .. tostring(payload.theirs)
+	if lastRaceMsg[player] == key then
+		return
+	end
+	lastRaceMsg[player] = key
+	GymSession:FireClient(player, "race", payload)
+end
+
+local function treadmillOf(player: Player): Station?
+	local s = sessions[player]
+	return if s and s.kind == "Treadmill" then s.station else nil
+end
+
+local function busyRacing(player: Player): boolean
+	return races[player] ~= nil or invites[player] ~= nil or outgoing[player] ~= nil
+end
+
+local function adjacentRunners(st: Station): { Player }
+	local list = {}
+	for _, other in treadmills do
+		if math.abs(other.index - st.index) == 1 and other.user and sessions[other.user] then
+			table.insert(list, other.user)
+		end
+	end
+	return list
+end
+
+local function refreshRaces()
+	for _, st in treadmills do
+		local user = st.user
+		if user and sessions[user] then
+			if not busyRacing(user) then
+				local found: Player? = nil
+				for _, other in adjacentRunners(st) do
+					if not busyRacing(other) then
+						found = other
+						break
+					end
+				end
+				advertised[user] = found
+				if found then
+					sendRace(user, "available", { opponent = found.Name })
+				else
+					sendRace(user, "none")
+				end
+			end
+		end
+	end
+end
+
+local function clearInvite(invited: Player)
+	local inv = invites[invited]
+	if inv then
+		outgoing[inv.from] = nil
+		invites[invited] = nil
+	end
+end
+
+-- Ends any race / invite involving `player` (left the treadmill, left the game...).
+local function cancelRaceFor(player: Player, reason: string)
+	local race = races[player]
+	if race then
+		local opp = race.opponent
+		races[player] = nil
+		races[opp] = nil
+		if opp.Parent then
+			Net.notify(opp, "RACE CANCELLED", reason)
+			sendRace(opp, "none")
+		end
+	end
+	if invites[player] then
+		local from = invites[player].from
+		clearInvite(player)
+		if from.Parent then
+			Net.notify(from, "RACE", player.Name .. " didn't take the race.")
+			sendRace(from, "none")
+		end
+	end
+	local target = outgoing[player]
+	if target then
+		clearInvite(target)
+		if target.Parent then
+			sendRace(target, "none")
+		end
+	end
+	advertised[player] = nil
+	lastRaceMsg[player] = nil
+end
+
+local function raceRep(player: Player)
+	local race = races[player]
+	if not race then
+		return
+	end
+	race.count += 1
+	local opp = race.opponent
+	local oppRace = races[opp]
+	local theirs = if oppRace then oppRace.count else 0
+	sendRace(player, "active", { opponent = opp.Name, mine = race.count, theirs = theirs })
+	sendRace(opp, "active", { opponent = player.Name, mine = theirs, theirs = race.count })
+	if race.count < GymConfig.RACE_TARGET then
+		return
+	end
+	-- winner!
+	races[player] = nil
+	races[opp] = nil
+	local data = PlayerData.get(player)
+	if data then
+		for _, entry in STATIONS.Treadmill.stats do
+			local stat = entry[1]
+			local amount = GymConfig.statGain(data.stats[stat] or 1, entry[2], true, 1) * GymConfig.RACE_BONUS_REPS
+			PlayerData.addStatXP(player, stat, math.floor(amount * 10 + 0.5) / 10)
+		end
+		PlayerData.addXP(player, GymConfig.RACE_BONUS_XP)
+		local g = gymSection(player)
+		if g then
+			g.raceWins += 1
+			PlayerData.markChanged(player)
+		end
+	end
+	Net.notify(player, "RACE WON", "You beat " .. opp.Name .. "! Bonus Stamina + Speed XP.")
+	Net.notify(opp, "RACE LOST", player.Name .. " got to " .. GymConfig.RACE_TARGET .. " first. Run it back!")
+	GymSession:FireClient(player, "result", { quality = "race", progress = progressFor(player, "Treadmill") })
+	lastRaceMsg[player] = nil
+	lastRaceMsg[opp] = nil
+	refreshRaces()
+end
+
+GymRace.OnServerEvent:Connect(function(player: Player, action: any)
+	if type(action) ~= "string" or not Net.allow(player, "GymRace", 0.5) then
+		return
+	end
+	local st = treadmillOf(player)
+	if not st then
+		return
+	end
+	if action == "invite" then
+		local target = advertised[player]
+		if busyRacing(player) or not target or busyRacing(target) then
+			return
+		end
+		local targetSt = treadmillOf(target)
+		if not targetSt or math.abs(targetSt.index - st.index) ~= 1 then
+			return
+		end
+		invites[target] = { from = player, at = os.clock() }
+		outgoing[player] = target
+		sendRace(player, "waiting", { opponent = target.Name })
+		sendRace(target, "invite", { opponent = player.Name })
+		task.delay(GymConfig.RACE_INVITE_SECONDS, function()
+			local inv = invites[target]
+			if inv and inv.from == player and os.clock() - inv.at >= GymConfig.RACE_INVITE_SECONDS - 0.1 then
+				clearInvite(target)
+				if player.Parent then
+					Net.notify(player, "RACE", target.Name .. " didn't answer.")
+				end
+				lastRaceMsg[player] = nil
+				lastRaceMsg[target] = nil
+				refreshRaces()
+			end
+		end)
+	elseif action == "accept" then
+		local inv = invites[player]
+		if not inv then
+			return
+		end
+		local from = inv.from
+		clearInvite(player)
+		local fromSt = treadmillOf(from)
+		if not fromSt or math.abs(fromSt.index - st.index) ~= 1 or races[from] or races[player] then
+			lastRaceMsg[player] = nil
+			refreshRaces()
+			return
+		end
+		races[player] = { opponent = from, count = 0 }
+		races[from] = { opponent = player, count = 0 }
+		sendRace(player, "active", { opponent = from.Name, mine = 0, theirs = 0 })
+		sendRace(from, "active", { opponent = player.Name, mine = 0, theirs = 0 })
+		Net.notify(player, "RACE ON", "First to " .. GymConfig.RACE_TARGET .. " good reps wins. GO!")
+		Net.notify(from, "RACE ON", "First to " .. GymConfig.RACE_TARGET .. " good reps wins. GO!")
+	elseif action == "decline" then
+		local inv = invites[player]
+		if not inv then
+			return
+		end
+		local from = inv.from
+		clearInvite(player)
+		if from.Parent then
+			Net.notify(from, "RACE", player.Name .. " passed on the race.")
+		end
+		lastRaceMsg[player] = nil
+		lastRaceMsg[from] = nil
+		refreshRaces()
+	elseif action == "cancel" then
+		local target = outgoing[player]
+		if target then
+			clearInvite(target)
+			lastRaceMsg[player] = nil
+			lastRaceMsg[target] = nil
+			refreshRaces()
+		end
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Training sessions
+---------------------------------------------------------------------------
+local function standHeight(humanoid: Humanoid, root: BasePart): number
+	if humanoid.RigType == Enum.HumanoidRigType.R15 then
+		return humanoid.HipHeight + root.Size.Y / 2
+	end
+	return 3
+end
+
+local function rootPlacement(kind: string, cf: CFrame, h: number, posed: boolean): CFrame
+	if kind == "Treadmill" then
+		return cf * CFrame.new(0, BELT_Y + h, 0.3)
+	elseif kind == "Squat" then
+		return cf * CFrame.new(0, 0.2 + h, 0)
+	elseif kind == "Dumbbells" or kind == "Cable" then
+		return cf * CFrame.new(0, h, 0)
+	elseif not posed then
+		-- R6 / unknown rigs stand upright beside lying or seated equipment
+		if kind == "PullUp" then
+			return cf * CFrame.new(0, h, 0)
+		end
+		return cf * CFrame.new(EXIT_OFFSET[kind]) * CFrame.new(0, h, 0)
+	elseif kind == "Bike" then
+		return cf * CFrame.new(0, 3.35, 0.95)
+	elseif kind == "Bench" then
+		return cf * CFrame.new(0, 2.4, 0) * A(90)
+	elseif kind == "Abs" then
+		return cf * CFrame.new(0, 0.75, 0) * A(90)
+	elseif kind == "PullUp" then
+		return cf * CFrame.new(0, 9.5 - 3.4, 0)
+	end
+	return cf * CFrame.new(0, h, 0)
+end
+
+local function findJoints(character: Model): { [string]: Motor6D }
+	local wanted = {}
+	for _, name in JOINT_NAMES do
+		wanted[name] = true
+	end
+	local joints = {}
+	for _, d in character:GetDescendants() do
+		if d:IsA("Motor6D") and wanted[d.Name] then
+			joints[d.Name] = d
+		end
+	end
+	return joints
+end
+
+local function hasLimbJoints(joints: { [string]: Motor6D }): boolean
+	for _, name in { "LeftShoulder", "RightShoulder", "LeftElbow", "RightElbow", "LeftHip", "RightHip", "LeftKnee", "RightKnee", "Waist" } do
+		if not joints[name] then
+			return false
+		end
+	end
+	return true
+end
+
+local function poseOffset(pose: Pose, name: string): CFrame
+	return pose.base[name] or CFrame.identity
+end
+
+local function setBase(s: Session, names: { [string]: any }?)
+	local pose = POSES[s.kind]
+	for name, motor in s.joints do
+		if (names == nil or names[name] ~= nil) and motor.Parent then
+			motor.C0 = s.orig[motor] * poseOffset(pose, name)
+		end
+	end
+end
+
+local function holdProps(s: Session)
+	local character = s.character
+	local pose = POSES[s.kind]
+	local upper = character:FindFirstChild("UpperTorso") :: BasePart?
+	local lhand = character:FindFirstChild("LeftHand") :: BasePart?
+	local rhand = character:FindFirstChild("RightHand") :: BasePart?
+	local kind = s.kind
+	if kind == "Bench" and upper then
+		local parts = barbellParts(CFrame.new(), 6.6, nil)
+		s.barWeld = attachProp(parts, upper, pose.barRest or CFrame.new(), character)
+		table.insert(s.props, parts[1].Parent :: Instance)
+	elseif kind == "Squat" and upper then
+		local parts = barbellParts(CFrame.new(), 6.8, nil)
+		attachProp(parts, upper, CFrame.new(0, 0.85, 0.65), character)
+		table.insert(s.props, parts[1].Parent :: Instance)
+	elseif kind == "Dumbbells" and lhand and rhand then
+		for _, hand in { lhand, rhand } do
+			local parts = dumbbellParts(CFrame.new(), nil)
+			attachProp(parts, hand, CFrame.new(0, -0.2, 0), character)
+			table.insert(s.props, parts[1].Parent :: Instance)
+		end
+	elseif kind == "Cable" and lhand and rhand and s.station.pulleys then
+		for i, hand in { lhand, rhand } do
+			local parts = handleParts(CFrame.new(), nil)
+			attachProp(parts, hand, CFrame.new(0, -0.2, 0), character)
+			local beam = Instance.new("Beam")
+			beam.Attachment0 = s.station.pulleys[i]
+			beam.Attachment1 = parts[1]:FindFirstChild("Cable") :: Attachment
+			beam.Width0 = 0.07
+			beam.Width1 = 0.07
+			beam.FaceCamera = true
+			beam.Segments = 1
+			beam.Color = ColorSequence.new(Color3.fromRGB(30, 30, 30))
+			beam.Parent = parts[1]
+			table.insert(s.props, parts[1].Parent :: Instance)
+		end
+	else
+		return
+	end
+	for _, p in s.station.hidden do
+		p.Transparency = 1
+		for _, d in p:GetChildren() do
+			if d:IsA("Beam") then
+				d.Enabled = false
+			end
+		end
+	end
+end
+
+local function playLoops(s: Session)
+	local loop = POSES[s.kind].loop
+	if not loop then
+		return
+	end
+	local info = TweenInfo.new(loop.period, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+	for name, pair in loop.joints do
+		local motor = s.joints[name]
+		if motor then
+			motor.C0 = s.orig[motor] * pair[1]
+			local t = TweenService:Create(motor, info, { C0 = s.orig[motor] * pair[2] })
+			t:Play()
+			table.insert(s.loopTweens, t)
+		end
+	end
+end
+
+local function playRep(s: Session)
+	local rep = POSES[s.kind].rep
+	if not s.posed or not rep then
+		return
+	end
+	for _, t in s.repTweens do
+		t:Cancel()
+	end
+	table.clear(s.repTweens)
+	setBase(s, rep.joints)
+	local info = TweenInfo.new(rep.time, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, 0, true)
+	local function go(inst: Instance, goal: { [string]: any })
+		local t = TweenService:Create(inst, info, goal)
+		t:Play()
+		table.insert(s.repTweens, t)
+	end
+	for name, offset in rep.joints do
+		local motor = s.joints[name]
+		if motor and motor.Parent then
+			go(motor, { C0 = s.orig[motor] * offset })
+		end
+	end
+	if rep.root and s.root.Parent then
+		s.root.CFrame = s.rootCF
+		go(s.root, { CFrame = s.rootCF + rep.root })
+	end
+	local barRest = POSES[s.kind].barRest
+	if rep.bar and s.barWeld and barRest and s.barWeld.Parent then
+		s.barWeld.C0 = barRest
+		go(s.barWeld, { C0 = rep.bar })
+	end
+end
+
+local function sendStart(player: Player, s: Session)
+	local g = gymSection(player)
+	GymSession:FireClient(player, "start", {
+		kind = s.kind,
+		start = s.start,
+		seed = s.seed,
+		goodReps = s.goodReps,
+		progress = progressFor(player, s.kind),
+		challenge = if g then challengeInfo(g) else nil,
+		posed = s.posed,
+	})
+end
+
+local stopSession: (Player, boolean?) -> ()
+
+local function startSession(player: Player, station: Station)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not character or not humanoid or not root or not root:IsA("BasePart") then
+		return
+	end
+	local joints = if humanoid.RigType == Enum.HumanoidRigType.R15 then findJoints(character) else {}
+	local posed = humanoid.RigType == Enum.HumanoidRigType.R15 and hasLimbJoints(joints)
+	if not posed then
+		joints = {}
+	end
+	local h = standHeight(humanoid, root)
+	local s: Session = {
+		player = player,
+		station = station,
+		kind = station.kind,
+		character = character,
+		humanoid = humanoid,
+		root = root,
+		posed = posed,
+		joints = joints,
+		orig = {},
+		rootCF = rootPlacement(station.kind, station.cf, h, posed),
+		exitCF = station.cf * CFrame.new(EXIT_OFFSET[station.kind]) * CFrame.new(0, h + 0.2, 0),
+		loopTweens = {},
+		repTweens = {},
+		props = {},
+		barWeld = nil,
+		start = workspace:GetServerTimeNow(),
+		seed = math.random(1, 1_000_000),
+		goodReps = 0,
+		lastPress = 0,
+		lastGood = 0,
+		repTimes = {},
+		conns = {},
+	}
+	for _, motor in joints do
+		s.orig[motor] = motor.C0
+	end
+	sessions[player] = s
+	station.user = player
+	station.prompt.Enabled = false
+
+	if humanoid.SeatPart then
+		humanoid.Sit = false
+	end
+	humanoid.PlatformStand = true
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.Anchored = true
+	root.CFrame = s.rootCF
+
+	if posed then
+		setBase(s, nil)
+		holdProps(s)
+		playLoops(s)
+	end
+	if station.stripes or station.crank then
+		animatedStations[station] = true
+	end
+
+	table.insert(s.conns, humanoid.Died:Connect(function()
+		stopSession(player, true)
+	end))
+	table.insert(s.conns, character.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			stopSession(player, true)
+		end
+	end))
+	table.insert(s.conns, player:GetAttributeChangedSignal("Interior"):Connect(function()
+		if player:GetAttribute("Interior") ~= INTERIOR then
+			stopSession(player, true)
+		end
+	end))
+
+	player:SetAttribute("Training", station.kind)
+	sendStart(player, s)
+	if station.kind == "Treadmill" then
+		lastRaceMsg[player] = nil
+		refreshRaces()
+	end
+end
+
+stopSession = function(player: Player, skipTeleport: boolean?)
+	local s = sessions[player]
+	if not s then
+		return
+	end
+	sessions[player] = nil
+	for _, c in s.conns do
+		c:Disconnect()
+	end
+	for _, t in s.loopTweens do
+		t:Cancel()
+	end
+	for _, t in s.repTweens do
+		t:Cancel()
+	end
+	for motor, c0 in s.orig do
+		if motor.Parent then
+			motor.C0 = c0
+		end
+	end
+	for _, prop in s.props do
+		prop:Destroy()
+	end
+	for _, p in s.station.hidden do
+		p.Transparency = 0
+		for _, d in p:GetChildren() do
+			if d:IsA("Beam") then
+				d.Enabled = true
+			end
+		end
+	end
+	local station = s.station
+	station.user = nil
+	station.prompt.Enabled = true
+	animatedStations[station] = nil
+
+	if s.root.Parent then
+		if not skipTeleport and s.humanoid.Health > 0 then
+			s.root.CFrame = s.exitCF
+		end
+		s.root.Anchored = false
+		s.root.AssemblyLinearVelocity = Vector3.zero
+		if player.Parent and s.root:IsDescendantOf(workspace) then
+			pcall(function()
+				s.root:SetNetworkOwner(player) -- hand physics back to the player's client
+			end)
+		end
+	end
+	if s.humanoid.Parent then
+		s.humanoid.PlatformStand = false
+	end
+	if player.Parent then
+		player:SetAttribute("Training", "")
+		GymSession:FireClient(player, "stop")
+	end
+	if s.kind == "Treadmill" then
+		cancelRaceFor(player, player.Name .. " stepped off the treadmill.")
+		refreshRaces()
+	end
+end
+
+local function tryStart(player: Player, station: Station)
+	if not Net.allow(player, "GymStart", 0.8) then
+		return
+	end
+	if sessions[player] or station.user or player:GetAttribute("Interior") ~= INTERIOR then
+		return
+	end
+	if not Net.alive(player) or Net.distance(player, station.cf.Position) > 14 then
+		return
+	end
+	local g = gymSection(player)
+	if not g then
+		Net.notify(player, "IRON BOX", "Your profile is still loading.")
+		return
+	end
+	if not hasAccess(player) then
+		Net.notify(player, "PASS EXPIRED", "Your day pass ran out. Renew at the front desk.")
+		GymSession:FireClient(player, "offer", { where = "desk" })
+		return
+	end
+	local humanoid = (player.Character :: Model):FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.SeatPart then
+		return -- sitting in a car or chair
+	end
+	startSession(player, station)
+end
+
+GymLeave.OnServerEvent:Connect(function(player: Player)
+	if Net.allow(player, "GymLeave", 0.3) then
+		stopSession(player, false)
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Reps
+---------------------------------------------------------------------------
+GymRep.OnServerEvent:Connect(function(player: Player, pressTime: any)
+	if type(pressTime) ~= "number" or pressTime ~= pressTime or not Net.allow(player, "GymRep", 0.15) then
+		return
+	end
+	local s = sessions[player]
+	if not s or not Net.alive(player) then
+		return
+	end
+	local g = gymSection(player)
+	local data = PlayerData.get(player)
+	if not g or not data then
+		return
+	end
+
+	-- The client reports when it pressed (server clock). Only accept a time
+	-- inside a latency window that ends now, and never one before the last press.
+	local now = workspace:GetServerTimeNow()
+	local window = math.clamp(player:GetNetworkPing() * 2 + 0.15, 0.2, 0.7)
+	local t = math.clamp(pressTime, now - window, now)
+	if t <= s.lastPress then
+		return
+	end
+	s.lastPress = t
+
+	local def = STATIONS[s.kind]
+	local quality = GymConfig.judge(s.kind, t, s.start, s.seed, s.goodReps)
+	if quality == "miss" then
+		GymSession:FireClient(player, "result", { quality = "miss", goodReps = s.goodReps })
+		return
+	end
+
+	-- rate limits for good reps
+	local clock = os.clock()
+	if clock - s.lastGood < GymConfig.MIN_REP_INTERVAL - 0.05 then
+		GymSession:FireClient(player, "result", { quality = "tooFast", goodReps = s.goodReps })
+		return
+	end
+	local recent = {}
+	for _, rt in s.repTimes do
+		if clock - rt < 60 then
+			table.insert(recent, rt)
+		end
+	end
+	s.repTimes = recent
+	if #recent >= GymConfig.MAX_REPS_PER_MINUTE then
+		GymSession:FireClient(player, "result", { quality = "tooFast", goodReps = s.goodReps })
+		return
+	end
+	table.insert(s.repTimes, clock)
+	s.lastGood = clock
+	s.goodReps += 1
+
+	-- fatigue
+	local unix = os.time()
+	local fatigue = GymConfig.currentFatigue(g.fatigue, g.fatigueAt, unix)
+	local efficiency = GymConfig.efficiency(fatigue)
+	g.fatigue = math.min(100, fatigue + GymConfig.FATIGUE_PER_REP)
+	g.fatigueAt = unix
+	g.totalReps += 1
+
+	-- stat XP
+	local perfect = quality == "perfect"
+	local gains = {}
+	for _, entry in def.stats do
+		local stat = entry[1]
+		local amount = GymConfig.statGain(data.stats[stat] or 1, entry[2], perfect, efficiency)
+		PlayerData.addStatXP(player, stat, amount)
+		table.insert(gains, { stat = stat, amount = amount })
+	end
+	local xp = if perfect then GymConfig.PLAYER_XP_PERFECT else GymConfig.PLAYER_XP_GOOD
+	PlayerData.addXP(player, xp)
+
+	-- daily challenge
+	ensureDay(g)
+	local ch = GymConfig.challengeFor(g.challengeDay)
+	if not g.challengeDone and ch.station == s.kind then
+		g.challengeProgress += 1
+		if g.challengeProgress >= ch.reps then
+			g.challengeProgress = ch.reps
+			g.challengeDone = true
+			PlayerData.addCash(player, ch.cash, "Iron Box daily challenge")
+			PlayerData.addXP(player, ch.xp)
+			Net.notify(player, "CHALLENGE COMPLETE", string.format("%s  ·  +$%d  +%d XP", ch.text, ch.cash, ch.xp))
+		end
+	end
+	PlayerData.markChanged(player)
+
+	playRep(s)
+	GymSession:FireClient(player, "result", {
+		quality = quality,
+		gains = gains,
+		xp = xp,
+		goodReps = s.goodReps,
+		fatigue = g.fatigue,
+		efficiency = efficiency,
+		progress = progressFor(player, s.kind),
+		challenge = challengeInfo(g),
+	})
+	if s.kind == "Treadmill" then
+		raceRep(player)
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Buying passes
+---------------------------------------------------------------------------
+GymBuy.OnServerEvent:Connect(function(player: Player, kind: any)
+	if (kind ~= "pass" and kind ~= "member") or not Net.allow(player, "GymBuy", 1) then
+		return
+	end
+	local g = gymSection(player)
+	if not g then
+		return
+	end
+	local interior = player:GetAttribute("Interior") or ""
+	local door = doorPart
+	local atDoor = interior == "" and door ~= nil and Net.distance(player, door.Position) <= 18
+	local inside = interior == INTERIOR
+	if not atDoor and not inside then
+		Net.notify(player, "IRON BOX", "Head to the Iron Box Gym to buy a pass.")
+		return
+	end
+	if g.member then
+		Net.notify(player, "IRON BOX", "You're already a member. Just walk in!")
+		GymSession:FireClient(player, "bought", { member = true })
+		if atDoor then
+			enterGym(player)
+		end
+		return
+	end
+	if kind == "member" then
+		if not PlayerData.spendCash(player, GymConfig.MEMBERSHIP_PRICE, "Iron Box membership") then
+			Net.notify(player, "NOT ENOUGH CASH", "Membership costs $" .. GymConfig.MEMBERSHIP_PRICE .. ".")
+			return
+		end
+		g.member = true
+		Net.notify(player, "WELCOME TO IRON BOX", "You're a member for life. Train any time.")
+	else
+		if not PlayerData.spendCash(player, GymConfig.DAY_PASS_PRICE, "Iron Box day pass") then
+			Net.notify(player, "NOT ENOUGH CASH", "A day pass costs $" .. GymConfig.DAY_PASS_PRICE .. ".")
+			return
+		end
+		g.passUntil = math.max(os.time(), g.passUntil) + GymConfig.DAY_PASS_SECONDS
+		Net.notify(player, "DAY PASS", string.format("Good for %d minutes. Go get it!", math.ceil((g.passUntil - os.time()) / 60)))
+	end
+	PlayerData.markChanged(player)
+	GymSession:FireClient(player, "bought", { member = g.member, passUntil = g.passUntil })
+	if atDoor then
+		enterGym(player)
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Fitness app data
+---------------------------------------------------------------------------
+GymGetProgress.OnServerInvoke = function(player: Player)
+	if not Net.allow(player, "GymGetProgress", 0.3) then
+		return nil
+	end
+	local data = PlayerData.get(player)
+	local g = data and data.sections.gym
+	if not data or not g then
+		return nil
+	end
+	if ensureDay(g) then
+		PlayerData.markChanged(player)
+	end
+	local now = os.time()
+	local fatigue = GymConfig.currentFatigue(g.fatigue, g.fatigueAt, now)
+	return {
+		stats = table.clone(data.stats),
+		statXP = table.clone(data.statXP),
+		perPoint = Config.STAT_XP_PER_POINT,
+		member = g.member,
+		passUntil = g.passUntil,
+		passLeft = math.max(0, g.passUntil - now),
+		trialUsed = g.trialUsed,
+		access = accessText(g),
+		fatigue = fatigue,
+		efficiency = GymConfig.efficiency(fatigue),
+		totalReps = g.totalReps,
+		raceWins = g.raceWins,
+		challenge = challengeInfo(g),
+		gymPosition = gpsTarget,
+		training = player:GetAttribute("Training") or "",
+	}
+end
+
+---------------------------------------------------------------------------
+-- Moving equipment (treadmill belts, bike pedals) while in use
+---------------------------------------------------------------------------
+local accumulator = 0
+RunService.Heartbeat:Connect(function(dt)
+	accumulator += dt
+	if accumulator < 1 / 20 then
+		return
+	end
+	local step = accumulator
+	accumulator = 0
+	for st in animatedStations do
+		if st.stripes then
+			st.phase = (st.phase + step * 7) % BELT_LEN
+			local spacing = BELT_LEN / BELT_STRIPES
+			for i, stripe in st.stripes do
+				local z = ((i - 0.5) * spacing + st.phase) % BELT_LEN - BELT_LEN / 2
+				stripe.CFrame = st.cf * CFrame.new(0, BELT_Y, z)
+			end
+		elseif st.crank then
+			st.phase = (st.phase + step * 2 * math.pi / (2 * 0.42)) % (2 * math.pi)
+			local hub = st.cf * CRANK_HUB
+			for i = 1, 2 do
+				local side = if i == 1 then -1 else 1
+				local angle = st.phase + (if i == 1 then 0 else math.pi)
+				local spin = hub * CFrame.Angles(angle, 0, 0)
+				st.crank[i * 2 - 1].CFrame = spin * CFrame.new(side * 0.5, 0, -0.35)
+				local pedalPos = (spin * CFrame.new(side * 0.75, 0, -0.7)).Position
+				st.crank[i * 2].CFrame = CFrame.new(pedalPos) * hub.Rotation
+			end
+		end
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Gym.start(city: Instance)
+	local folder = Instance.new("Folder")
+	folder.Name = "Gym"
+	folder.Parent = city
+
+	origin = Places.REGIONS.Gym
+	insideCF = CFrame.lookAt(L(0, 0, 37), L(0, 0, 20))
+	buildInterior(folder)
+	for _, st in stations do
+		local station = st
+		station.prompt.Triggered:Connect(function(player)
+			tryStart(player, station)
+		end)
+	end
+
+	-- door: Places.door with an access gate; build our own door if the building has none
+	local door = Places.buildingDoor(city, GymConfig.BUILDING)
+	if not door then
+		warn("[CityGrind] Iron Box Gym door not found; building a stand-in door")
+		door = part({ name = "Door", size = Vector3.new(6, 9, 0.4), cframe = CFrame.new(205, 4.5, -54.9), color = Color3.fromRGB(45, 35, 30), material = Enum.Material.Wood, parent = folder })
+	end
+	doorPart = door
+	local realDoor = door :: BasePart
+	buildKiosk(folder, realDoor)
+	Places.door({
+		name = INTERIOR,
+		door = realDoor,
+		inside = insideCF,
+		exitAt = L(0, 0, 44.3),
+		actionText = "Enter Gym",
+		parent = folder,
+		canEnter = function(player: Player)
+			local g = gymSection(player)
+			if not g then
+				return false, "Your profile is still loading."
+			end
+			if hasAccess(player) then
+				return true
+			end
+			if not g.trialUsed then
+				g.trialUsed = true
+				trialVisit[player] = true
+				PlayerData.markChanged(player)
+				Net.notify(player, "FREE TRIAL", "First visit's on us. After this it's a $" .. GymConfig.DAY_PASS_PRICE .. " day pass or $" .. GymConfig.MEMBERSHIP_PRICE .. " membership.")
+				return true
+			end
+			GymSession:FireClient(player, "offer", { where = "door" })
+			return false, nil
+		end,
+	})
+
+	-- the free trial lasts one visit
+	local lastInterior: { [Player]: string } = {}
+	local function track(player: Player)
+		player:SetAttribute("Training", "")
+		lastInterior[player] = player:GetAttribute("Interior") or ""
+		player:GetAttributeChangedSignal("Interior"):Connect(function()
+			local now = player:GetAttribute("Interior") or ""
+			if lastInterior[player] == INTERIOR and now ~= INTERIOR then
+				trialVisit[player] = nil
+			end
+			lastInterior[player] = now
+		end)
+	end
+	Players.PlayerAdded:Connect(track)
+	for _, player in Players:GetPlayers() do
+		track(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		stopSession(player, true)
+		cancelRaceFor(player, player.Name .. " left the city.")
+		trialVisit[player] = nil
+		lastInterior[player] = nil
+		lastRaceMsg[player] = nil
+	end)
+
+	-- daily challenge board
+	task.spawn(function()
+		while true do
+			updateBoard()
+			task.wait(30)
+		end
+	end)
+end
+
+return Gym
+]=====])
+put(server, 'ModuleScript', 'Jobs', [=====[
+-- CITY GRIND: jobs (sections 40, 68, 77, 110).
+-- Six real jobs with shift gameplay, levels 1-25 per job, pay that scales with
+-- job level, and unlocks. The server owns every shift: it picks targets,
+-- validates each step by distance and timing, and pays per completed step.
+--
+-- World (all under city.Jobs):
+--   Job Center kiosk ........ (-40, 0, -48)  board + terminal, security sign-in, taxi rank
+--   Delivery Depot .......... (-140, 0, 170) counter at z 160
+--   Mama's takeout counter .. (86, 0, 40)
+--   Warehouse ............... (85, 0, 175)   shelves -> truck bay on the east side
+--   Construction Site ....... (195, 0, 178)  material piles + a structure that grows
+--   Maple Row houses ........ x -286..-182, z 163..177 (delivery addresses)
+--   Oak Street houses ....... x 166..254, z -204..-190 (delivery addresses)
+--
+-- Player attributes: Job (active job id or ""), JobLevel_<id>, JobXP_<id>, JobShifts_<id>.
+-- Remotes: JobAction (client -> server: "start", jobId | "quit"),
+--          JobState (server -> client: "state", payload | "end", summary | "open").
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local JobsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("JobsConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Places = require(script.Parent:WaitForChild("Places"))
+
+local JOBS = JobsConfig.JOBS
+local Jobs = {}
+
+---------------------------------------------------------------------------
+-- Saved data: per-job level / XP / shifts / lifetime earnings
+---------------------------------------------------------------------------
+PlayerData.registerSection("jobs", function()
+	local t = {}
+	for _, id in JobsConfig.ORDER do
+		t[id] = { level = 1, xp = 0, shifts = 0, earned = 0 }
+	end
+	return t
+end)
+
+PlayerData.onPublish(function(player: Player, data: any)
+	local jobs = data.sections and data.sections.jobs
+	if type(jobs) ~= "table" then
+		return
+	end
+	for _, id in JobsConfig.ORDER do
+		local j = jobs[id]
+		if type(j) == "table" then
+			player:SetAttribute("JobLevel_" .. id, j.level)
+			player:SetAttribute("JobXP_" .. id, j.xp)
+			player:SetAttribute("JobShifts_" .. id, j.shifts)
+		end
+	end
+end)
+
+local function jobRecord(player: Player, jobId: string): any
+	local sec = PlayerData.section(player, "jobs")
+	return sec and sec[jobId]
+end
+
+-- Adds job XP; returns true when the job levelled up.
+local function addJobXP(player: Player, jobId: string, amount: number): boolean
+	local rec = jobRecord(player, jobId)
+	if not rec or amount <= 0 then
+		return false
+	end
+	local levelled = false
+	rec.xp += math.floor(amount)
+	while rec.level < JobsConfig.MAX_LEVEL and rec.xp >= JobsConfig.xpToNext(rec.level) do
+		rec.xp -= JobsConfig.xpToNext(rec.level)
+		rec.level += 1
+		levelled = true
+		local unlockText = nil
+		for _, u in JOBS[jobId].unlocks do
+			if u.level == rec.level then
+				unlockText = u.text
+			end
+		end
+		Net.notify(player, "JOB LEVEL UP", JOBS[jobId].name .. " is now level " .. rec.level .. (if unlockText then ". Unlocked: " .. unlockText else "."))
+	end
+	if rec.level >= JobsConfig.MAX_LEVEL then
+		rec.xp = 0
+	end
+	PlayerData.markChanged(player)
+	return levelled
+end
+
+---------------------------------------------------------------------------
+-- Remotes
+---------------------------------------------------------------------------
+local JobAction = Net.remote("RemoteEvent", "JobAction")
+local JobState = Net.remote("RemoteEvent", "JobState")
+
+---------------------------------------------------------------------------
+-- Geometry helpers
+---------------------------------------------------------------------------
+local root: Folder
+local function now(): number
+	return Workspace:GetServerTimeNow()
+end
+
+local function part(p: { [string]: any }): BasePart
+	local b = Instance.new("Part")
+	b.Name = p.name or "Part"
+	b.Anchored = true
+	b.Size = p.size
+	b.CFrame = p.cframe
+	b.Color = p.color or Color3.fromRGB(160, 160, 160)
+	b.Material = p.material or Enum.Material.SmoothPlastic
+	b.Transparency = p.transparency or 0
+	b.CanCollide = if p.collide == nil then true else p.collide
+	if p.shape then
+		b.Shape = p.shape
+	end
+	b.TopSurface = Enum.SurfaceType.Smooth
+	b.BottomSurface = Enum.SurfaceType.Smooth
+	b.Parent = p.parent or root
+	return b
+end
+
+local function sign(target: BasePart, face: Enum.NormalId, text: string, textColor: Color3, bg: Color3?): SurfaceGui
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = face
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 40
+	gui.LightInfluence = 0
+	gui.Parent = target
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundColor3 = bg or Color3.new(0, 0, 0)
+	label.BackgroundTransparency = if bg then 0 else 1
+	label.Text = text
+	label.TextColor3 = textColor
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBlack
+	label.Parent = gui
+	return gui
+end
+
+local function billboard(adornee: BasePart, text: string, color: Color3, offsetY: number): TextLabel
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(220, 40)
+	gui.StudsOffset = Vector3.new(0, offsetY, 0)
+	gui.MaxDistance = 160
+	gui.LightInfluence = 0
+	gui.Parent = adornee
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.GothamBlack
+	label.TextSize = 18
+	label.TextColor3 = color
+	label.TextStrokeTransparency = 0.3
+	label.Text = text
+	label.Parent = gui
+	return label
+end
+
+-- ProximityPrompt factory. attrs: JobStart / JobOnly / JobOwner / JobBoard
+-- (the client hides prompts that aren't meant for it; the server re-checks everything).
+local function prompt(parent: Instance, action: string, object: string, opts: { [string]: any }?): ProximityPrompt
+	local o = opts or {}
+	local pr = Instance.new("ProximityPrompt")
+	pr.ActionText = action
+	pr.ObjectText = object
+	pr.KeyboardKeyCode = Enum.KeyCode.E
+	pr.GamepadKeyCode = Enum.KeyCode.ButtonX
+	pr.HoldDuration = o.hold or 0
+	pr.MaxActivationDistance = o.distance or 10
+	pr.RequiresLineOfSight = false
+	for _, key in { "JobStart", "JobOnly", "JobOwner", "JobBoard" } do
+		if o[key] ~= nil then
+			pr:SetAttribute(key, o[key])
+		end
+	end
+	pr.Parent = parent
+	return pr
+end
+
+local function rootOf(player: Player): BasePart?
+	local character = player.Character
+	local r = character and character:FindFirstChild("HumanoidRootPart")
+	return if r and r:IsA("BasePart") then r else nil
+end
+
+local function flat(a: Vector3, b: Vector3): number
+	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+local function flatDistance(player: Player, pos: Vector3): number
+	local r = rootOf(player)
+	return if r then flat(r.Position, pos) else math.huge
+end
+
+-- Height of the walkable surface at a spot: sidewalks are raised 0.5,
+-- everything else the jobs use sits on the ground (top at 0.05).
+local function groundY(pos: Vector3): number
+	local ax, az = math.abs(pos.X), math.abs(pos.Z)
+	local onMainWalk = az >= 16 and az <= 24 and ax > 16
+	local onCrossWalk = ax >= 16 and ax <= 24 and az > 24
+	return if onMainWalk or onCrossWalk then 0.5 else 0.05
+end
+
+---------------------------------------------------------------------------
+-- Places in the world (filled by build functions)
+---------------------------------------------------------------------------
+type Address = { name: string, pos: Vector3 }
+local ADDRESSES: { Address } = {
+	{ name = "Corner Mart", pos = Vector3.new(-80, 0, 40) },
+	{ name = "Fresh Cuts Barber", pos = Vector3.new(-135, 0, 40) },
+	{ name = "Threads Clothing", pos = Vector3.new(-197, 0, 40) },
+	{ name = "Maple Court Apts", pos = Vector3.new(-88, 0, -58) },
+	{ name = "Iron Box Gym", pos = Vector3.new(216, 0, -48) },
+}
+
+-- Taxi curbs: sidewalk spots next to the road.
+local CURBS = {
+	{ name = "West End", pos = Vector3.new(-200, 0, 20) },
+	{ name = "Threads Corner", pos = Vector3.new(-150, 0, -20) },
+	{ name = "Bus Stop", pos = Vector3.new(-60, 0, 20) },
+	{ name = "Subway Station", pos = Vector3.new(60, 0, -20) },
+	{ name = "Mama's Kitchen", pos = Vector3.new(130, 0, 20) },
+	{ name = "Gym Row", pos = Vector3.new(270, 0, -20) },
+	{ name = "Court Side", pos = Vector3.new(20, 0, -130) },
+	{ name = "North Cross", pos = Vector3.new(-20, 0, -200) },
+	{ name = "South Cross", pos = Vector3.new(-20, 0, 110) },
+	{ name = "Maple Row", pos = Vector3.new(20, 0, 200) },
+	{ name = "Budget Wheels", pos = Vector3.new(200, 0, 20) },
+	{ name = "Park Gate", pos = Vector3.new(-270, 0, -20) },
+}
+
+-- Security patrol ring, in walking order around the Neighborhood.
+local PATROL = {
+	Vector3.new(-20, 0, -180),
+	Vector3.new(20, 0, -110),
+	Vector3.new(100, 0, -20),
+	Vector3.new(200, 0, -20),
+	Vector3.new(270, 0, 20),
+	Vector3.new(130, 0, 36),
+	Vector3.new(20, 0, 100),
+	Vector3.new(20, 0, 190),
+	Vector3.new(-20, 0, 140),
+	Vector3.new(-100, 0, 36),
+	Vector3.new(-200, 0, 20),
+	Vector3.new(-270, 0, -20),
+	Vector3.new(-160, 0, -20),
+	Vector3.new(-70, 0, -20),
+}
+
+-- Places where something suspicious can turn up (behind buildings, alleys).
+local SUSPICIOUS = {
+	Vector3.new(-110, 0, -114),
+	Vector3.new(205, 0, -103),
+	Vector3.new(-70, 0, 86),
+	Vector3.new(70, 0, 86),
+	Vector3.new(-185, 0, 86),
+	Vector3.new(140, 0, -60),
+	Vector3.new(-125, 0, 84),
+	Vector3.new(30, 0, -60),
+	Vector3.new(-240, 0, -60),
+	Vector3.new(250, 0, 140),
+	Vector3.new(-60, 0, 200),
+}
+
+local SUSPICIOUS_OUTCOMES = {
+	"Just a raccoon in the trash. All clear.",
+	"Found an unlocked back door and secured it.",
+	"Kids tagging a wall ran off when they saw you.",
+	"A lost dog. You called the number on its collar.",
+	"Somebody's bike was left out. Logged it.",
+	"A flickering light. Reported it to maintenance.",
+}
+
+local depotCounter: BasePart
+local foodCounter: BasePart
+local warehouse = { racks = {} :: { { spot: BasePart, box: BasePart } }, bay = nil :: BasePart?, truckBoxes = {} :: { BasePart }, loaded = 0 }
+local site = {
+	piles = {} :: { [string]: BasePart },
+	pieces = {} :: { { part: BasePart, material: string, built: boolean, reservedBy: Player? } },
+	board = nil :: TextLabel?,
+	resetting = false,
+}
+local startPrompts: { [string]: { ProximityPrompt } } = {}
+
+---------------------------------------------------------------------------
+-- Shift state
+---------------------------------------------------------------------------
+local shifts: { [Player]: any } = {}
+
+local VEHICLE_JOBS = { Delivery = true, FoodDelivery = true, Taxi = true }
+local FOOT_SPEED = 45 -- studs/s: faster than sprinting or sliding
+local VEHICLE_SPEED = 260 -- studs/s: faster than any car
+
+local function maxSpeed(shift: any): number
+	return if VEHICLE_JOBS[shift.job] then VEHICLE_SPEED else FOOT_SPEED
+end
+
+local vehiclesModule: any = nil
+local function vehicles(): any
+	if vehiclesModule == nil then
+		local m = script.Parent:FindFirstChild("Vehicles")
+		if m and m:IsA("ModuleScript") then
+			local ok, result = pcall(require, m)
+			vehiclesModule = if ok and type(result) == "table" then result else false
+		else
+			return nil
+		end
+	end
+	return vehiclesModule or nil
+end
+
+-- True while the player is in the driver's seat of a car (not a bike/scooter).
+local function isDrivingCar(player: Player): boolean
+	if not JobsConfig.isCarKind(player:GetAttribute("Driving")) then
+		return false
+	end
+	local V = vehicles()
+	if V and type(V.drivingVehicle) == "function" then
+		local ok, model = pcall(V.drivingVehicle, player)
+		return ok and model ~= nil
+	end
+	return true
+end
+
+local function ownsCar(player: Player): boolean
+	if isDrivingCar(player) then
+		return true
+	end
+	if player:GetAttribute("OwnsCar") == true then
+		return true
+	end
+	local V = vehicles()
+	if V and type(V.ownedKinds) == "function" then
+		local ok, kinds = pcall(V.ownedKinds, player)
+		if ok and type(kinds) == "table" then
+			for _, kind in kinds do
+				if JobsConfig.isCarKind(kind) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function isSeated(player: Player): boolean
+	local character = player.Character
+	local hum = character and character:FindFirstChildOfClass("Humanoid")
+	return (hum ~= nil and hum.SeatPart ~= nil) or (player:GetAttribute("Driving") or "") ~= ""
+end
+
+local function publish(shift: any)
+	local player: Player = shift.player
+	if not player.Parent then
+		return
+	end
+	local def = JOBS[shift.job]
+	JobState:FireClient(player, "state", {
+		job = shift.job,
+		objective = shift.objective,
+		progress = shift.done,
+		goal = shift.goal,
+		word = def.stepWord,
+		earned = shift.earned,
+		endsAt = shift.endsAt,
+		target = shift.target,
+		targetName = shift.targetName,
+		adornee = shift.adornee,
+		ghost = shift.ghost,
+		hotUntil = shift.hotUntil,
+		combo = shift.combo,
+	})
+end
+
+local function setObjective(shift: any, text: string, target: Vector3?, targetName: string?)
+	shift.objective = text
+	shift.target = target
+	shift.targetName = targetName
+	publish(shift)
+end
+
+-- Starts timing a step: it can't be finished faster than travel allows.
+local function beginStep(shift: any, from: Vector3?)
+	local r = rootOf(shift.player)
+	shift.stepFrom = from or (if r then r.Position else Vector3.zero)
+	shift.stepAt = now()
+end
+
+local function tooFast(shift: any, target: Vector3): boolean
+	local needed = math.max(0.8, flat(shift.stepFrom, target) / maxSpeed(shift))
+	if now() - shift.stepAt < needed then
+		Net.notify(shift.player, "TOO FAST", "That was impossibly quick. Do the job properly.")
+		return true
+	end
+	return false
+end
+
+-- Things created for this shift, destroyed when it ends.
+local function track(shift: any, inst: Instance): Instance
+	table.insert(shift.cleanup, inst)
+	return inst
+end
+
+local function clearTracked(shift: any, inst: Instance?)
+	if not inst then
+		return
+	end
+	local i = table.find(shift.cleanup, inst)
+	if i then
+		table.remove(shift.cleanup, i)
+	end
+	inst:Destroy()
+end
+
+-- A glowing ground ring only the shift owner sees (client hides it for others).
+local function ownerMarker(shift: any, pos: Vector3, label: string, color: Color3): BasePart
+	local y = groundY(pos)
+	local ring = part({
+		name = "JobMarker",
+		size = Vector3.new(0.2, 8, 8),
+		cframe = CFrame.new(pos.X, y + 0.12, pos.Z) * CFrame.Angles(0, 0, math.pi / 2),
+		color = color,
+		material = Enum.Material.Neon,
+		transparency = 0.35,
+		collide = false,
+		shape = Enum.PartType.Cylinder,
+	})
+	ring.CanQuery = false
+	ring.CanTouch = false
+	ring:SetAttribute("JobOwner", shift.player.UserId)
+	billboard(ring, label, color, 6)
+	return track(shift, ring) :: BasePart
+end
+
+---------------------------------------------------------------------------
+-- Carrying: a prop welded in front of the body, arms raised (server-side so
+-- everyone sees it)
+---------------------------------------------------------------------------
+local CARRY = {
+	Parcel = { size = Vector3.new(2, 1.5, 1.6), color = Color3.fromRGB(190, 145, 95), material = Enum.Material.Cardboard, twoHands = true },
+	Box = { size = Vector3.new(2.2, 1.8, 1.8), color = Color3.fromRGB(175, 130, 80), material = Enum.Material.Cardboard, twoHands = true },
+	Food = { size = Vector3.new(1.1, 1.3, 0.8), color = Color3.fromRGB(200, 50, 40), material = Enum.Material.Fabric, twoHands = false },
+	Bricks = { size = Vector3.new(2, 1.2, 1.4), color = Color3.fromRGB(165, 70, 50), material = Enum.Material.Brick, twoHands = true },
+	Planks = { size = Vector3.new(6, 0.4, 1.2), color = Color3.fromRGB(190, 150, 95), material = Enum.Material.WoodPlanks, twoHands = true },
+	Beams = { size = Vector3.new(6, 0.7, 0.7), color = Color3.fromRGB(120, 125, 135), material = Enum.Material.DiamondPlate, twoHands = true },
+}
+
+local function dropCarry(shift: any)
+	if shift.carry then
+		shift.carry:Destroy()
+		shift.carry = nil
+	end
+	for motor, c0 in shift.savedC0 or {} do
+		if motor.Parent then
+			motor.C0 = c0
+		end
+	end
+	shift.savedC0 = nil
+end
+
+local function setCarry(shift: any, kind: string, count: number?)
+	dropCarry(shift)
+	local character = shift.player.Character
+	if not character then
+		return
+	end
+	local spec = CARRY[kind]
+	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	local hand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
+	if not torso or not torso:IsA("BasePart") then
+		return
+	end
+	local holder = Instance.new("Model")
+	holder.Name = "JobCarry"
+	local stack = math.clamp(count or 1, 1, 3)
+	local function piece(offset: CFrame, base: BasePart)
+		local p = Instance.new("Part")
+		p.Name = kind
+		p.Size = spec.size
+		p.Color = spec.color
+		p.Material = spec.material
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.Massless = true
+		p.CFrame = base.CFrame * offset
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = base
+		weld.Part1 = p
+		weld.Parent = p
+		p.Parent = holder
+		return p
+	end
+	if spec.twoHands then
+		for i = 1, stack do
+			piece(CFrame.new(0, -0.1 + (i - 1) * spec.size.Y, -(torso.Size.Z / 2 + spec.size.Z / 2 + 0.2)), torso)
+		end
+		-- raise both arms forward (R15 shoulders keep their rotation in C0)
+		local saved = {}
+		for _, name in { "RightUpperArm", "LeftUpperArm" } do
+			local arm = character:FindFirstChild(name)
+			local motor = arm and arm:FindFirstChild(if name == "RightUpperArm" then "RightShoulder" else "LeftShoulder")
+			if motor and motor:IsA("Motor6D") then
+				saved[motor] = motor.C0
+				motor.C0 = motor.C0 * CFrame.Angles(math.rad(70), 0, 0)
+			end
+		end
+		shift.savedC0 = saved
+	elseif hand and hand:IsA("BasePart") then
+		piece(CFrame.new(0, -(hand.Size.Y / 2 + spec.size.Y / 2 - 0.2), 0), hand)
+	end
+	holder.Parent = character
+	shift.carry = holder
+end
+
+---------------------------------------------------------------------------
+-- Paying for work
+---------------------------------------------------------------------------
+local STAT_XP = {
+	Warehouse = { Strength = 6 },
+	Construction = { Strength = 8 },
+	Security = { Stamina = 6, Speed = 3 },
+}
+
+local function completeStep(shift: any, amount: number)
+	local player = shift.player
+	local def = JOBS[shift.job]
+	amount = math.max(1, math.floor(amount))
+	PlayerData.addCash(player, amount, def.name .. " shift")
+	shift.earned += amount
+	shift.done += 1
+	PlayerData.addXP(player, JobsConfig.PLAYER_XP_PER_STEP)
+	if addJobXP(player, shift.job, JobsConfig.JOB_XP_PER_STEP) then
+		shift.levelledUp = true
+	end
+	for stat, n in STAT_XP[shift.job] or {} do
+		PlayerData.addStatXP(player, stat, n)
+	end
+	-- carrying parcels / food on foot is cardio
+	if (shift.job == "Delivery" or shift.job == "FoodDelivery") and not isSeated(player) then
+		PlayerData.addStatXP(player, "Stamina", 3)
+	end
+end
+
+local endShift: (Player, string) -> ()
+
+local function finishIfDone(shift: any): boolean
+	if shift.done >= shift.goal then
+		endShift(shift.player, "complete")
+		return true
+	end
+	return false
+end
+
+-- Pick a random entry, avoiding `avoid` and preferring ones at least minDist from `from`.
+local function pickFrom<T>(list: { T }, getPos: (T) -> Vector3, from: Vector3, minDist: number, avoid: T?): T
+	local good = {}
+	for _, item in list do
+		if item ~= avoid and flat(getPos(item), from) >= minDist then
+			table.insert(good, item)
+		end
+	end
+	if #good == 0 then
+		for _, item in list do
+			if item ~= avoid then
+				table.insert(good, item)
+			end
+		end
+	end
+	return good[math.random(#good)]
+end
+
+local function addressPos(a: Address): Vector3
+	return a.pos
+end
+
+---------------------------------------------------------------------------
+-- 1. Delivery
+---------------------------------------------------------------------------
+local function deliveryNextDrop(shift: any)
+	local r = rootOf(shift.player)
+	local from = if r then r.Position else depotCounter.Position
+	local addr = pickFrom(ADDRESSES, addressPos, from, 60, shift.address)
+	shift.address = addr
+	shift.phase = "drop"
+	clearTracked(shift, shift.dropZone)
+	local zone = ownerMarker(shift, addr.pos, "📦 " .. addr.name, Color3.fromRGB(255, 190, 80))
+	shift.dropZone = zone
+	local pr = prompt(zone, "Deliver parcel", addr.name, { hold = 0.5, distance = 12, JobOwner = shift.player.UserId })
+	local myShift = shift
+	pr.Triggered:Connect(function(player)
+		local s = shifts[player]
+		if s ~= myShift or s.phase ~= "drop" or s.address ~= addr then
+			return
+		end
+		if flatDistance(player, addr.pos) > 14 or tooFast(s, addr.pos) then
+			return
+		end
+		local dist = flat(s.stepFrom, addr.pos)
+		local factor = math.clamp(0.8 + dist / 700, 0.8, 1.35)
+		completeStep(s, JobsConfig.stepPay("Delivery", s.level) * factor)
+		s.parcels -= 1
+		if finishIfDone(s) then
+			return
+		end
+		setCarry(s, "Parcel", s.parcels)
+		beginStep(s, addr.pos)
+		deliveryNextDrop(s)
+	end)
+	setObjective(shift, string.format("Deliver a parcel to %s (%d left)", addr.name, shift.parcels), addr.pos, addr.name)
+end
+
+local function deliveryStart(shift: any)
+	shift.phase = "load"
+	shift.parcels = 0
+	setObjective(shift, "Load your parcels at the Depot counter", depotCounter.Position, "Depot counter")
+end
+
+local function deliveryLoad(player: Player)
+	local s = shifts[player]
+	if not s or s.job ~= "Delivery" or s.phase ~= "load" or Net.distance(player, depotCounter.Position) > 14 then
+		return
+	end
+	s.parcels = s.goal
+	setCarry(s, "Parcel", s.parcels)
+	beginStep(s, depotCounter.Position)
+	deliveryNextDrop(s)
+end
+
+---------------------------------------------------------------------------
+-- 2. Food delivery
+---------------------------------------------------------------------------
+local function foodStart(shift: any)
+	shift.phase = "pickup"
+	shift.hotUntil = nil
+	setObjective(shift, string.format("Pick up order %d at Mama's Kitchen", shift.done + 1), foodCounter.Position, "Mama's Kitchen")
+end
+
+local function foodPickup(player: Player)
+	local s = shifts[player]
+	if not s or s.job ~= "FoodDelivery" or s.phase ~= "pickup" or Net.distance(player, foodCounter.Position) > 14 then
+		return
+	end
+	local addr = pickFrom(ADDRESSES, addressPos, foodCounter.Position, 80, s.address)
+	s.address = addr
+	s.phase = "deliver"
+	local dist = flat(foodCounter.Position, addr.pos)
+	s.orderDist = dist
+	s.hotSeconds = math.floor(20 + dist / 14)
+	s.hotUntil = now() + s.hotSeconds
+	s.coldNotified = false
+	setCarry(s, "Food")
+	beginStep(s, foodCounter.Position)
+	clearTracked(s, s.dropZone)
+	local zone = ownerMarker(s, addr.pos, "🍔 " .. addr.name, Color3.fromRGB(255, 110, 80))
+	s.dropZone = zone
+	local pr = prompt(zone, "Hand over order", addr.name, { hold = 0.4, distance = 12, JobOwner = player.UserId })
+	local myShift = s
+	pr.Triggered:Connect(function(p)
+		local cur = shifts[p]
+		if cur ~= myShift or cur.phase ~= "deliver" or cur.address ~= addr then
+			return
+		end
+		if flatDistance(p, addr.pos) > 14 or tooFast(cur, addr.pos) then
+			return
+		end
+		local base = JobsConfig.stepPay("FoodDelivery", cur.level) * math.clamp(0.7 + cur.orderDist / 600, 0.7, 1.2)
+		local remaining = cur.hotUntil - now()
+		local pay, note
+		if remaining > 0 then
+			local tip = base * 0.45 * (remaining / cur.hotSeconds)
+			pay = base + tip
+			note = string.format("Hot! Tip $%d", math.floor(tip))
+			if not isSeated(p) then
+				PlayerData.addStatXP(p, "Speed", 2)
+			end
+		else
+			pay = base * 0.6
+			note = "The food went cold: no tip, reduced pay"
+		end
+		completeStep(cur, pay)
+		Net.notify(p, "ORDER DELIVERED", string.format("+$%d. %s", math.floor(pay), note))
+		dropCarry(cur)
+		clearTracked(cur, cur.dropZone)
+		cur.dropZone = nil
+		if finishIfDone(cur) then
+			return
+		end
+		foodStart(cur)
+	end)
+	setObjective(s, "Deliver the order to " .. addr.name .. " while it's hot", addr.pos, addr.name)
+end
+
+---------------------------------------------------------------------------
+-- 3. Taxi
+---------------------------------------------------------------------------
+local SKIN = { Color3.fromRGB(255, 220, 180), Color3.fromRGB(230, 180, 140), Color3.fromRGB(180, 120, 80), Color3.fromRGB(120, 80, 50), Color3.fromRGB(80, 55, 40) }
+local SHIRT = { Color3.fromRGB(200, 60, 60), Color3.fromRGB(60, 110, 200), Color3.fromRGB(240, 200, 60), Color3.fromRGB(60, 160, 90), Color3.fromRGB(240, 240, 240), Color3.fromRGB(40, 40, 45) }
+local PANTS = { Color3.fromRGB(40, 50, 90), Color3.fromRGB(30, 30, 30), Color3.fromRGB(110, 90, 60), Color3.fromRGB(80, 80, 85) }
+
+local function pick<T>(list: { T }): T
+	return list[math.random(#list)]
+end
+
+-- A simple part-built person, used if the humanoid rig can't be made.
+local function fallbackPerson(skin: Color3, shirt: Color3, pants: Color3): Model
+	local m = Instance.new("Model")
+	local torso = Instance.new("Part")
+	torso.Name = "HumanoidRootPart"
+	torso.Size = Vector3.new(2, 2, 1)
+	torso.Color = shirt
+	torso.Anchored = true
+	torso.Parent = m
+	m.PrimaryPart = torso
+	local function limb(name: string, size: Vector3, offset: Vector3, color: Color3, shape: Enum.PartType?)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.Color = color
+		p.Anchored = true
+		if shape then
+			p.Shape = shape
+		end
+		p.CFrame = torso.CFrame + offset
+		p.Parent = m
+	end
+	limb("Head", Vector3.new(1.3, 1.3, 1.3), Vector3.new(0, 1.65, 0), skin, Enum.PartType.Ball)
+	limb("LeftArm", Vector3.new(0.9, 2, 0.9), Vector3.new(-1.45, 0, 0), skin)
+	limb("RightArm", Vector3.new(0.9, 2, 0.9), Vector3.new(1.45, 0, 0), skin)
+	limb("LeftLeg", Vector3.new(0.95, 2, 0.95), Vector3.new(-0.5, -2, 0), pants)
+	limb("RightLeg", Vector3.new(0.95, 2, 0.95), Vector3.new(0.5, -2, 0), pants)
+	m:SetAttribute("HipOffset", 3)
+	return m
+end
+
+local function makePassenger(): Model
+	local skin, shirt, pants = pick(SKIN), pick(SHIRT), pick(PANTS)
+	local ok, model = pcall(function()
+		local desc = Instance.new("HumanoidDescription")
+		desc.HeadColor = skin
+		desc.LeftArmColor = skin
+		desc.RightArmColor = skin
+		desc.TorsoColor = shirt
+		desc.LeftLegColor = pants
+		desc.RightLegColor = pants
+		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+	end)
+	local m: Model
+	if ok and typeof(model) == "Instance" and model:IsA("Model") and model:FindFirstChild("HumanoidRootPart") then
+		m = model
+		local hum = m:FindFirstChildOfClass("Humanoid")
+		local hrp = m:FindFirstChild("HumanoidRootPart") :: BasePart
+		hrp.Anchored = true
+		if hum then
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			m:SetAttribute("HipOffset", hum.HipHeight + hrp.Size.Y / 2)
+		else
+			m:SetAttribute("HipOffset", 3)
+		end
+		-- hailing a cab: right arm up
+		local arm = m:FindFirstChild("RightUpperArm")
+		local shoulder = arm and arm:FindFirstChild("RightShoulder")
+		if shoulder and shoulder:IsA("Motor6D") then
+			shoulder.C0 = shoulder.C0 * CFrame.Angles(0, 0, math.rad(150))
+		end
+	else
+		m = fallbackPerson(skin, shirt, pants)
+	end
+	m.Name = "TaxiPassenger"
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.CanTouch = false
+		end
+	end
+	return m
+end
+
+local function placePerson(m: Model, pos: Vector3, faceTo: Vector3)
+	local y = groundY(pos) + (m:GetAttribute("HipOffset") or 3)
+	local at = Vector3.new(pos.X, y, pos.Z)
+	local look = Vector3.new(faceTo.X, y, faceTo.Z)
+	if (look - at).Magnitude < 0.1 then
+		look = at + Vector3.new(0, 0, -1)
+	end
+	m:PivotTo(CFrame.lookAt(at, look))
+end
+
+local function taxiNextFare(shift: any)
+	local r = rootOf(shift.player)
+	local from = if r then r.Position else JobsConfig.START.Taxi
+	local curb = pickFrom(CURBS, function(c)
+		return c.pos
+	end, from, 70, shift.dest)
+	shift.curb = curb
+	shift.phase = "pickup"
+	clearTracked(shift, shift.marker)
+	shift.marker = ownerMarker(shift, curb.pos, "🙋 Your passenger", Color3.fromRGB(255, 210, 50))
+	setObjective(shift, "Drive to your passenger at " .. curb.name, curb.pos, curb.name)
+	local myShift = shift
+	task.spawn(function()
+		local person = makePassenger()
+		if shifts[myShift.player] ~= myShift or myShift.curb ~= curb then
+			person:Destroy()
+			return
+		end
+		-- face the road: sidewalks along x face z = 0, along z face x = 0
+		local face = if math.abs(curb.pos.Z) <= 24 then Vector3.new(curb.pos.X, 0, 0) else Vector3.new(0, 0, curb.pos.Z)
+		person.Parent = root
+		placePerson(person, curb.pos, face)
+		track(myShift, person)
+		myShift.passenger = person
+	end)
+end
+
+local function taxiStart(shift: any)
+	taxiNextFare(shift)
+	if not isDrivingCar(shift.player) then
+		shift.objective = "Get in your car, then pick up your passenger"
+		publish(shift)
+	end
+end
+
+local function taxiTick(shift: any)
+	local player = shift.player
+	local r = rootOf(player)
+	if not r then
+		return
+	end
+	local driving = isDrivingCar(player)
+	local speed = r.AssemblyLinearVelocity.Magnitude
+	if shift.phase == "pickup" then
+		local curb = shift.curb
+		local wantText = if driving then "Drive to your passenger at " .. curb.name else "Get in your car, then pick up your passenger"
+		if shift.objective ~= wantText then
+			setObjective(shift, wantText, curb.pos, curb.name)
+		end
+		if driving and shift.passenger and flat(r.Position, curb.pos) < 20 then
+			if speed > 35 then
+				if not shift.slowWarned then
+					shift.slowWarned = true
+					Net.notify(player, "SLOW DOWN", "Stop next to the passenger so they can get in.")
+				end
+				return
+			end
+			shift.slowWarned = false
+			-- the passenger gets in
+			shift.passenger.Parent = nil
+			local V = vehicles()
+			if V and type(V.drivingVehicle) == "function" then
+				local ok, car = pcall(V.drivingVehicle, player)
+				if ok and typeof(car) == "Instance" then
+					car:SetAttribute("TaxiPassenger", true)
+					shift.car = car
+				end
+			end
+			clearTracked(shift, shift.marker)
+			local dest = pickFrom(CURBS, function(c)
+				return c.pos
+			end, curb.pos, 150, curb)
+			shift.dest = dest
+			shift.phase = "ride"
+			beginStep(shift, curb.pos)
+			shift.marker = ownerMarker(shift, dest.pos, "🏁 Drop-off: " .. dest.name, Color3.fromRGB(80, 220, 120))
+			Net.notify(player, "PASSENGER ON BOARD", "Take them to " .. dest.name .. ".")
+			setObjective(shift, "Drive your passenger to " .. dest.name, dest.pos, dest.name)
+		end
+	elseif shift.phase == "ride" then
+		local dest = shift.dest
+		local wantText = if driving then "Drive your passenger to " .. dest.name else "Get back in your car, your passenger is waiting"
+		if shift.objective ~= wantText then
+			setObjective(shift, wantText, dest.pos, dest.name)
+		end
+		if driving and flat(r.Position, dest.pos) < 24 and speed < 35 then
+			if tooFast(shift, dest.pos) then
+				return
+			end
+			local dist = flat(shift.stepFrom, dest.pos)
+			local factor = math.clamp(0.8 + (dist - 150) / 400, 0.8, 1.4)
+			local fare = JobsConfig.stepPay("Taxi", shift.level) * factor
+			completeStep(shift, fare)
+			Net.notify(player, "FARE PAID", string.format("+$%d for a %dm ride.", math.floor(fare), math.floor(dist / 3.57)))
+			if shift.car and shift.car.Parent then
+				shift.car:SetAttribute("TaxiPassenger", nil)
+			end
+			-- the passenger steps out and walks off
+			local person = shift.passenger
+			shift.passenger = nil
+			if person then
+				local i = table.find(shift.cleanup, person)
+				if i then
+					table.remove(shift.cleanup, i)
+				end
+				person.Parent = root
+				-- step out onto the sidewalk, facing away from the road
+				local away = if math.abs(dest.pos.Z) <= 24 then Vector3.new(0, 0, if dest.pos.Z >= 0 then 1 else -1) else Vector3.new(if dest.pos.X >= 0 then 1 else -1, 0, 0)
+				placePerson(person, dest.pos + away * 2, dest.pos + away * 10)
+				local anchor = person.PrimaryPart or person:FindFirstChild("HumanoidRootPart")
+				if anchor and anchor:IsA("BasePart") then
+					billboard(anchor, "Thanks! ⭐⭐⭐⭐⭐", Color3.fromRGB(255, 220, 80), 4)
+				end
+				task.delay(4, function()
+					person:Destroy()
+				end)
+			end
+			clearTracked(shift, shift.marker)
+			shift.marker = nil
+			if finishIfDone(shift) then
+				return
+			end
+			taxiNextFare(shift)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- 4. Warehouse
+---------------------------------------------------------------------------
+local function warehouseNextBox(shift: any)
+	local options = {}
+	for i = 1, #warehouse.racks do
+		if i ~= shift.rack then
+			table.insert(options, i)
+		end
+	end
+	shift.rack = options[math.random(#options)]
+	shift.phase = "pick"
+	local rack = warehouse.racks[shift.rack]
+	shift.adornee = rack.box
+	setObjective(shift, "Grab the highlighted box from the shelf", rack.spot.Position, "Shelf " .. shift.rack)
+end
+
+local function warehouseStart(shift: any)
+	shift.combo = 0
+	shift.lastLoadAt = 0
+	warehouseNextBox(shift)
+end
+
+local function warehouseGrab(player: Player, rackIndex: number)
+	local s = shifts[player]
+	if not s or s.job ~= "Warehouse" then
+		return
+	end
+	local rack = warehouse.racks[rackIndex]
+	if Net.distance(player, rack.spot.Position) > 12 then
+		return
+	end
+	if s.phase ~= "pick" then
+		Net.notify(player, "HANDS FULL", "Load the box you're carrying onto the truck first.")
+		return
+	end
+	if s.rack ~= rackIndex then
+		Net.notify(player, "WRONG SHELF", "Grab the highlighted box.")
+		return
+	end
+	setCarry(s, "Box")
+	s.phase = "load"
+	s.adornee = nil
+	beginStep(s, rack.spot.Position)
+	setObjective(s, "Carry the box to the truck bay and load it", warehouse.bay.Position, "Truck bay")
+end
+
+local function truckAddBox()
+	warehouse.loaded += 1
+	local box = warehouse.truckBoxes[warehouse.loaded]
+	if box then
+		box.Transparency = 0
+	end
+	if warehouse.loaded >= #warehouse.truckBoxes then
+		-- full truck "leaves" and a fresh one backs in
+		warehouse.loaded = 0
+		task.delay(2, function()
+			for _, b in warehouse.truckBoxes do
+				b.Transparency = 1
+			end
+		end)
+	end
+end
+
+local function warehouseLoad(player: Player)
+	local s = shifts[player]
+	local bay = warehouse.bay
+	if not s or s.job ~= "Warehouse" or not bay or s.phase ~= "load" then
+		return
+	end
+	if Net.distance(player, bay.Position) > 14 or tooFast(s, bay.Position) then
+		return
+	end
+	local t = now()
+	if s.lastLoadAt > 0 and t - s.lastLoadAt <= 14 then
+		s.combo = math.min(5, s.combo + 1)
+	else
+		s.combo = 0
+	end
+	s.lastLoadAt = t
+	local pay = JobsConfig.stepPay("Warehouse", s.level) * (1 + 0.1 * s.combo)
+	completeStep(s, pay)
+	truckAddBox()
+	dropCarry(s)
+	if finishIfDone(s) then
+		return
+	end
+	beginStep(s, bay.Position)
+	warehouseNextBox(s)
+end
+
+---------------------------------------------------------------------------
+-- 5. Construction
+---------------------------------------------------------------------------
+local function updateSiteBoard()
+	if site.board then
+		local built = 0
+		for _, piece in site.pieces do
+			if piece.built then
+				built += 1
+			end
+		end
+		site.board.Text = if site.resetting then "COMPLETE! NEW BUILD STARTING..." else string.format("BUILD PROGRESS  %d / %d", built, #site.pieces)
+	end
+end
+
+local function constructionAssign(shift: any)
+	shift.phase = "assign"
+	shift.piece = nil
+	shift.ghost = nil
+	clearTracked(shift, shift.spot)
+	shift.spot = nil
+	if not site.resetting then
+		for i, piece in site.pieces do
+			if not piece.built and not piece.reservedBy then
+				piece.reservedBy = shift.player
+				shift.piece = i
+				break
+			end
+		end
+	end
+	if not shift.piece then
+		local waitText = "The crew is clearing the site. Stand by..."
+		if shift.objective ~= waitText then
+			setObjective(shift, waitText, nil, nil)
+		end
+		return
+	end
+	local piece = site.pieces[shift.piece]
+	shift.phase = "fetch"
+	if shift.carryKind == piece.material then
+		-- already holding the right material
+		shift.phase = "place"
+	end
+	if shift.phase == "fetch" then
+		shift.ghost = { cframe = piece.part.CFrame, size = piece.part.Size }
+		setObjective(shift, "Grab " .. piece.material .. " from the material piles", site.piles[piece.material].Position, piece.material)
+	else
+		Jobs._showBuildSpot(shift)
+	end
+end
+
+function Jobs._showBuildSpot(shift: any)
+	local piece = site.pieces[shift.piece]
+	local p = piece.part.Position
+	local spotPos = Vector3.new(p.X, 0, p.Z)
+	clearTracked(shift, shift.spot)
+	local spot = part({
+		name = "BuildSpot",
+		size = Vector3.new(2, 4, 2),
+		cframe = CFrame.new(spotPos + Vector3.new(0, 2.5, 0)),
+		transparency = 1,
+		collide = false,
+	})
+	spot.CanQuery = false
+	spot.CanTouch = false
+	spot:SetAttribute("JobOwner", shift.player.UserId)
+	track(shift, spot)
+	shift.spot = spot
+	local pr = prompt(spot, "Place " .. piece.material, "Build spot", { hold = 0.8, distance = 12, JobOwner = shift.player.UserId })
+	local myShift = shift
+	local myPiece = shift.piece
+	pr.Triggered:Connect(function(player)
+		local s = shifts[player]
+		if s ~= myShift or s.phase ~= "place" or s.piece ~= myPiece then
+			return
+		end
+		if flatDistance(player, spotPos) > 14 or tooFast(s, spotPos) then
+			return
+		end
+		local pc = site.pieces[myPiece]
+		if pc.built then
+			constructionAssign(s)
+			return
+		end
+		pc.built = true
+		pc.reservedBy = nil
+		pc.part.CanCollide = true
+		pc.part.CanQuery = true
+		pc.part.Transparency = 0.7
+		TweenService:Create(pc.part, TweenInfo.new(0.5), { Transparency = 0 }):Play()
+		completeStep(s, JobsConfig.stepPay("Construction", s.level))
+		s.carryKind = nil
+		dropCarry(s)
+		updateSiteBoard()
+		-- whole structure done: bonus for everyone on site, then rebuild from scratch
+		local allBuilt = true
+		for _, other in site.pieces do
+			if not other.built then
+				allBuilt = false
+			end
+		end
+		if allBuilt and not site.resetting then
+			site.resetting = true
+			updateSiteBoard()
+			for _, other in shifts do
+				if other.job == "Construction" then
+					local bonus = math.floor(JobsConfig.stepPay("Construction", other.level))
+					PlayerData.addCash(other.player, bonus, "Construction shift")
+					other.earned += bonus
+					Net.notify(other.player, "BUILDING COMPLETE", string.format("The crew finished the build! Bonus +$%d", bonus))
+					publish(other)
+				end
+			end
+			task.delay(8, function()
+				for _, other in site.pieces do
+					other.built = false
+					other.part.Transparency = 1
+					other.part.CanCollide = false
+					other.part.CanQuery = false
+				end
+				site.resetting = false
+				updateSiteBoard()
+			end)
+		end
+		if finishIfDone(s) then
+			return
+		end
+		beginStep(s, spotPos)
+		constructionAssign(s)
+	end)
+	shift.ghost = { cframe = piece.part.CFrame, size = piece.part.Size }
+	setObjective(shift, "Place the " .. piece.material .. " at the highlighted spot", spotPos, "Build spot")
+end
+
+local function constructionTake(player: Player, material: string)
+	local s = shifts[player]
+	local pile = site.piles[material]
+	if not s or s.job ~= "Construction" or not pile or Net.distance(player, pile.Position) > 12 then
+		return
+	end
+	if s.phase ~= "fetch" and s.phase ~= "place" then
+		return
+	end
+	local piece = site.pieces[s.piece]
+	if not piece then
+		return
+	end
+	if piece.material ~= material then
+		Net.notify(player, "WRONG MATERIAL", "The highlighted spot needs " .. piece.material .. ".")
+		return
+	end
+	if s.phase == "place" then
+		return
+	end
+	s.carryKind = material
+	setCarry(s, material)
+	s.phase = "place"
+	beginStep(s, pile.Position)
+	Jobs._showBuildSpot(s)
+end
+
+local function constructionStart(shift: any)
+	constructionAssign(shift)
+end
+
+---------------------------------------------------------------------------
+-- 6. Security
+---------------------------------------------------------------------------
+local function securityShowCheckpoint(shift: any)
+	local pos = shift.route[shift.routeIndex]
+	shift.phase = "patrol"
+	clearTracked(shift, shift.marker)
+	shift.marker = ownerMarker(shift, pos, string.format("🛡️ Checkpoint %d/%d", shift.routeIndex, #shift.route), Color3.fromRGB(110, 150, 255))
+	setObjective(shift, string.format("Patrol on foot to checkpoint %d", shift.routeIndex), pos, "Checkpoint " .. shift.routeIndex)
+end
+
+local function securityStart(shift: any)
+	local route = {}
+	local n = #PATROL
+	local startIndex = math.random(n)
+	local dir = if math.random() < 0.5 then 1 else -1
+	-- begin at the patrol point nearest the player when that's close
+	local r = rootOf(shift.player)
+	if r then
+		local best, bestDist = startIndex, math.huge
+		for i, p in PATROL do
+			local d = flat(p, r.Position)
+			if d < bestDist then
+				best, bestDist = i, d
+			end
+		end
+		startIndex = best
+	end
+	local length = 0
+	local prev = if r then r.Position else PATROL[startIndex]
+	for k = 0, shift.goal - 1 do
+		local p = PATROL[((startIndex - 1 + k * dir) % n) + 1]
+		table.insert(route, p)
+		length += flat(prev, p)
+		prev = p
+	end
+	shift.route = route
+	shift.routeIndex = 1
+	shift.checks = 0
+	-- about walking pace plus some slack; suspicious spots add time when they appear
+	shift.endsAt = now() + math.floor(length / 13 + 40)
+	securityShowCheckpoint(shift)
+end
+
+local function securitySuspicious(shift: any, near: Vector3)
+	local best, bestDist = SUSPICIOUS[1], math.huge
+	for _, p in SUSPICIOUS do
+		local d = flat(p, near)
+		if d < bestDist then
+			best, bestDist = p, d
+		end
+	end
+	shift.phase = "suspicious"
+	shift.suspiciousPos = best
+	shift.endsAt += math.floor(20 + bestDist / 13)
+	clearTracked(shift, shift.marker)
+	shift.marker = ownerMarker(shift, best, "❓ Suspicious activity", Color3.fromRGB(255, 80, 80))
+	local y = groundY(best)
+	local thing = part({
+		name = "Suspicious",
+		size = Vector3.new(2.5, 3, 2.5),
+		cframe = CFrame.new(best.X, y + 1.5, best.Z),
+		color = Color3.fromRGB(25, 25, 30),
+		material = Enum.Material.Fabric,
+		collide = false,
+	})
+	thing:SetAttribute("JobOwner", shift.player.UserId)
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 60, 60)
+	light.Range = 14
+	light.Brightness = 2
+	light.Parent = thing
+	track(shift, thing)
+	shift.suspicious = thing
+	local pr = prompt(thing, "Investigate", "Suspicious activity", { hold = 2.5, distance = 10, JobOwner = shift.player.UserId })
+	local myShift = shift
+	pr.Triggered:Connect(function(player)
+		local s = shifts[player]
+		if s ~= myShift or s.phase ~= "suspicious" or flatDistance(player, best) > 12 or tooFast(s, best) then
+			return
+		end
+		local bonus = math.floor(JobsConfig.stepPay("Security", s.level) * 0.4)
+		PlayerData.addCash(player, bonus, "Security shift")
+		PlayerData.addXP(player, 6)
+		addJobXP(player, "Security", 6)
+		s.earned += bonus
+		s.checks += 1
+		Net.notify(player, "AREA CHECKED", SUSPICIOUS_OUTCOMES[math.random(#SUSPICIOUS_OUTCOMES)] .. string.format(" +$%d", bonus))
+		clearTracked(s, s.suspicious)
+		s.suspicious = nil
+		beginStep(s, best)
+		securityShowCheckpoint(s)
+	end)
+	Net.notify(shift.player, "SUSPICIOUS ACTIVITY", "Something's going on nearby. Go check it out.")
+	setObjective(shift, "Check out the suspicious activity (hold to investigate)", best, "Suspicious activity")
+end
+
+local function securityTick(shift: any)
+	if shift.phase ~= "patrol" then
+		return
+	end
+	local pos = shift.route[shift.routeIndex]
+	if flatDistance(shift.player, pos) > 10 then
+		return
+	end
+	if isSeated(shift.player) then
+		if not shift.footWarned then
+			shift.footWarned = true
+			Net.notify(shift.player, "ON FOOT ONLY", "Security patrols are done on foot. Get out of the vehicle.")
+		end
+		return
+	end
+	if tooFast(shift, pos) then
+		return
+	end
+	completeStep(shift, JobsConfig.stepPay("Security", shift.level))
+	if finishIfDone(shift) then
+		return
+	end
+	beginStep(shift, pos)
+	shift.routeIndex += 1
+	if shift.routeIndex <= #shift.route and math.random() < 0.35 then
+		securitySuspicious(shift, pos)
+	else
+		securityShowCheckpoint(shift)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start / end
+---------------------------------------------------------------------------
+local TIME_LIMITS = {
+	Delivery = function(goal)
+		return 90 + 55 * goal
+	end,
+	FoodDelivery = function(goal)
+		return 120 + 75 * goal
+	end,
+	Taxi = function(goal)
+		return 120 + 110 * goal
+	end,
+	Warehouse = function(goal)
+		return 45 + 15 * goal
+	end,
+	Construction = function(goal)
+		return 60 + 28 * goal
+	end,
+	Security = function(goal)
+		return 60 + 40 * goal -- replaced by the real route length on start
+	end,
+}
+
+local STARTERS = {
+	Delivery = deliveryStart,
+	FoodDelivery = foodStart,
+	Taxi = taxiStart,
+	Warehouse = warehouseStart,
+	Construction = constructionStart,
+	Security = securityStart,
+}
+
+local function startShift(player: Player, jobId: string)
+	local def = JOBS[jobId]
+	if not def then
+		return
+	end
+	if shifts[player] then
+		Net.notify(player, "ALREADY WORKING", "Finish or quit your current shift first.")
+		return
+	end
+	if not PlayerData.isLoaded(player) or not Net.alive(player) then
+		return
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" then
+		Net.notify(player, "STEP OUTSIDE", "Head outside to start a shift.")
+		return
+	end
+	if jobId == "Taxi" and not ownsCar(player) then
+		Net.notify(player, "TAXI NEEDS A CAR", "Buy a car at Budget Wheels, then start driving to take fares.")
+		return
+	end
+	if not Net.allow(player, "JobStartShift", 4) then
+		Net.notify(player, "ONE MOMENT", "Try starting a shift again in a few seconds.")
+		return
+	end
+	local rec = jobRecord(player, jobId)
+	local level = if rec then rec.level else 1
+	local goal = JobsConfig.steps(jobId, level)
+	local t = now()
+	local shift = {
+		player = player,
+		job = jobId,
+		level = level,
+		goal = goal,
+		done = 0,
+		earned = 0,
+		startedAt = t,
+		endsAt = t + TIME_LIMITS[jobId](goal),
+		phase = "",
+		objective = "",
+		cleanup = {},
+		combo = nil,
+	}
+	beginStep(shift, nil)
+	shifts[player] = shift
+	player:SetAttribute("Job", jobId)
+	Net.notify(player, "SHIFT STARTED", string.format("%s: %d %s. Level %d pay x%.2f.", def.name, goal, def.stepWord, level, JobsConfig.payMult(jobId, level)))
+	STARTERS[jobId](shift)
+end
+
+endShift = function(player: Player, reason: string)
+	local shift = shifts[player]
+	if not shift then
+		return
+	end
+	shifts[player] = nil
+	dropCarry(shift)
+	for _, inst in shift.cleanup do
+		inst:Destroy()
+	end
+	if shift.car and shift.car.Parent then
+		shift.car:SetAttribute("TaxiPassenger", nil)
+	end
+	if shift.job == "Construction" and shift.piece then
+		local piece = site.pieces[shift.piece]
+		if piece and piece.reservedBy == player then
+			piece.reservedBy = nil
+		end
+	end
+	local def = JOBS[shift.job]
+	local completed = reason == "complete"
+	local bonus = 0
+	if completed then
+		bonus = JobsConfig.completionBonus(shift.job, shift.level)
+		PlayerData.addCash(player, bonus, def.name .. " shift")
+		shift.earned += bonus
+		PlayerData.addXP(player, JobsConfig.PLAYER_XP_SHIFT_BONUS)
+		PlayerData.addReputation(player, JobsConfig.REP_PER_SHIFT + math.floor(shift.level / 8))
+		if addJobXP(player, shift.job, JobsConfig.JOB_XP_SHIFT_BONUS) then
+			shift.levelledUp = true
+		end
+	end
+	local rec = jobRecord(player, shift.job)
+	if rec then
+		if completed then
+			rec.shifts += 1
+		end
+		rec.earned += shift.earned
+		PlayerData.markChanged(player)
+	end
+	if player.Parent then
+		player:SetAttribute("Job", "")
+		local reasons = {
+			complete = "Shift complete!",
+			quit = "You quit the shift.",
+			died = "You were knocked out. Shift over.",
+			timeout = "Time's up. Shift over.",
+		}
+		JobState:FireClient(player, "end", {
+			job = shift.job,
+			completed = completed,
+			reason = reasons[reason] or "Shift over.",
+			done = shift.done,
+			goal = shift.goal,
+			word = def.stepWord,
+			earned = shift.earned,
+			bonus = bonus,
+			level = if rec then rec.level else shift.level,
+			levelledUp = shift.levelledUp == true,
+		})
+	end
+end
+
+---------------------------------------------------------------------------
+-- World building
+---------------------------------------------------------------------------
+local function buildJobCenter()
+	local JC = JobsConfig.JOB_CENTER
+	local m = Instance.new("Model")
+	m.Name = "JobCenter"
+	m.Parent = root
+	local navy = Color3.fromRGB(30, 45, 80)
+	part({ name = "Pad", size = Vector3.new(26, 0.4, 16), cframe = CFrame.new(JC + Vector3.new(0, 0.2, -2)), color = Color3.fromRGB(190, 190, 185), material = Enum.Material.Concrete, parent = m })
+	part({ name = "BackWall", size = Vector3.new(24, 12, 1), cframe = CFrame.new(JC + Vector3.new(0, 6, -9.5)), color = navy, material = Enum.Material.Concrete, parent = m })
+	for _, x in { -12, 12 } do
+		part({ name = "Pillar", size = Vector3.new(1, 12, 1), cframe = CFrame.new(JC + Vector3.new(x, 6, 5)), color = navy, material = Enum.Material.Metal, parent = m })
+		part({ name = "SideWall", size = Vector3.new(1, 12, 6), cframe = CFrame.new(JC + Vector3.new(x, 6, -6.5)), color = navy, material = Enum.Material.Concrete, parent = m })
+	end
+	part({ name = "Roof", size = Vector3.new(27, 0.8, 17), cframe = CFrame.new(JC + Vector3.new(0, 12.4, -2)), color = Color3.fromRGB(40, 40, 46), material = Enum.Material.Metal, parent = m })
+	local header = part({ name = "Header", size = Vector3.new(22, 2.6, 0.5), cframe = CFrame.new(JC + Vector3.new(0, 14.1, 5.5)) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(20, 20, 24), parent = m })
+	sign(header, Enum.NormalId.Front, "JOB CENTER", Color3.fromRGB(90, 200, 255))
+
+	-- the job board lists every job with its starting pay range
+	local board = part({ name = "JobBoard", size = Vector3.new(20, 9, 0.4), cframe = CFrame.new(JC + Vector3.new(0, 6.5, -8.8)) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(15, 15, 20), parent = m })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 30
+	gui.LightInfluence = 0
+	gui.Parent = board
+	local list = Instance.new("Frame")
+	list.BackgroundTransparency = 1
+	list.Size = UDim2.fromScale(1, 1)
+	list.Parent = gui
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 6)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = list
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop = UDim.new(0, 12)
+	pad.PaddingLeft = UDim.new(0, 18)
+	pad.PaddingRight = UDim.new(0, 18)
+	pad.Parent = list
+	local function row(text: string, color: Color3, height: number, order: number, font: Enum.Font?)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Size = UDim2.new(1, 0, 0, height)
+		l.Font = font or Enum.Font.GothamBold
+		l.TextScaled = true
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextColor3 = color
+		l.Text = text
+		l.LayoutOrder = order
+		l.Parent = list
+	end
+	row("NOW HIRING", Color3.fromRGB(255, 200, 60), 34, 0, Enum.Font.GothamBlack)
+	for i, id in JobsConfig.ORDER do
+		local def = JOBS[id]
+		local lo, hi = JobsConfig.payRange(id, 1)
+		row(string.format("%s  %s   $%d–$%d", def.icon, string.upper(def.name), lo, hi), Color3.new(1, 1, 1), 26, i)
+	end
+	row("Starting pay per shift. Level up each job to earn more.", Color3.fromRGB(170, 170, 185), 16, 20, Enum.Font.Gotham)
+	row("Use the terminal or the Jobs app on your phone to start.", Color3.fromRGB(170, 170, 185), 16, 21, Enum.Font.Gotham)
+
+	-- terminal: opens the Jobs app on the client
+	local terminal = part({ name = "Terminal", size = Vector3.new(2.4, 4, 1.4), cframe = CFrame.new(JC + Vector3.new(6, 2.4, 1)), color = Color3.fromRGB(40, 40, 48), material = Enum.Material.Metal, parent = m })
+	local screen = part({ name = "Screen", size = Vector3.new(2, 1.4, 0.1), cframe = CFrame.new(JC + Vector3.new(6, 3.6, 1.72)) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(90, 200, 255), material = Enum.Material.Neon, collide = false, parent = m })
+	sign(screen, Enum.NormalId.Front, "JOBS", Color3.fromRGB(10, 20, 40))
+	prompt(terminal, "Browse jobs", "Job Center", { JobBoard = true, distance = 10 }).Triggered:Connect(function(player)
+		if Net.allow(player, "JobBoard", 0.5) and Net.distance(player, terminal.Position) <= 14 then
+			JobState:FireClient(player, "open")
+		end
+	end)
+
+	-- security sign-in desk
+	local desk = part({ name = "SecurityDesk", size = Vector3.new(4, 3.4, 2), cframe = CFrame.new(JC + Vector3.new(-6, 2.1, 1)), color = Color3.fromRGB(50, 60, 100), material = Enum.Material.Wood, parent = m })
+	billboard(desk, "🛡️ SECURITY", Color3.fromRGB(150, 180, 255), 3)
+	table.insert(startPrompts.Security, prompt(desk, "Start security shift", "Security", { JobStart = "Security" }))
+
+	-- taxi rank by the curb
+	local post = part({ name = "TaxiPost", size = Vector3.new(0.5, 9, 0.5), cframe = CFrame.new(-28, 4.5, -29), color = Color3.fromRGB(40, 40, 45), material = Enum.Material.Metal, parent = m })
+	local plate = part({ name = "TaxiSign", size = Vector3.new(4, 2.2, 0.3), cframe = CFrame.new(-28, 9, -28.8) * CFrame.Angles(0, math.pi, 0), color = Color3.fromRGB(245, 200, 40), parent = m })
+	sign(plate, Enum.NormalId.Front, "TAXI", Color3.fromRGB(20, 20, 20))
+	table.insert(startPrompts.Taxi, prompt(post, "Start taxi shift", "Taxi rank", { JobStart = "Taxi", distance = 12 }))
+
+	Places.mapPoint(root.Parent, "Job Center", "Jobs", JC + Vector3.new(0, 3, 10))
+end
+
+local function house(center: Vector3, facing: number, color: Color3, number: string, street: string)
+	local m = Instance.new("Model")
+	m.Name = number .. " " .. street
+	m.Parent = root
+	local size = Vector3.new(18, 12, 14)
+	part({ name = "Body", size = size, cframe = CFrame.new(center + Vector3.new(0, 6, 0)), color = color, material = Enum.Material.WoodPlanks, parent = m })
+	part({ name = "Roof", size = Vector3.new(20, 1.2, 16), cframe = CFrame.new(center + Vector3.new(0, 12.6, 0)), color = Color3.fromRGB(80, 50, 45), material = Enum.Material.Slate, parent = m })
+	part({ name = "Chimney", size = Vector3.new(2, 4, 2), cframe = CFrame.new(center + Vector3.new(5, 14.5, 2)), color = Color3.fromRGB(140, 70, 55), material = Enum.Material.Brick, parent = m })
+	local frontZ = center.Z + facing * (size.Z / 2 + 0.1)
+	part({ name = "Door", size = Vector3.new(4, 7.5, 0.3), cframe = CFrame.new(center.X, 3.75, frontZ), color = Color3.fromRGB(60, 40, 30), material = Enum.Material.Wood, parent = m })
+	for _, x in { -5.5, 5.5 } do
+		part({ name = "Window", size = Vector3.new(4, 4, 0.3), cframe = CFrame.new(center.X + x, 6, frontZ), color = Color3.fromRGB(150, 200, 230), material = Enum.Material.Glass, transparency = 0.3, parent = m })
+	end
+	part({ name = "Porch", size = Vector3.new(7, 0.4, 3), cframe = CFrame.new(center.X, 0.2, frontZ + facing * 1.5), color = Color3.fromRGB(150, 150, 145), material = Enum.Material.Concrete, parent = m })
+	-- mailbox with the house number
+	local mx = center.X + 6
+	local mz = frontZ + facing * 5
+	part({ name = "MailPost", size = Vector3.new(0.3, 3.5, 0.3), cframe = CFrame.new(mx, 1.75, mz), color = Color3.fromRGB(60, 60, 60), parent = m })
+	local box = part({ name = "Mailbox", size = Vector3.new(1, 1, 1.6), cframe = CFrame.new(mx, 3.9, mz), color = Color3.fromRGB(40, 80, 160), material = Enum.Material.Metal, parent = m })
+	billboard(box, number .. " " .. street, Color3.new(1, 1, 1), 1.5).TextSize = 14
+	table.insert(ADDRESSES, { name = number .. " " .. street, pos = Vector3.new(center.X, 0, frontZ + facing * 5) })
+end
+
+local function buildHouses()
+	local colors = { Color3.fromRGB(230, 215, 180), Color3.fromRGB(170, 200, 220), Color3.fromRGB(200, 120, 100), Color3.fromRGB(150, 190, 140) }
+	for i, x in { -276, -248, -220, -192 } do
+		house(Vector3.new(x, 0, 170), -1, colors[i], tostring(i * 2), "Maple Row")
+	end
+	for i, x in { 175, 210, 245 } do
+		house(Vector3.new(x, 0, -197), 1, colors[i + 1], tostring(9 + i * 2), "Oak Street")
+	end
+end
+
+local function buildDepot()
+	local D = Vector3.new(-140, 0, 170)
+	local m = Instance.new("Model")
+	m.Name = "DeliveryDepot"
+	m.Parent = root
+	part({ name = "Slab", size = Vector3.new(34, 0.4, 30), cframe = CFrame.new(D + Vector3.new(0, 0.2, -2)), color = Color3.fromRGB(120, 120, 125), material = Enum.Material.Concrete, parent = m })
+	part({ name = "DepotBuilding", size = Vector3.new(30, 14, 14), cframe = CFrame.new(D + Vector3.new(0, 7, 6)), color = Color3.fromRGB(150, 110, 70), material = Enum.Material.CorrugatedSteel, parent = m })
+	part({ name = "RollerDoor", size = Vector3.new(12, 10, 0.3), cframe = CFrame.new(D + Vector3.new(0, 5, -1.1)), color = Color3.fromRGB(200, 160, 60), material = Enum.Material.CorrugatedSteel, parent = m })
+	local s = part({ name = "Sign", size = Vector3.new(24, 2.6, 0.4), cframe = CFrame.new(D + Vector3.new(0, 12, -1.3)), color = Color3.fromRGB(25, 25, 30), parent = m })
+	sign(s, Enum.NormalId.Front, "CITY PARCEL DEPOT", Color3.fromRGB(255, 190, 80))
+	depotCounter = part({ name = "Counter", size = Vector3.new(12, 3.4, 3), cframe = CFrame.new(D + Vector3.new(0, 1.9, -8)), color = Color3.fromRGB(90, 70, 50), material = Enum.Material.Wood, parent = m })
+	for i = -2, 2 do
+		part({ name = "Parcel", size = Vector3.new(1.8, 1.4, 1.6), cframe = CFrame.new(D + Vector3.new(i * 2.2, 4.3, -8)) * CFrame.Angles(0, math.rad(i * 7), 0), color = Color3.fromRGB(190, 145, 95), material = Enum.Material.Cardboard, parent = m })
+	end
+	-- delivery van (decor)
+	local vanC = D + Vector3.new(12, 0, -6)
+	part({ name = "VanBody", size = Vector3.new(6, 6, 12), cframe = CFrame.new(vanC + Vector3.new(0, 4, 0)), color = Color3.fromRGB(240, 240, 240), material = Enum.Material.Metal, parent = m })
+	for _, wx in { -3, 3 } do
+		for _, wz in { -4, 4 } do
+			part({ name = "Wheel", size = Vector3.new(0.8, 2.4, 2.4), cframe = CFrame.new(vanC + Vector3.new(wx, 1.2, wz)), color = Color3.fromRGB(25, 25, 25), shape = Enum.PartType.Cylinder, parent = m })
+		end
+	end
+	billboard(depotCounter, "📦 PARCEL PICKUP", Color3.fromRGB(255, 190, 80), 3.5)
+	table.insert(startPrompts.Delivery, prompt(depotCounter, "Start delivery shift", "Delivery Depot", { JobStart = "Delivery" }))
+	prompt(depotCounter, "Load parcels", "Delivery Depot", { JobOnly = "Delivery", hold = 0.6 }).Triggered:Connect(deliveryLoad)
+	Places.mapPoint(root.Parent, "Delivery Depot", "Jobs", JobsConfig.START.Delivery)
+end
+
+local function buildFoodCounter()
+	local M = Vector3.new(86, 0, 40)
+	local m = Instance.new("Model")
+	m.Name = "TakeoutCounter"
+	m.Parent = root
+	foodCounter = part({ name = "Counter", size = Vector3.new(8, 3.4, 2.5), cframe = CFrame.new(M + Vector3.new(0, 1.7, 0)), color = Color3.fromRGB(190, 70, 50), material = Enum.Material.Wood, parent = m })
+	part({ name = "Awning", size = Vector3.new(10, 0.4, 5), cframe = CFrame.new(M + Vector3.new(0, 8, 0.2)), color = Color3.fromRGB(240, 220, 200), material = Enum.Material.Fabric, parent = m })
+	for _, x in { -4.6, 4.6 } do
+		part({ name = "Post", size = Vector3.new(0.4, 8, 0.4), cframe = CFrame.new(M + Vector3.new(x, 4, -2)), color = Color3.fromRGB(50, 50, 55), material = Enum.Material.Metal, parent = m })
+	end
+	local s = part({ name = "Sign", size = Vector3.new(9, 1.6, 0.3), cframe = CFrame.new(M + Vector3.new(0, 9.1, -2.2)), color = Color3.fromRGB(190, 70, 50), parent = m })
+	sign(s, Enum.NormalId.Front, "TAKEOUT · DELIVERY", Color3.fromRGB(255, 230, 150))
+	for i = -1, 1 do
+		part({ name = "Bag", size = Vector3.new(1, 1.3, 0.8), cframe = CFrame.new(M + Vector3.new(i * 2, 4.05, 0)), color = Color3.fromRGB(200, 50, 40), material = Enum.Material.Fabric, parent = m })
+	end
+	table.insert(startPrompts.FoodDelivery, prompt(foodCounter, "Start food delivery shift", "Mama's Kitchen", { JobStart = "FoodDelivery" }))
+	prompt(foodCounter, "Pick up order", "Mama's Kitchen", { JobOnly = "FoodDelivery", hold = 0.4 }).Triggered:Connect(foodPickup)
+end
+
+local function buildWarehouse()
+	local W = Vector3.new(85, 0, 175)
+	local m = Instance.new("Model")
+	m.Name = "Warehouse"
+	m.Parent = root
+	local wall = Color3.fromRGB(150, 155, 165)
+	local function w(size: Vector3, offset: Vector3)
+		part({ name = "Wall", size = size, cframe = CFrame.new(W + offset), color = wall, material = Enum.Material.CorrugatedSteel, parent = m })
+	end
+	part({ name = "Floor", size = Vector3.new(56, 0.4, 40), cframe = CFrame.new(W + Vector3.new(0, 0.2, 0)), color = Color3.fromRGB(110, 110, 115), material = Enum.Material.Concrete, parent = m })
+	w(Vector3.new(1, 18, 40), Vector3.new(-28, 9, 0))
+	w(Vector3.new(56, 18, 1), Vector3.new(0, 9, 20))
+	for _, x in { -18, 18 } do
+		w(Vector3.new(20, 18, 1), Vector3.new(x, 9, -20))
+	end
+	w(Vector3.new(16, 6, 1), Vector3.new(0, 15, -20))
+	for _, z in { -13.5, 13.5 } do
+		w(Vector3.new(1, 18, 13), Vector3.new(28, 9, z))
+	end
+	w(Vector3.new(1, 6, 14), Vector3.new(28, 15, 0))
+	part({ name = "Roof", size = Vector3.new(58, 1, 42), cframe = CFrame.new(W + Vector3.new(0, 18.5, 0)), color = Color3.fromRGB(70, 70, 76), material = Enum.Material.Metal, parent = m })
+	for _, x in { -14, 14 } do
+		for _, z in { -9, 9 } do
+			local lamp = part({ name = "Lamp", size = Vector3.new(4, 0.3, 4), cframe = CFrame.new(W + Vector3.new(x, 17.8, z)), color = Color3.fromRGB(255, 250, 235), material = Enum.Material.Neon, collide = false, parent = m })
+			local light = Instance.new("PointLight")
+			light.Range = 28
+			light.Brightness = 1.4
+			light.Parent = lamp
+		end
+	end
+	local s = part({ name = "Sign", size = Vector3.new(16, 3, 0.4), cframe = CFrame.new(W + Vector3.new(0, 15, -20.8)), color = Color3.fromRGB(25, 25, 30), parent = m })
+	sign(s, Enum.NormalId.Front, "WAREHOUSE", Color3.fromRGB(110, 170, 255))
+	-- floor stripes towards the bay
+	part({ name = "Stripe", size = Vector3.new(30, 0.05, 0.6), cframe = CFrame.new(W + Vector3.new(8, 0.43, -7)), color = Color3.fromRGB(240, 200, 40), collide = false, parent = m })
+	part({ name = "Stripe", size = Vector3.new(30, 0.05, 0.6), cframe = CFrame.new(W + Vector3.new(8, 0.43, 7)), color = Color3.fromRGB(240, 200, 40), collide = false, parent = m })
+
+	-- shelving racks: { centre offset, long axis along z? }
+	local rackDefs = {
+		{ Vector3.new(-25, 0, -12), true },
+		{ Vector3.new(-25, 0, 0), true },
+		{ Vector3.new(-25, 0, 12), true },
+		{ Vector3.new(-12, 0, 17), false },
+		{ Vector3.new(2, 0, 17), false },
+	}
+	local boxColors = { Color3.fromRGB(175, 130, 80), Color3.fromRGB(160, 120, 75), Color3.fromRGB(190, 150, 100) }
+	for i, def in rackDefs do
+		local c = W + def[1]
+		local alongZ = def[2]
+		local long = 9
+		local rackSize = if alongZ then Vector3.new(3, 0.3, long) else Vector3.new(long, 0.3, 3)
+		for _, y in { 1, 4, 7 } do
+			part({ name = "Shelf", size = rackSize, cframe = CFrame.new(c + Vector3.new(0, y, 0)), color = Color3.fromRGB(230, 120, 40), material = Enum.Material.Metal, parent = m })
+		end
+		for _, e in { -1, 1 } do
+			local o = if alongZ then Vector3.new(0, 4.5, e * long / 2) else Vector3.new(e * long / 2, 4.5, 0)
+			part({ name = "Upright", size = Vector3.new(0.4, 9, 0.4), cframe = CFrame.new(c + o), color = Color3.fromRGB(40, 70, 140), material = Enum.Material.Metal, parent = m })
+		end
+		-- decorative boxes plus the one the job highlights
+		local target: BasePart? = nil
+		for k, y in { 1, 4, 7 } do
+			for j = -1, 1 do
+				local o = if alongZ then Vector3.new(0, y + 1.05, j * 2.8) else Vector3.new(j * 2.8, y + 1.05, 0)
+				local b = part({ name = "StockBox", size = Vector3.new(2.2, 1.8, 2.2), cframe = CFrame.new(c + o), color = boxColors[(i + j + k) % 3 + 1], material = Enum.Material.Cardboard, parent = m })
+				if k == 2 and j == 0 then
+					target = b
+				end
+			end
+		end
+		local front = if alongZ then Vector3.new(4, 0, 0) else Vector3.new(0, 0, -4)
+		local spot = part({ name = "PickSpot", size = Vector3.new(2, 4, 2), cframe = CFrame.new(c + front + Vector3.new(0, 2.5, 0)), transparency = 1, collide = false, parent = m })
+		spot.CanQuery = false
+		spot.CanTouch = false
+		local rackIndex = i
+		prompt(spot, "Grab box", "Shelf " .. i, { JobOnly = "Warehouse", hold = 0.4, distance = 9 }).Triggered:Connect(function(player)
+			warehouseGrab(player, rackIndex)
+		end)
+		billboard(spot, "SHELF " .. i, Color3.fromRGB(200, 200, 210), 4).TextSize = 14
+		warehouse.racks[i] = { spot = spot, box = target :: BasePart }
+	end
+
+	-- truck bay + truck backed in on the east side
+	local bay = part({ name = "TruckBay", size = Vector3.new(8, 0.1, 12), cframe = CFrame.new(W + Vector3.new(23, 0.45, 0)), color = Color3.fromRGB(240, 200, 40), material = Enum.Material.Neon, transparency = 0.4, collide = false, parent = m })
+	bay.CanQuery = false
+	billboard(bay, "🚚 TRUCK BAY", Color3.fromRGB(255, 220, 80), 5)
+	prompt(bay, "Load box", "Truck bay", { JobOnly = "Warehouse", hold = 0.3, distance = 10 }).Triggered:Connect(warehouseLoad)
+	warehouse.bay = bay
+	local red = Color3.fromRGB(190, 40, 40)
+	part({ name = "TrailerFloor", size = Vector3.new(24, 1, 12), cframe = CFrame.new(W + Vector3.new(41, 3, 0)), color = Color3.fromRGB(60, 60, 65), material = Enum.Material.Metal, parent = m })
+	for _, z in { -5.75, 5.75 } do
+		part({ name = "TrailerSide", size = Vector3.new(24, 9, 0.5), cframe = CFrame.new(W + Vector3.new(41, 8, z)), color = Color3.fromRGB(235, 235, 240), material = Enum.Material.Metal, parent = m })
+	end
+	part({ name = "TrailerFront", size = Vector3.new(0.5, 9, 12), cframe = CFrame.new(W + Vector3.new(53, 8, 0)), color = Color3.fromRGB(235, 235, 240), material = Enum.Material.Metal, parent = m })
+	part({ name = "TrailerRoof", size = Vector3.new(24, 0.5, 12), cframe = CFrame.new(W + Vector3.new(41, 12.75, 0)), color = Color3.fromRGB(235, 235, 240), material = Enum.Material.Metal, parent = m })
+	part({ name = "Cab", size = Vector3.new(8, 8, 11), cframe = CFrame.new(W + Vector3.new(58, 5, 0)), color = red, material = Enum.Material.Metal, parent = m })
+	part({ name = "Windshield", size = Vector3.new(0.2, 3, 9), cframe = CFrame.new(W + Vector3.new(62.1, 6.5, 0)), color = Color3.fromRGB(120, 170, 210), material = Enum.Material.Glass, transparency = 0.3, parent = m })
+	for _, x in { 32, 48, 58 } do
+		for _, z in { -5.5, 5.5 } do
+			part({ name = "Wheel", size = Vector3.new(1, 3, 3), cframe = CFrame.new(W + Vector3.new(x, 1.5, z)) * CFrame.Angles(0, math.pi / 2, 0), color = Color3.fromRGB(25, 25, 25), shape = Enum.PartType.Cylinder, parent = m })
+		end
+	end
+	-- cargo that fills as boxes are loaded (3 columns x 2 rows x 2 high)
+	for layer = 0, 1 do
+		for row = 0, 1 do
+			for col = 0, 2 do
+				local b = part({
+					name = "Cargo",
+					size = Vector3.new(2.2, 1.8, 2.2),
+					cframe = CFrame.new(W + Vector3.new(50 - col * 2.4, 4.4 + layer * 1.9, -1.3 + row * 2.6)),
+					color = boxColors[(col + row + layer) % 3 + 1],
+					material = Enum.Material.Cardboard,
+					transparency = 1,
+					collide = false,
+					parent = m,
+				})
+				b.CanQuery = false
+				table.insert(warehouse.truckBoxes, b)
+			end
+		end
+	end
+
+	-- time clock by the door
+	local clock = part({ name = "TimeClock", size = Vector3.new(2, 3, 1), cframe = CFrame.new(W + Vector3.new(-12, 2.5, -22)), color = Color3.fromRGB(50, 60, 80), material = Enum.Material.Metal, parent = m })
+	billboard(clock, "🏭 TIME CLOCK", Color3.fromRGB(110, 170, 255), 3)
+	table.insert(startPrompts.Warehouse, prompt(clock, "Start warehouse shift", "Warehouse", { JobStart = "Warehouse" }))
+	Places.mapPoint(root.Parent, "Warehouse", "Jobs", JobsConfig.START.Warehouse)
+end
+
+local function buildConstruction()
+	local C = Vector3.new(195, 0, 178)
+	local m = Instance.new("Model")
+	m.Name = "ConstructionSite"
+	m.Parent = root
+	part({ name = "Dirt", size = Vector3.new(70, 0.3, 50), cframe = CFrame.new(C + Vector3.new(0, 0.15, 0)), color = Color3.fromRGB(140, 105, 70), material = Enum.Material.Ground, parent = m })
+	local fence = Color3.fromRGB(120, 125, 130)
+	local function f(size: Vector3, offset: Vector3)
+		part({ name = "Fence", size = size, cframe = CFrame.new(C + offset), color = fence, material = Enum.Material.DiamondPlate, transparency = 0.55, parent = m })
+	end
+	f(Vector3.new(0.3, 8, 50), Vector3.new(-35, 4, 0))
+	f(Vector3.new(0.3, 8, 50), Vector3.new(35, 4, 0))
+	f(Vector3.new(70, 8, 0.3), Vector3.new(0, 4, 25))
+	f(Vector3.new(7, 8, 0.3), Vector3.new(-31.5, 4, -25))
+	f(Vector3.new(47, 8, 0.3), Vector3.new(11.5, 4, -25))
+	local s = part({ name = "Sign", size = Vector3.new(20, 3, 0.3), cframe = CFrame.new(C + Vector3.new(11.5, 6.5, -25.3)), color = Color3.fromRGB(240, 170, 30), parent = m })
+	sign(s, Enum.NormalId.Front, "CITY CONSTRUCTION · HARD HATS", Color3.fromRGB(20, 20, 20))
+
+	-- site board outside the gate: start prompt + build progress
+	local boardPost = part({ name = "SiteBoard", size = Vector3.new(6, 4, 0.4), cframe = CFrame.new(C + Vector3.new(-28, 4, -27)), color = Color3.fromRGB(30, 30, 35), parent = m })
+	for _, x in { -2.6, 2.6 } do
+		part({ name = "Leg", size = Vector3.new(0.3, 2, 0.3), cframe = CFrame.new(C + Vector3.new(-28 + x, 1, -27)), color = Color3.fromRGB(60, 60, 60), parent = m })
+	end
+	local gui = sign(boardPost, Enum.NormalId.Front, "BUILD PROGRESS", Color3.fromRGB(255, 190, 60))
+	site.board = gui:FindFirstChildOfClass("TextLabel")
+	table.insert(startPrompts.Construction, prompt(boardPost, "Start construction shift", "Construction Site", { JobStart = "Construction" }))
+
+	-- material piles
+	local pileDefs = {
+		Bricks = { offset = Vector3.new(-26, 0, -10), color = Color3.fromRGB(165, 70, 50), material = Enum.Material.Brick, size = Vector3.new(2, 1.2, 1.4) },
+		Planks = { offset = Vector3.new(-26, 0, 0), color = Color3.fromRGB(190, 150, 95), material = Enum.Material.WoodPlanks, size = Vector3.new(1.2, 0.4, 6) },
+		Beams = { offset = Vector3.new(-26, 0, 10), color = Color3.fromRGB(120, 125, 135), material = Enum.Material.DiamondPlate, size = Vector3.new(0.7, 0.7, 6) },
+	}
+	for name, def in pileDefs do
+		local c = C + def.offset
+		local pallet = part({ name = name .. "Pallet", size = Vector3.new(5, 0.6, 6.5), cframe = CFrame.new(c + Vector3.new(0, 0.6, 0)), color = Color3.fromRGB(150, 115, 70), material = Enum.Material.Wood, parent = m })
+		for layer = 0, 2 do
+			for k = -1, 1 do
+				local o = if name == "Bricks" then Vector3.new(k * 1.5, 1.5 + layer * 1.25, (layer % 2) * 0.6 - 0.3) else Vector3.new(k * 1.4, 1.1 + layer * def.size.Y * 1.1, 0)
+				part({ name = name, size = def.size, cframe = CFrame.new(c + o), color = def.color, material = def.material, parent = m })
+			end
+		end
+		billboard(pallet, string.upper(name), def.color:Lerp(Color3.new(1, 1, 1), 0.4), 5)
+		local material = name
+		prompt(pallet, "Take " .. name, "Material pile", { JobOnly = "Construction", hold = 0.4, distance = 9 }).Triggered:Connect(function(player)
+			constructionTake(player, material)
+		end)
+		site.piles[name] = pallet
+	end
+
+	-- the structure: pieces appear as the crew places them
+	local S = C + Vector3.new(10, 0, 4)
+	local structure = Instance.new("Model")
+	structure.Name = "Structure"
+	structure.Parent = m
+	local defs = {
+		-- foundation
+		{ "Bricks", Vector3.new(20, 1, 2), Vector3.new(0, 0.5, -7) },
+		{ "Bricks", Vector3.new(20, 1, 2), Vector3.new(0, 0.5, 7) },
+		{ "Bricks", Vector3.new(2, 1, 12), Vector3.new(-9, 0.5, 0) },
+		{ "Bricks", Vector3.new(2, 1, 12), Vector3.new(9, 0.5, 0) },
+		-- corner posts
+		{ "Beams", Vector3.new(1, 11, 1), Vector3.new(-9.5, 6.5, -7.5) },
+		{ "Beams", Vector3.new(1, 11, 1), Vector3.new(9.5, 6.5, -7.5) },
+		{ "Beams", Vector3.new(1, 11, 1), Vector3.new(-9.5, 6.5, 7.5) },
+		{ "Beams", Vector3.new(1, 11, 1), Vector3.new(9.5, 6.5, 7.5) },
+		-- walls (front stays open)
+		{ "Bricks", Vector3.new(18, 8, 1), Vector3.new(0, 5, 7.5) },
+		{ "Bricks", Vector3.new(1, 8, 14), Vector3.new(-9.5, 5, 0) },
+		{ "Bricks", Vector3.new(1, 8, 14), Vector3.new(9.5, 5, 0) },
+		-- top beams
+		{ "Beams", Vector3.new(20, 1, 1), Vector3.new(0, 12.5, -7.5) },
+		{ "Beams", Vector3.new(20, 1, 1), Vector3.new(0, 12.5, 7.5) },
+		-- roof planks
+		{ "Planks", Vector3.new(20, 0.5, 5.4), Vector3.new(0, 13.25, -5.3) },
+		{ "Planks", Vector3.new(20, 0.5, 5.4), Vector3.new(0, 13.25, 0) },
+		{ "Planks", Vector3.new(20, 0.5, 5.4), Vector3.new(0, 13.25, 5.3) },
+	}
+	for i, d in defs do
+		local spec = pileDefs[d[1]]
+		local p = part({ name = "Piece" .. i, size = d[2], cframe = CFrame.new(S + d[3]), color = spec.color, material = spec.material, transparency = 1, collide = false, parent = structure })
+		p.CanQuery = false
+		p.CanTouch = false
+		site.pieces[i] = { part = p, material = d[1], built = false, reservedBy = nil }
+	end
+	updateSiteBoard()
+	Places.mapPoint(root.Parent, "Construction Site", "Jobs", JobsConfig.START.Construction)
+end
+
+---------------------------------------------------------------------------
+-- Ticking: time limits, taxi pickups, patrol checkpoints, food going cold
+---------------------------------------------------------------------------
+local function stepShifts()
+	local t = now()
+	for player, shift in shifts do
+		if not player.Parent then
+			endShift(player, "left")
+		elseif not Net.alive(player) then
+			endShift(player, "died")
+		elseif t > shift.endsAt then
+			endShift(player, "timeout")
+		elseif shift.job == "Taxi" then
+			taxiTick(shift)
+		elseif shift.job == "Security" then
+			securityTick(shift)
+		elseif shift.job == "Construction" then
+			if shift.phase == "assign" then
+				constructionAssign(shift)
+			end
+		elseif shift.job == "FoodDelivery" then
+			if shift.phase == "deliver" and shift.hotUntil and t > shift.hotUntil and not shift.coldNotified then
+				shift.coldNotified = true
+				Net.notify(player, "FOOD GOT COLD", "No tip on this one, but deliver it anyway.")
+				publish(shift)
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Jobs.start(city: Instance)
+	root = Instance.new("Folder")
+	root.Name = "Jobs"
+	root.Parent = city
+	for _, id in JobsConfig.ORDER do
+		startPrompts[id] = {}
+	end
+
+	buildHouses()
+	buildJobCenter()
+	buildDepot()
+	buildFoodCounter()
+	buildWarehouse()
+	buildConstruction()
+
+	for id, list in startPrompts do
+		for _, pr in list do
+			pr.Triggered:Connect(function(player)
+				if Net.distance(player, (pr.Parent :: BasePart).Position) <= 16 then
+					startShift(player, id)
+				end
+			end)
+		end
+	end
+
+	JobAction.OnServerEvent:Connect(function(player: Player, action: any, jobId: any)
+		if not Net.allow(player, "JobAction", 0.5) then
+			return
+		end
+		if action == "start" and type(jobId) == "string" and JOBS[jobId] then
+			startShift(player, jobId)
+		elseif action == "quit" then
+			endShift(player, "quit")
+		end
+	end)
+
+	local function onPlayer(player: Player)
+		player:SetAttribute("Job", "")
+		local function hook(character: Model)
+			local hum = character:WaitForChild("Humanoid", 10)
+			if hum and hum:IsA("Humanoid") then
+				hum.Died:Connect(function()
+					endShift(player, "died")
+				end)
+			end
+		end
+		player.CharacterAdded:Connect(hook)
+		player.CharacterRemoving:Connect(function()
+			endShift(player, "died")
+		end)
+		if player.Character then
+			task.spawn(hook, player.Character)
+		end
+	end
+	Players.PlayerAdded:Connect(onPlayer)
+	for _, player in Players:GetPlayers() do
+		onPlayer(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		endShift(player, "left")
+	end)
+
+	local acc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		acc += dt
+		if acc >= 0.25 then
+			acc = 0
+			stepShifts()
+		end
+	end)
+end
+
+return Jobs
+]=====])
 put(server, 'ModuleScript', 'Net', [=====[
 -- CITY GRIND: remotes, rate limits and notifications shared by every server system.
 -- Remotes live in ReplicatedStorage.CityGrind.Remotes so clients can WaitForChild them.
@@ -2730,6 +10580,28 @@ end
 function Places.leave(player: Player, outside: CFrame)
 	player:SetAttribute("Interior", "")
 	Places.teleport(player, outside)
+end
+
+-- Adds a destination the phone's Map app lists (City.MapPoints).
+function Places.mapPoint(city: Instance, name: string, category: string, position: Vector3)
+	local points = city:FindFirstChild("MapPoints")
+	if not points then
+		points = Instance.new("Folder")
+		points.Name = "MapPoints"
+		points.Parent = city
+	end
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.Size = Vector3.one
+	p.CFrame = CFrame.new(position)
+	p.Transparency = 1
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p:SetAttribute("Category", category)
+	p.Parent = points
+	return p
 end
 
 -- Respawning always puts you back outside.
@@ -3261,6 +11133,1369 @@ end
 
 return PlayerData
 ]=====])
+put(server, 'ModuleScript', 'Vehicles', [=====[
+-- CITY GRIND: vehicles (spec sections 11, 72, 77).
+-- Budget Wheels lot (190,0,85) shows every model with a sign and a "View" prompt
+-- that opens the purchase panel. The Paint & Mods bay on the lot sells paint,
+-- rims and underglow. Owned vehicles are saved in the "vehicles" section and
+-- spawned/put away from the phone's Garage app.
+--
+-- Physics: see shared/VehiclesConfig. While someone drives, their client owns
+-- the vehicle and runs the simulation; empty vehicles are simulated here until
+-- they come to rest, then the chassis is anchored ("parked").
+--
+-- Player attributes: Driving (vehicle kind while in a driver seat, else ""),
+-- VehicleSpawned (id of the spawned vehicle or ""), VehiclesOwned (JSON of the
+-- saved owned table, read by the client UI).
+-- Vehicle model: tag "CityVehicle", attributes Owner (UserId), VehicleId, Kind,
+-- Headlights (bool, driver toggled with H).
+
+local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local VC = require(shared:WaitForChild("VehiclesConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Places = require(script.Parent:WaitForChild("Places"))
+
+type Spec = VC.Spec
+type Look = { paint: number, rim: number, glow: number }
+
+local Vehicles = {}
+
+PlayerData.registerSection("vehicles", function()
+	-- owned[id] = { paint = n, rim = n, glow = n, t = purchase time }
+	return { owned = {}, last = "" }
+end)
+
+local TAG = "CityVehicle"
+local DARK = Color3.fromRGB(32, 32, 36)
+local TIRE = Color3.fromRGB(24, 24, 26)
+local GLASS = Color3.fromRGB(40, 55, 70)
+local CHROME = Color3.fromRGB(195, 200, 210)
+local HEAD = Color3.fromRGB(255, 248, 225)
+local TAIL = Color3.fromRGB(120, 20, 22)
+
+local function money(n: number): string
+	local digits = tostring(math.floor(n))
+	local formatted = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return "$" .. formatted
+end
+
+---------------------------------------------------------------------------
+-- Model builder. Everything is placed in "ground space" (y = 0 is the road,
+-- -z is the front), with the chassis centred at (0, groundOffset, 0).
+---------------------------------------------------------------------------
+type Ctx = { model: Model, chassis: BasePart, display: boolean, spec: Spec }
+type PartOpts = {
+	class: string?,
+	shape: Enum.PartType?,
+	tag: string?,
+	transparency: number?,
+	reflectance: number?,
+	weldTo: BasePart?,
+}
+
+local function addPart(ctx: Ctx, name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?, opts: PartOpts?): BasePart
+	local o: PartOpts = opts or {}
+	local p = Instance.new(o.class or "Part") :: BasePart
+	p.Name = name
+	if o.shape and p:IsA("Part") then
+		p.Shape = o.shape
+	end
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.Transparency = o.transparency or 0
+	p.Reflectance = o.reflectance or 0
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Massless = true
+	p.Anchored = ctx.display
+	if o.tag then
+		p:SetAttribute(o.tag, true)
+	end
+	local to = o.weldTo or ctx.chassis
+	local weld = Instance.new("Weld")
+	weld.Part0 = to
+	weld.Part1 = p
+	weld.C0 = to.CFrame:ToObjectSpace(cf)
+	weld.Parent = p
+	p.Parent = ctx.model
+	return p
+end
+
+local function paint(ctx: Ctx, name: string, size: Vector3, cf: CFrame, opts: PartOpts?): BasePart
+	local o: PartOpts = opts or {}
+	o.tag = "Paint"
+	o.reflectance = 0.06
+	return addPart(ctx, name, size, cf, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic, o)
+end
+
+local function wedge(ctx: Ctx, name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?, opts: PartOpts?): BasePart
+	local o: PartOpts = opts or {}
+	o.class = "WedgePart"
+	return addPart(ctx, name, size, cf, color, material, o)
+end
+
+local function glass(ctx: Ctx, name: string, size: Vector3, cf: CFrame, isWedge: boolean?): BasePart
+	local o = { transparency = 0.3, reflectance = 0.15, class = if isWedge then "WedgePart" else nil }
+	return addPart(ctx, name, size, cf, GLASS, Enum.Material.Glass, o)
+end
+
+-- A thin bar between two points.
+local function rod(ctx: Ctx, name: string, a: Vector3, b: Vector3, thick: number, color: Color3?, isPaint: boolean?): BasePart
+	local cf = CFrame.lookAt((a + b) / 2, b)
+	local size = Vector3.new(thick, thick, (b - a).Magnitude)
+	if isPaint then
+		return paint(ctx, name, size, cf)
+	end
+	return addPart(ctx, name, size, cf, color or DARK, Enum.Material.Metal)
+end
+
+local function headlight(ctx: Ctx, size: Vector3, pos: Vector3)
+	local p = addPart(ctx, "Headlight", size, CFrame.new(pos), HEAD, Enum.Material.SmoothPlastic, { tag = "Head" })
+	if not ctx.display then
+		local light = Instance.new("SpotLight")
+		light.Face = Enum.NormalId.Front
+		light.Range = 55
+		light.Angle = 70
+		light.Brightness = 4
+		light.Color = Color3.fromRGB(255, 244, 220)
+		light.Shadows = false
+		light.Enabled = false
+		light.Parent = p
+	end
+end
+
+local function taillight(ctx: Ctx, size: Vector3, pos: Vector3)
+	addPart(ctx, "Taillight", size, CFrame.new(pos), TAIL, Enum.Material.SmoothPlastic, { tag = "Tail" })
+end
+
+local function cylinderZ(ctx: Ctx, name: string, length: number, diameter: number, pos: Vector3, color: Color3, material: Enum.Material?)
+	-- a cylinder's axis is its X; turn it to run front-to-back
+	return addPart(ctx, name, Vector3.new(length, diameter, diameter), CFrame.new(pos) * CFrame.Angles(0, math.pi / 2, 0), color, material, { shape = Enum.PartType.Cylinder })
+end
+
+type Layout = { wheels: { { x: number, z: number, steer: boolean } }, seats: { Vector3 }, seatSize: Vector3 }
+
+local STYLES: { [string]: (Ctx) -> Layout } = {}
+
+STYLES.hatch = function(ctx)
+	local s = ctx.spec
+	local W, L = s.width, s.length
+	local hw, hl = W / 2, L / 2
+	paint(ctx, "Body", Vector3.new(W, 1.9, L), CFrame.new(0, 2.15, 0))
+	addPart(ctx, "Skirt", Vector3.new(W - 0.3, 0.4, L - 0.4), CFrame.new(0, 1.0, 0), DARK)
+	glass(ctx, "Cabin", Vector3.new(W - 0.7, 2.2, 6.0), CFrame.new(0, 4.2, 1.3))
+	paint(ctx, "Roof", Vector3.new(W - 0.5, 0.3, 6.4), CFrame.new(0, 5.45, 1.3))
+	for _, x in { -1, 1 } do
+		for _, z in { -1, 1 } do
+			paint(ctx, "Pillar", Vector3.new(0.3, 2.2, 0.3), CFrame.new(x * (hw - 0.4), 4.2, 1.3 + z * 2.95))
+		end
+	end
+	glass(ctx, "Windshield", Vector3.new(W - 0.7, 2.2, 1.8), CFrame.new(0, 4.2, -2.6), true)
+	glass(ctx, "RearWindow", Vector3.new(W - 0.7, 2.2, 0.8), CFrame.new(0, 4.2, 4.7) * CFrame.Angles(0, math.pi, 0), true)
+	addPart(ctx, "Dashboard", Vector3.new(W - 0.8, 0.6, 0.8), CFrame.new(0, 3.3, -1.6), DARK)
+	addPart(ctx, "SteeringWheel", Vector3.new(0.15, 1.0, 1.0), CFrame.new(-1.4, 3.35, -0.9) * CFrame.Angles(-0.4, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), DARK, nil, { shape = Enum.PartType.Cylinder })
+	for _, z in { -1, 1 } do
+		addPart(ctx, "Bumper", Vector3.new(W + 0.1, 0.7, 0.5), CFrame.new(0, 1.45, z * (hl + 0.1)), DARK)
+		addPart(ctx, "Plate", Vector3.new(1.4, 0.4, 0.06), CFrame.new(0, 1.95, z * (hl + 0.03)), Color3.fromRGB(235, 235, 220))
+	end
+	addPart(ctx, "Grille", Vector3.new(2.4, 0.6, 0.12), CFrame.new(0, 2.5, -hl - 0.02), DARK)
+	for _, x in { -1, 1 } do
+		headlight(ctx, Vector3.new(1.3, 0.5, 0.15), Vector3.new(x * 2.2, 2.55, -hl - 0.04))
+		taillight(ctx, Vector3.new(1.1, 0.5, 0.15), Vector3.new(x * 2.3, 2.55, hl + 0.04))
+		paint(ctx, "Mirror", Vector3.new(0.5, 0.35, 0.35), CFrame.new(x * (hw + 0.2), 3.6, -1.5))
+		addPart(ctx, "Handle", Vector3.new(0.08, 0.15, 0.6), CFrame.new(x * (hw + 0.03), 2.75, -0.2), DARK)
+		addPart(ctx, "Handle", Vector3.new(0.08, 0.15, 0.6), CFrame.new(x * (hw + 0.03), 2.75, 2.6), DARK)
+	end
+	return {
+		wheels = {
+			{ x = -s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = -s.track / 2, z = s.wheelbase / 2, steer = false },
+			{ x = s.track / 2, z = s.wheelbase / 2, steer = false },
+		},
+		seats = { Vector3.new(-1.4, 1.6, 0.4), Vector3.new(1.4, 1.6, 0.4), Vector3.new(-1.4, 1.7, 3.2), Vector3.new(1.4, 1.7, 3.2) },
+		seatSize = Vector3.new(1.8, 0.4, 1.8),
+	}
+end
+
+STYLES.suv = function(ctx)
+	local s = ctx.spec
+	local W, L = s.width, s.length
+	local hw, hl = W / 2, L / 2
+	paint(ctx, "Body", Vector3.new(W, 2.6, L), CFrame.new(0, 2.9, 0))
+	addPart(ctx, "Skirt", Vector3.new(W - 0.3, 0.5, L - 0.6), CFrame.new(0, 1.4, 0), DARK)
+	glass(ctx, "Cabin", Vector3.new(W - 0.6, 2.5, 8.6), CFrame.new(0, 5.45, 1.5))
+	paint(ctx, "Roof", Vector3.new(W - 0.3, 0.35, 9.0), CFrame.new(0, 6.88, 1.5))
+	for _, x in { -1, 1 } do
+		for _, z in { -2.8, 1.0, 5.75 } do
+			paint(ctx, "Pillar", Vector3.new(0.35, 2.5, 0.35), CFrame.new(x * (hw - 0.35), 5.45, z))
+		end
+		addPart(ctx, "RoofRail", Vector3.new(0.25, 0.25, 8.0), CFrame.new(x * (hw - 0.6), 7.2, 1.5), DARK, Enum.Material.Metal)
+	end
+	for _, z in { -1.2, 4.2 } do
+		addPart(ctx, "RoofBar", Vector3.new(W - 1.0, 0.2, 0.25), CFrame.new(0, 7.2, z), DARK, Enum.Material.Metal)
+	end
+	glass(ctx, "Windshield", Vector3.new(W - 0.6, 2.5, 1.4), CFrame.new(0, 5.45, -3.5), true)
+	addPart(ctx, "Dashboard", Vector3.new(W - 0.8, 0.7, 0.9), CFrame.new(0, 4.4, -2.4), DARK)
+	addPart(ctx, "SteeringWheel", Vector3.new(0.15, 1.1, 1.1), CFrame.new(-1.5, 4.25, -1.8) * CFrame.Angles(-0.4, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), DARK, nil, { shape = Enum.PartType.Cylinder })
+	addPart(ctx, "Grille", Vector3.new(3.4, 1.2, 0.15), CFrame.new(0, 3.0, -hl - 0.03), CHROME, Enum.Material.Metal)
+	for _, z in { -1, 1 } do
+		addPart(ctx, "Bumper", Vector3.new(W + 0.2, 0.9, 0.6), CFrame.new(0, 1.7, z * (hl + 0.15)), DARK)
+		addPart(ctx, "Plate", Vector3.new(1.4, 0.4, 0.06), CFrame.new(0, 2.45, z * (hl + 0.03)), Color3.fromRGB(235, 235, 220))
+	end
+	addPart(ctx, "SkidPlate", Vector3.new(3.0, 0.3, 0.8), CFrame.new(0, 1.15, -hl - 0.1), CHROME, Enum.Material.Metal)
+	cylinderZ(ctx, "SpareTire", 0.7, 2.6, Vector3.new(0, 3.6, hl + 0.4), TIRE)
+	for _, x in { -1, 1 } do
+		headlight(ctx, Vector3.new(1.3, 0.6, 0.15), Vector3.new(x * 2.5, 3.55, -hl - 0.04))
+		taillight(ctx, Vector3.new(0.6, 1.4, 0.15), Vector3.new(x * (hw - 0.5), 3.5, hl + 0.04))
+		paint(ctx, "Mirror", Vector3.new(0.5, 0.45, 0.4), CFrame.new(x * (hw + 0.25), 4.7, -2.4))
+	end
+	return {
+		wheels = {
+			{ x = -s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = -s.track / 2, z = s.wheelbase / 2, steer = false },
+			{ x = s.track / 2, z = s.wheelbase / 2, steer = false },
+		},
+		seats = {
+			Vector3.new(-1.5, 2.2, -0.7),
+			Vector3.new(1.5, 2.2, -0.7),
+			Vector3.new(-1.95, 2.3, 2.6),
+			Vector3.new(0, 2.3, 2.6),
+			Vector3.new(1.95, 2.3, 2.6),
+		},
+		seatSize = Vector3.new(1.7, 0.4, 1.8),
+	}
+end
+
+STYLES.coupe = function(ctx)
+	local s = ctx.spec
+	local W, L = s.width, s.length
+	local hw, hl = W / 2, L / 2
+	paint(ctx, "Body", Vector3.new(W, 1.5, L), CFrame.new(0, 1.85, 0))
+	addPart(ctx, "Skirt", Vector3.new(W - 0.2, 0.3, L - 0.8), CFrame.new(0, 0.95, 0), DARK)
+	wedge(ctx, "Nose", Vector3.new(W, 0.55, 3.4), CFrame.new(0, 2.875, -hl + 1.7), Color3.new(1, 1, 1), nil, { tag = "Paint", reflectance = 0.06 })
+	glass(ctx, "Cabin", Vector3.new(W - 1.3, 2.2, 4.6), CFrame.new(0, 3.7, 1.2))
+	paint(ctx, "Roof", Vector3.new(W - 1.1, 0.25, 4.4), CFrame.new(0, 4.92, 1.3))
+	for _, x in { -0.55, 0.55 } do
+		addPart(ctx, "Stripe", Vector3.new(0.7, 0.04, 4.4), CFrame.new(x, 5.06, 1.3), Color3.fromRGB(245, 245, 245))
+	end
+	glass(ctx, "Windshield", Vector3.new(W - 1.3, 2.2, 2.2), CFrame.new(0, 3.7, -2.2), true)
+	glass(ctx, "RearWindow", Vector3.new(W - 1.3, 2.2, 2.4), CFrame.new(0, 3.7, 4.7) * CFrame.Angles(0, math.pi, 0), true)
+	paint(ctx, "RearDeck", Vector3.new(W, 0.4, 1.0), CFrame.new(0, 2.8, hl - 0.5))
+	addPart(ctx, "Dashboard", Vector3.new(W - 1.4, 0.5, 0.7), CFrame.new(0, 3.0, -0.8), DARK)
+	addPart(ctx, "SteeringWheel", Vector3.new(0.15, 0.9, 0.9), CFrame.new(-1.3, 3.0, -0.2) * CFrame.Angles(-0.5, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), DARK, nil, { shape = Enum.PartType.Cylinder })
+	for _, x in { -1, 1 } do
+		addPart(ctx, "SpoilerPost", Vector3.new(0.3, 0.7, 0.3), CFrame.new(x * 2.0, 3.35, hl - 0.5), DARK)
+		headlight(ctx, Vector3.new(1.5, 0.35, 0.15), Vector3.new(x * 2.3, 2.35, -hl - 0.04))
+		taillight(ctx, Vector3.new(1.8, 0.35, 0.15), Vector3.new(x * 2.1, 2.35, hl + 0.04))
+		paint(ctx, "Mirror", Vector3.new(0.5, 0.3, 0.4), CFrame.new(x * (hw + 0.2), 3.3, -1.0))
+		cylinderZ(ctx, "Exhaust", 0.6, 0.45, Vector3.new(x * 1.4, 1.3, hl + 0.2), CHROME, Enum.Material.Metal)
+		addPart(ctx, "SideVent", Vector3.new(0.06, 0.5, 1.4), CFrame.new(x * (hw + 0.02), 2.0, -2.9), DARK)
+	end
+	addPart(ctx, "Wing", Vector3.new(W - 0.4, 0.15, 1.0), CFrame.new(0, 3.75, hl - 0.45), DARK)
+	addPart(ctx, "Splitter", Vector3.new(W, 0.15, 0.5), CFrame.new(0, 1.05, -hl - 0.15), DARK)
+	return {
+		wheels = {
+			{ x = -s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = -s.track / 2, z = s.wheelbase / 2, steer = false },
+			{ x = s.track / 2, z = s.wheelbase / 2, steer = false },
+		},
+		seats = { Vector3.new(-1.3, 1.2, 1.0), Vector3.new(1.3, 1.2, 1.0) },
+		seatSize = Vector3.new(1.8, 0.4, 1.8),
+	}
+end
+
+STYLES.supercar = function(ctx)
+	local s = ctx.spec
+	local W, L = s.width, s.length
+	local hw, hl = W / 2, L / 2
+	paint(ctx, "Body", Vector3.new(W, 1.3, L), CFrame.new(0, 1.6, 0))
+	wedge(ctx, "Nose", Vector3.new(W, 0.7, 3.8), CFrame.new(0, 2.6, -hl + 1.9), Color3.new(1, 1, 1), nil, { tag = "Paint", reflectance = 0.06 })
+	paint(ctx, "EngineCover", Vector3.new(W - 2.0, 0.9, 4.2), CFrame.new(0, 2.7, 4.6))
+	addPart(ctx, "EngineGlass", Vector3.new(W - 3.0, 0.1, 2.6), CFrame.new(0, 3.17, 4.6), GLASS, Enum.Material.Glass, { transparency = 0.2 })
+	glass(ctx, "Windshield", Vector3.new(W - 1.6, 1.4, 1.6), CFrame.new(0, 2.95, -2.3), true)
+	addPart(ctx, "Dashboard", Vector3.new(W - 1.8, 0.5, 0.6), CFrame.new(0, 2.5, -1.2), DARK)
+	addPart(ctx, "SteeringWheel", Vector3.new(0.15, 0.9, 0.9), CFrame.new(-1.3, 2.75, -0.6) * CFrame.Angles(-0.5, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), DARK, nil, { shape = Enum.PartType.Cylinder })
+	addPart(ctx, "RollBar", Vector3.new(W - 2.0, 0.3, 0.3), CFrame.new(0, 3.9, 2.3), DARK, Enum.Material.Metal)
+	for _, x in { -1, 1 } do
+		paint(ctx, "SidePod", Vector3.new(0.9, 1.0, 5.5), CFrame.new(x * (hw - 0.45), 2.75, 1.6))
+		addPart(ctx, "Intake", Vector3.new(0.1, 0.7, 1.8), CFrame.new(x * (hw + 0.01), 2.75, 0.4), DARK)
+		addPart(ctx, "RollPost", Vector3.new(0.3, 1.65, 0.3), CFrame.new(x * (hw - 1.15), 3.07, 2.3), DARK, Enum.Material.Metal)
+		addPart(ctx, "WingPost", Vector3.new(0.25, 1.0, 0.25), CFrame.new(x * 2.2, 3.6, hl - 0.7), DARK)
+		headlight(ctx, Vector3.new(1.7, 0.25, 0.15), Vector3.new(x * 2.4, 2.05, -hl - 0.04))
+		for _, dx in { 0.35, 0.95 } do
+			cylinderZ(ctx, "Exhaust", 0.5, 0.4, Vector3.new(x * dx, 1.45, hl + 0.2), CHROME, Enum.Material.Metal)
+		end
+	end
+	taillight(ctx, Vector3.new(W - 1.2, 0.2, 0.12), Vector3.new(0, 2.0, hl + 0.04))
+	addPart(ctx, "Wing", Vector3.new(W, 0.15, 1.3), CFrame.new(0, 4.15, hl - 0.65), DARK)
+	addPart(ctx, "Diffuser", Vector3.new(W - 1, 0.5, 0.4), CFrame.new(0, 1.15, hl + 0.15), DARK)
+	addPart(ctx, "Splitter", Vector3.new(W, 0.15, 0.6), CFrame.new(0, 0.95, -hl - 0.2), DARK)
+	return {
+		wheels = {
+			{ x = -s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = s.track / 2, z = -s.wheelbase / 2, steer = true },
+			{ x = -s.track / 2, z = s.wheelbase / 2, steer = false },
+			{ x = s.track / 2, z = s.wheelbase / 2, steer = false },
+		},
+		seats = { Vector3.new(-1.3, 1.1, 1.0), Vector3.new(1.3, 1.1, 1.0) },
+		seatSize = Vector3.new(1.8, 0.4, 1.8),
+	}
+end
+
+STYLES.motorcycle = function(ctx)
+	local s = ctx.spec
+	local hb = s.wheelbase / 2
+	local r = s.wheelRadius
+	addPart(ctx, "Engine", Vector3.new(1.0, 1.1, 1.7), CFrame.new(0, 1.75, -0.1), DARK, Enum.Material.Metal)
+	paint(ctx, "Tank", Vector3.new(1.1, 0.8, 1.8), CFrame.new(0, 2.75, -0.9))
+	wedge(ctx, "Fairing", Vector3.new(1.3, 1.1, 1.0), CFrame.new(0, 2.9, -2.0), Color3.new(1, 1, 1), nil, { tag = "Paint", reflectance = 0.06 })
+	addPart(ctx, "Windscreen", Vector3.new(1.0, 0.6, 0.1), CFrame.new(0, 3.6, -2.3) * CFrame.Angles(-0.45, 0, 0), GLASS, Enum.Material.Glass, { transparency = 0.35 })
+	paint(ctx, "Tail", Vector3.new(0.9, 0.5, 1.6), CFrame.new(0, 2.75, 2.5))
+	addPart(ctx, "Handlebar", Vector3.new(2.0, 0.14, 0.14), CFrame.new(0, 3.3, -1.95), DARK, Enum.Material.Metal)
+	for _, x in { -0.35, 0.35 } do
+		rod(ctx, "Fork", Vector3.new(x, r, -hb), Vector3.new(x, 3.2, -2.0), 0.18, CHROME)
+		rod(ctx, "Swingarm", Vector3.new(x, r, hb), Vector3.new(x, 1.6, 0.6), 0.2, DARK)
+	end
+	cylinderZ(ctx, "Exhaust", 2.2, 0.4, Vector3.new(0.6, 1.5, 1.7), CHROME, Enum.Material.Metal)
+	paint(ctx, "FrontFender", Vector3.new(0.7, 0.15, 1.4), CFrame.new(0, r * 2 + 0.2, -hb))
+	headlight(ctx, Vector3.new(0.7, 0.5, 0.15), Vector3.new(0, 2.95, -2.55))
+	taillight(ctx, Vector3.new(0.6, 0.25, 0.12), Vector3.new(0, 2.75, 3.32))
+	return {
+		wheels = { { x = 0, z = -hb, steer = true }, { x = 0, z = hb, steer = false } },
+		seats = { Vector3.new(0, 2.95, 0.55), Vector3.new(0, 3.15, 1.8) },
+		seatSize = Vector3.new(1.0, 0.3, 1.2),
+	}
+end
+
+STYLES.scooter = function(ctx)
+	local s = ctx.spec
+	local hb = s.wheelbase / 2
+	local r = s.wheelRadius
+	paint(ctx, "Deck", Vector3.new(1.1, 0.3, 2.0), CFrame.new(0, 0.95, -0.2))
+	paint(ctx, "Shield", Vector3.new(1.3, 2.0, 0.35), CFrame.new(0, 1.9, -1.45) * CFrame.Angles(0.25, 0, 0))
+	rod(ctx, "Column", Vector3.new(0, r, -hb), Vector3.new(0, 3.2, -1.65), 0.22, DARK)
+	addPart(ctx, "Handlebar", Vector3.new(1.8, 0.14, 0.14), CFrame.new(0, 3.25, -1.65), DARK, Enum.Material.Metal)
+	paint(ctx, "RearBody", Vector3.new(1.3, 0.9, 2.3), CFrame.new(0, 1.55, 1.3))
+	paint(ctx, "FrontFender", Vector3.new(0.6, 0.15, 1.1), CFrame.new(0, r * 2 + 0.15, -hb))
+	headlight(ctx, Vector3.new(0.5, 0.4, 0.12), Vector3.new(0, 2.95, -1.82))
+	taillight(ctx, Vector3.new(0.6, 0.3, 0.12), Vector3.new(0, 1.7, 2.48))
+	return {
+		wheels = { { x = 0, z = -hb, steer = true }, { x = 0, z = hb, steer = false } },
+		seats = { Vector3.new(0, 2.3, 0.75), Vector3.new(0, 2.4, 1.95) },
+		seatSize = Vector3.new(1.0, 0.3, 1.1),
+	}
+end
+
+STYLES.bicycle = function(ctx)
+	local s = ctx.spec
+	local hb = s.wheelbase / 2
+	local r = s.wheelRadius
+	local rear = Vector3.new(0, r, hb)
+	local front = Vector3.new(0, r, -hb)
+	local bb = Vector3.new(0, 1.1, 0.1) -- bottom bracket
+	local seatTop = Vector3.new(0, 2.6, 0.5)
+	local headTop = Vector3.new(0, 2.85, -1.6)
+	local headBottom = Vector3.new(0, 2.2, -1.75)
+	rod(ctx, "SeatTube", bb, seatTop, 0.2, nil, true)
+	rod(ctx, "TopTube", seatTop, headTop, 0.2, nil, true)
+	rod(ctx, "DownTube", bb, headBottom, 0.22, nil, true)
+	rod(ctx, "ChainStay", bb, rear, 0.15, nil, true)
+	rod(ctx, "SeatStay", seatTop, rear, 0.15, nil, true)
+	rod(ctx, "Fork", headBottom, front, 0.16, CHROME)
+	rod(ctx, "Stem", headTop, Vector3.new(0, 3.15, -1.7), 0.16, CHROME)
+	addPart(ctx, "Handlebar", Vector3.new(1.8, 0.14, 0.14), CFrame.new(0, 3.15, -1.7), DARK, Enum.Material.Metal)
+	addPart(ctx, "Crank", Vector3.new(0.9, 0.12, 0.12), CFrame.new(bb), DARK, Enum.Material.Metal)
+	for _, x in { -0.45, 0.45 } do
+		addPart(ctx, "Pedal", Vector3.new(0.35, 0.1, 0.25), CFrame.new(bb + Vector3.new(x, 0, 0)), DARK)
+	end
+	headlight(ctx, Vector3.new(0.3, 0.3, 0.15), Vector3.new(0, 2.95, -1.92))
+	taillight(ctx, Vector3.new(0.3, 0.25, 0.1), Vector3.new(0, 2.45, 1.05))
+	return {
+		wheels = { { x = 0, z = -hb, steer = true }, { x = 0, z = hb, steer = false } },
+		seats = { Vector3.new(0, 2.9, 0.6) },
+		seatSize = Vector3.new(0.7, 0.3, 1.0),
+	}
+end
+
+local function addWheel(ctx: Ctx, x: number, z: number, steer: boolean)
+	local s = ctx.spec
+	local r, w = s.wheelRadius, s.wheelWidth
+	local cf = CFrame.new(x, r, z)
+	local wheel = Instance.new("Part")
+	wheel.Name = "Wheel"
+	wheel.Shape = Enum.PartType.Cylinder -- axis along X = the axle
+	wheel.Size = Vector3.new(w, r * 2, r * 2)
+	wheel.CFrame = cf
+	wheel.Color = TIRE
+	wheel.Material = Enum.Material.SmoothPlastic
+	wheel.CanCollide = false
+	wheel.CanQuery = false
+	wheel.CanTouch = false
+	wheel.Massless = true
+	wheel.Anchored = ctx.display
+	wheel.Parent = ctx.model
+	local motor = Instance.new("Motor6D")
+	motor.Name = "WheelMotor"
+	motor.Part0 = ctx.chassis
+	motor.Part1 = wheel
+	motor.C0 = ctx.chassis.CFrame:ToObjectSpace(cf)
+	motor:SetAttribute("Steer", steer)
+	motor.Parent = ctx.chassis
+	-- rim, two spokes (so spinning is visible) and a hub cap
+	local rimScale = if s.twoWheel and w < 0.4 then 1.8 else 1.25
+	addPart(ctx, "Rim", Vector3.new(w + 0.06, r * rimScale, r * rimScale), cf, CHROME, Enum.Material.Metal, { shape = Enum.PartType.Cylinder, tag = "Rim", weldTo = wheel })
+	addPart(ctx, "Spoke", Vector3.new(w + 0.1, 0.22, r * 1.7), cf, CHROME, Enum.Material.Metal, { tag = "Rim", weldTo = wheel })
+	addPart(ctx, "Spoke", Vector3.new(w + 0.1, r * 1.7, 0.22), cf, CHROME, Enum.Material.Metal, { tag = "Rim", weldTo = wheel })
+	addPart(ctx, "Hub", Vector3.new(w + 0.14, r * 0.35, r * 0.35), cf, DARK, Enum.Material.Metal, { shape = Enum.PartType.Cylinder, weldTo = wheel })
+end
+
+-- Applies saved paint / rim / underglow choices to a built model.
+local function applyLook(model: Model, look: Look)
+	local paintColor = (VC.PAINTS[look.paint] or VC.PAINTS[1]).color
+	local rim = VC.RIMS[look.rim] or VC.RIMS[1]
+	local glowIndex = if VC.GLOWS[look.glow] then look.glow else 1
+	local glow = VC.GLOWS[glowIndex]
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			if d:GetAttribute("Paint") then
+				d.Color = paintColor
+			elseif d:GetAttribute("Rim") then
+				d.Color = rim.color
+				d.Material = rim.material
+			elseif d:GetAttribute("Glow") then
+				d.Color = glow.color
+				d.Transparency = if glowIndex == 1 then 1 else 0
+				local light = d:FindFirstChildOfClass("PointLight")
+				if light then
+					light.Color = glow.color
+					light.Enabled = glowIndex ~= 1
+				end
+			end
+		end
+	end
+	model:SetAttribute("Paint", look.paint)
+	model:SetAttribute("Rim", look.rim)
+	model:SetAttribute("Glow", glowIndex)
+end
+
+local function buildVehicle(s: Spec, look: Look, display: boolean): Model
+	local model = Instance.new("Model")
+	model.Name = s.name
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+	local GO = VC.groundOffset(s)
+
+	-- The collider: an invisible box from just above curb height to the roof.
+	local chassis = Instance.new("Part")
+	chassis.Name = "Chassis"
+	chassis.Size = Vector3.new(s.width, s.height - s.clearance, s.length)
+	chassis.CFrame = CFrame.new(0, GO, 0)
+	chassis.Transparency = 1
+	chassis.CanCollide = true
+	chassis.CanQuery = true
+	chassis.CanTouch = true
+	chassis.Anchored = true
+	chassis.RootPriority = 100
+	chassis.CustomPhysicalProperties = PhysicalProperties.new(0.05, 0.15, 0, 1, 1)
+	chassis.TopSurface = Enum.SurfaceType.Smooth
+	chassis.BottomSurface = Enum.SurfaceType.Smooth
+	chassis.Parent = model
+	model.PrimaryPart = chassis
+
+	local ctx: Ctx = { model = model, chassis = chassis, display = display, spec = s }
+
+	-- Low, heavy ballast keeps the centre of mass near the axles.
+	local ballastSize = Vector3.new(math.max(s.width - 1, 0.6), 0.6, math.max(s.length - 2, 2))
+	local ballast = addPart(ctx, "Ballast", ballastSize, CFrame.new(0, s.clearance + 0.3, 0), DARK, nil, { transparency = 1 })
+	ballast.Massless = false
+	local volume = ballastSize.X * ballastSize.Y * ballastSize.Z
+	ballast.CustomPhysicalProperties = PhysicalProperties.new(math.clamp(s.mass / volume, 0.01, 100), 0.3, 0, 1, 1)
+
+	local layout = STYLES[s.style](ctx)
+	for _, w in layout.wheels do
+		addWheel(ctx, w.x, w.z, w.steer)
+	end
+
+	-- underglow (always built; hidden when the "None" option is chosen)
+	local glowWidth = if s.twoWheel then 0.5 else s.width - 1.4
+	local glowPart = addPart(ctx, "Underglow", Vector3.new(glowWidth, 0.1, s.length * 0.62), CFrame.new(0, if s.twoWheel then 0.45 else 0.75, 0), Color3.new(1, 1, 1), Enum.Material.Neon, { tag = "Glow", transparency = 1 })
+	local glowLight = Instance.new("PointLight")
+	glowLight.Range = if s.twoWheel then 8 else 13
+	glowLight.Brightness = 2.5
+	glowLight.Shadows = false
+	glowLight.Enabled = false
+	glowLight.Parent = glowPart
+
+	-- seats: the first is the driver's VehicleSeat. Touch-sitting is off (CanTouch
+	-- false); players get in through the Drive / Ride prompts so nobody falls
+	-- into a seat by bumping a car.
+	local seats = {}
+	for i = 1, math.min(s.seats, #layout.seats) do
+		local top = layout.seats[i]
+		local size = layout.seatSize
+		local seat = addPart(ctx, if i == 1 then "DriverSeat" else "PassengerSeat", size, CFrame.new(top - Vector3.new(0, size.Y / 2, 0)), Color3.fromRGB(45, 42, 40), Enum.Material.Fabric, { class = if i == 1 then "VehicleSeat" else "Seat" })
+		if seat:IsA("VehicleSeat") then
+			seat.MaxSpeed = 0
+			seat.Torque = 0
+			seat.TurnSpeed = 0
+			seat.HeadsUpDisplay = false
+		end
+		if display and (seat:IsA("Seat") or seat:IsA("VehicleSeat")) then
+			seat.Disabled = true
+		end
+		table.insert(seats, seat)
+	end
+
+	if not display then
+		local center = Instance.new("Attachment")
+		center.Name = "Center"
+		center.Parent = chassis
+		local force = Instance.new("VectorForce")
+		force.Name = "DriveForce"
+		force.Attachment0 = center
+		force.RelativeTo = Enum.ActuatorRelativeTo.World
+		force.ApplyAtCenterOfMass = true
+		force.Force = Vector3.zero
+		force.Parent = chassis
+		local torque = Instance.new("Torque")
+		torque.Name = "DriveTorque"
+		torque.Attachment0 = center
+		torque.RelativeTo = Enum.ActuatorRelativeTo.World
+		torque.Torque = Vector3.zero
+		torque.Parent = chassis
+
+		-- keeps the chassis' up axis pointing up (its X axis is the chassis' up)
+		local uprightAtt = Instance.new("Attachment")
+		uprightAtt.Name = "UprightAttachment"
+		uprightAtt.CFrame = VC.axisCFrame(Vector3.yAxis)
+		uprightAtt.Parent = chassis
+		local align = Instance.new("AlignOrientation")
+		align.Name = "Upright"
+		align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		align.Attachment0 = uprightAtt
+		local ok = pcall(function()
+			align.AlignType = Enum.AlignType.PrimaryAxisParallel
+		end)
+		if not ok then
+			align.PrimaryAxisOnly = true
+		end
+		align.CFrame = VC.axisCFrame(Vector3.yAxis)
+		local expectedMass = s.mass + 30
+		align.MaxTorque = expectedMass * (if s.twoWheel then 500 else 220)
+		align.Responsiveness = if s.twoWheel then 30 else 14
+		align.Parent = chassis
+
+		-- suspension mount points: wheel centre at rest + the unused travel
+		local mountY = s.wheelRadius + (s.travel - s.sag) - GO
+		local hx, hz = s.track / 2, s.wheelbase / 2
+		for _, p in { Vector3.new(-hx, mountY, -hz), Vector3.new(hx, mountY, -hz), Vector3.new(-hx, mountY, hz), Vector3.new(hx, mountY, hz) } do
+			local att = Instance.new("Attachment")
+			att.Name = "Susp"
+			att.Position = p
+			att.Parent = chassis
+		end
+
+		-- prompts: Drive on the driver's side, Ride on the other side
+		local driverSeat = layout.seats[1]
+		local side = if driverSeat.X > 0.1 then 1 else -1
+		local driveAtt = Instance.new("Attachment")
+		driveAtt.Name = "DrivePromptAttachment"
+		driveAtt.Position = Vector3.new(side * (s.width / 2 + 0.6), 2.6 - GO, driverSeat.Z)
+		driveAtt.Parent = chassis
+		local drive = Instance.new("ProximityPrompt")
+		drive.Name = "DrivePrompt"
+		drive.ActionText = "Drive"
+		drive.ObjectText = s.name
+		drive.KeyboardKeyCode = Enum.KeyCode.E
+		drive.MaxActivationDistance = 9
+		drive.RequiresLineOfSight = false
+		drive.Parent = driveAtt
+		if #seats > 1 then
+			local rideSeat = layout.seats[2]
+			local rideAtt = Instance.new("Attachment")
+			rideAtt.Name = "RidePromptAttachment"
+			rideAtt.Position = Vector3.new(-side * (s.width / 2 + 0.6), 2.6 - GO, rideSeat.Z)
+			rideAtt.Parent = chassis
+			local ride = Instance.new("ProximityPrompt")
+			ride.Name = "RidePrompt"
+			ride.ActionText = "Ride"
+			ride.ObjectText = s.name
+			ride.KeyboardKeyCode = Enum.KeyCode.E
+			ride.MaxActivationDistance = 9
+			ride.RequiresLineOfSight = false
+			ride.Parent = rideAtt
+		end
+	end
+
+	-- the visual wheels drop/steer around their rest position (read by clients)
+	model:SetAttribute("VehicleId", s.id)
+	model:SetAttribute("Kind", s.kind)
+	applyLook(model, look)
+	return model
+end
+
+---------------------------------------------------------------------------
+-- State
+---------------------------------------------------------------------------
+type Active = {
+	owner: Player,
+	id: string,
+	spec: Spec,
+	model: Model,
+	chassis: BasePart,
+	seat: VehicleSeat,
+	seats: { Seat | VehicleSeat },
+	sim: VC.Sim,
+	driver: Player?,
+	override: boolean,
+	restTime: number,
+	overspeed: number,
+}
+
+local active: { [Player]: Active } = {}
+local byModel: { [Model]: Active } = {}
+local lastSpawn: { [Player]: number } = {}
+local activeFolder: Folder
+local ignoreList: { Instance } = {}
+
+local VehicleUI = Net.remote("RemoteEvent", "VehicleUI") -- server -> client ("Shop", id) / ("Mods")
+local VehicleBuy = Net.remote("RemoteFunction", "VehicleBuy") -- (id, paintIndex) -> ok, message
+local VehicleMod = Net.remote("RemoteFunction", "VehicleMod") -- (id, "paint"|"rim"|"glow", index) -> ok, message
+local VehicleSpawn = Net.remote("RemoteFunction", "VehicleSpawn") -- (id) -> ok, message
+local VehicleStore = Net.remote("RemoteFunction", "VehicleStore") -- () -> ok, message
+local VehicleLights = Net.remote("RemoteEvent", "VehicleLights") -- () toggles headlights of the car you drive
+
+local function section(player: Player)
+	return PlayerData.section(player, "vehicles")
+end
+
+local function humanoidOf(player: Player): Humanoid?
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 then
+		return humanoid
+	end
+	return nil
+end
+
+local function setOwner(part: BasePart, player: Player?)
+	if part.Anchored or not part:IsDescendantOf(workspace) then
+		return
+	end
+	pcall(function()
+		part:SetNetworkOwner(player)
+	end)
+end
+
+local function eject(seat: Seat | VehicleSeat, humanoid: Humanoid)
+	local weld = seat:FindFirstChild("SeatWeld")
+	if weld then
+		weld:Destroy()
+	end
+	humanoid.Sit = false
+end
+
+-- Server-side sit. Seats have CanTouch off; if a Sit call ever fails to take,
+-- touch is opened for a moment as a fallback.
+local function sitIn(seat: Seat | VehicleSeat, humanoid: Humanoid)
+	seat:Sit(humanoid)
+	task.delay(0.35, function()
+		if seat.Parent and humanoid.Parent and humanoid.Health > 0 and humanoid.SeatPart == nil and seat.Occupant == nil then
+			seat.CanTouch = true
+			seat:Sit(humanoid)
+			task.delay(1, function()
+				if seat.Parent then
+					seat.CanTouch = false
+				end
+			end)
+		end
+	end)
+end
+
+local function clearDriving(v: Active)
+	local driver = v.driver
+	v.driver = nil
+	if driver then
+		driver:SetAttribute("Driving", "")
+	end
+end
+
+local function onDriverSeat(v: Active)
+	local humanoid = v.seat.Occupant
+	local player = humanoid and Players:GetPlayerFromCharacter(humanoid.Parent)
+	if humanoid and player ~= v.owner then
+		eject(v.seat, humanoid)
+		if player then
+			Net.notify(player, "NOT YOUR RIDE", "Only " .. v.owner.DisplayName .. " can drive this. Use Ride to hop in.")
+		end
+		return
+	end
+	if player then
+		v.driver = player
+		player:SetAttribute("Driving", v.spec.kind)
+		v.restTime = 0
+		v.chassis.Anchored = false
+		setOwner(v.chassis, player)
+	else
+		clearDriving(v)
+		setOwner(v.chassis, nil)
+		VC.idle(v.sim)
+	end
+end
+
+local function despawn(player: Player)
+	local v = active[player]
+	if not v then
+		return
+	end
+	active[player] = nil
+	byModel[v.model] = nil
+	for _, seat in v.seats do
+		local humanoid = seat.Occupant
+		if humanoid then
+			eject(seat, humanoid)
+		end
+	end
+	clearDriving(v)
+	v.model:Destroy()
+	if player.Parent then
+		player:SetAttribute("VehicleSpawned", "")
+	end
+end
+
+local function refreshIgnore()
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	ignoreList = list
+	for _, v in active do
+		VC.setIgnore(v.sim, list)
+	end
+end
+
+local function inCity(pos: Vector3): boolean
+	local lo, hi = VC.CITY_MIN, VC.CITY_MAX
+	return pos.X > lo.X and pos.X < hi.X and pos.Z > lo.Z and pos.Z < hi.Z and pos.Y > lo.Y and pos.Y < hi.Y
+end
+
+local ROAD_NAMES = { MainRoad = "x", CrossRoad = "z", Lot = "any" }
+
+-- Finds a clear, ground-level spot near the player. Prefers roads, and lines
+-- the vehicle up with the road it lands on.
+local function findSpot(player: Player, s: Spec): CFrame?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root or not character then
+		return nil
+	end
+	local origin = root.Position
+	local lookFlat = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+	if lookFlat.Magnitude < 0.1 then
+		lookFlat = -Vector3.zAxis
+	end
+	lookFlat = lookFlat.Unit
+
+	-- selene: allow(undefined_variable)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local rayIgnore = table.clone(ignoreList)
+	if active[player] then
+		table.insert(rayIgnore, active[player].model)
+	end
+	rayParams.FilterDescendantsInstances = rayIgnore
+	rayParams.RespectCanCollide = true
+	-- selene: allow(undefined_variable)
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	local exclude: { Instance } = { character }
+	if active[player] then
+		table.insert(exclude, active[player].model) -- it gets replaced anyway
+	end
+	overlap.FilterDescendantsInstances = exclude
+	overlap.RespectCanCollide = true
+
+	local boxBottom, boxTop = 0.9, s.height + 0.4
+	local boxSize = Vector3.new(s.width + 1.2, boxTop - boxBottom, s.length + 1.2)
+	local best: CFrame? = nil
+	local bestScore = math.huge
+	for _, ring in { 6, 9, 13, 18, 24, 31, 40 } do
+		local d = ring + s.length * 0.3
+		for i = 0, 15 do
+			local angle = i / 16 * math.pi * 2
+			local p = origin + Vector3.new(math.cos(angle) * d, 0, math.sin(angle) * d)
+			if not inCity(Vector3.new(p.X, 1, p.Z)) then
+				continue
+			end
+			local hit = workspace:Raycast(Vector3.new(p.X, 80, p.Z), Vector3.new(0, -120, 0), rayParams)
+			if not hit or hit.Position.Y > 1.2 or hit.Position.Y < -1 then
+				continue -- roof, interior or nothing: only ground level counts
+			end
+			local road = ROAD_NAMES[hit.Instance.Name]
+			local dir = lookFlat
+			if road == "x" then
+				dir = Vector3.new(if lookFlat.X < 0 then -1 else 1, 0, 0)
+			elseif road == "z" then
+				dir = Vector3.new(0, 0, if lookFlat.Z < 0 then -1 else 1)
+			end
+			local ground = hit.Position
+			local cf = CFrame.lookAt(ground, ground + dir)
+			local boxCF = cf * CFrame.new(0, (boxBottom + boxTop) / 2, 0)
+			if #workspace:GetPartBoundsInBox(boxCF, boxSize, overlap) == 0 then
+				local score = (ground - origin).Magnitude - (if road then 15 else 0)
+				if score < bestScore then
+					bestScore = score
+					best = cf
+				end
+			end
+		end
+		if best and bestScore < ring then
+			break -- good enough, no need to look further out
+		end
+	end
+	return best
+end
+
+local function spawnVehicle(player: Player, id: string): (boolean, string)
+	local s = VC.byId[id]
+	local sec = section(player)
+	if not s or not sec or not sec.owned[id] then
+		return false, "You don't own that vehicle."
+	end
+	local humanoid = humanoidOf(player)
+	if not humanoid or not Net.alive(player) then
+		return false, "You can't do that right now."
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" then
+		return false, "Head outside first. Vehicles can only be brought to the street."
+	end
+	local root = (player.Character :: Model):FindFirstChild("HumanoidRootPart") :: BasePart
+	if not inCity(root.Position) then
+		return false, "You need to be out in the city to call a vehicle."
+	end
+	if humanoid.SeatPart then
+		return false, "Hop out of your seat first."
+	end
+	local now = os.clock()
+	local wait = (lastSpawn[player] or -math.huge) + VC.SPAWN_COOLDOWN - now
+	if wait > 0 then
+		return false, string.format("Your valet needs %ds more.", math.ceil(wait))
+	end
+	local spot = findSpot(player, s)
+	if not spot then
+		return false, "No room to park here. Try an open street or parking lot."
+	end
+	lastSpawn[player] = now
+	despawn(player)
+
+	local look = sec.owned[id]
+	local model = buildVehicle(s, { paint = look.paint, rim = look.rim, glow = look.glow }, false)
+	model.Name = player.Name .. "_" .. s.id
+	model:SetAttribute("Owner", player.UserId)
+	model:SetAttribute("OwnerName", player.DisplayName)
+	model:SetAttribute("Headlights", false)
+	model:PivotTo(spot * CFrame.new(0, VC.groundOffset(s) + 0.1, 0))
+	model.Parent = activeFolder
+	CollectionService:AddTag(model, TAG)
+
+	local chassis = model.PrimaryPart :: BasePart
+	local seats = {}
+	for _, d in model:GetChildren() do
+		if d:IsA("Seat") or d:IsA("VehicleSeat") then
+			d.CanTouch = false
+			table.insert(seats, d)
+		end
+	end
+	local sim = VC.newSim(model) :: VC.Sim
+	local v: Active = {
+		owner = player,
+		id = id,
+		spec = s,
+		model = model,
+		chassis = chassis,
+		seat = model:FindFirstChild("DriverSeat") :: VehicleSeat,
+		seats = seats,
+		sim = sim,
+		driver = nil,
+		override = false,
+		restTime = 0,
+		overspeed = 0,
+	}
+	VC.setIgnore(sim, ignoreList)
+	active[player] = v
+	byModel[model] = v
+
+	v.seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		if byModel[model] == v then
+			onDriverSeat(v)
+		end
+	end)
+
+	local drive = model:FindFirstChild("DrivePrompt", true) :: ProximityPrompt?
+	if drive then
+		drive.Triggered:Connect(function(who: Player)
+			if who ~= v.owner then
+				Net.notify(who, "NOT YOUR RIDE", "Only the owner can drive this.")
+				return
+			end
+			local h = humanoidOf(who)
+			if not h or h.SeatPart or v.seat.Occupant or Net.distance(who, chassis.Position) > s.length / 2 + 12 then
+				return
+			end
+			sitIn(v.seat, h)
+		end)
+	end
+	local ride = model:FindFirstChild("RidePrompt", true) :: ProximityPrompt?
+	if ride then
+		ride.Triggered:Connect(function(who: Player)
+			local h = humanoidOf(who)
+			if not h or h.SeatPart or Net.distance(who, chassis.Position) > s.length / 2 + 12 then
+				return
+			end
+			for _, seat in seats do
+				if seat:IsA("Seat") and seat.Occupant == nil then
+					sitIn(seat, h)
+					return
+				end
+			end
+			Net.notify(who, "FULL", "Every passenger seat is taken.")
+		end)
+	end
+
+	sec.last = id
+	PlayerData.markChanged(player)
+	player:SetAttribute("VehicleSpawned", id)
+	return true, s.name .. " is parked nearby. Walk up and press Drive."
+end
+
+---------------------------------------------------------------------------
+-- Remotes
+---------------------------------------------------------------------------
+local function validIndex(n: any, list: { any }): boolean
+	return type(n) == "number" and n == n and n % 1 == 0 and n >= 1 and n <= #list
+end
+
+VehicleBuy.OnServerInvoke = function(player: Player, id: any, paintIndex: any)
+	if not Net.allow(player, "VehicleBuy", 1) then
+		return false, "Slow down."
+	end
+	if type(id) ~= "string" or not VC.byId[id] then
+		return false, "Unknown vehicle."
+	end
+	if not validIndex(paintIndex, VC.PAINTS) then
+		paintIndex = VC.byId[id].defaultPaint
+	end
+	local s = VC.byId[id]
+	local sec = section(player)
+	local data = PlayerData.get(player)
+	if not sec or not data then
+		return false, "Your save is still loading."
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" or Net.distance(player, VC.LOT_CENTER) > VC.SHOP_RANGE then
+		return false, "You need to be at Budget Wheels to buy."
+	end
+	if sec.owned[id] then
+		return false, "You already own the " .. s.name .. "."
+	end
+	if data.level < s.level or data.reputation < s.rep then
+		return false, "Locked. Requires " .. (VC.requirementText(s) or "") .. "."
+	end
+	if not PlayerData.spendCash(player, s.price, "Bought " .. s.name) then
+		return false, "You need " .. money(s.price) .. " for the " .. s.name .. "."
+	end
+	sec.owned[id] = { paint = paintIndex, rim = 1, glow = 1, t = os.time() }
+	PlayerData.markChanged(player)
+	PlayerData.addXP(player, 25)
+	Net.notify(player, "NEW RIDE", "You bought the " .. s.name .. "! Spawn it from the Garage app on your phone.")
+	return true, "Purchased"
+end
+
+local MOD_LISTS = { paint = VC.PAINTS, rim = VC.RIMS, glow = VC.GLOWS }
+
+VehicleMod.OnServerInvoke = function(player: Player, id: any, modType: any, index: any)
+	if not Net.allow(player, "VehicleMod", 0.5) then
+		return false, "Slow down."
+	end
+	if type(id) ~= "string" or type(modType) ~= "string" or not MOD_LISTS[modType] then
+		return false, "Invalid request."
+	end
+	local list = MOD_LISTS[modType]
+	if not validIndex(index, list) then
+		return false, "Invalid option."
+	end
+	local sec = section(player)
+	local entry = sec and sec.owned[id]
+	local s = VC.byId[id]
+	if not entry or not s then
+		return false, "You don't own that vehicle."
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" or Net.distance(player, VC.MODS_POS) > VC.MODS_RANGE then
+		return false, "Visit the Paint & Mods bay at Budget Wheels."
+	end
+	if entry[modType] == index then
+		return false, "Already fitted."
+	end
+	local price = VC.MOD_PRICES[modType]
+	local label = (if modType == "paint" then "Paint job: " elseif modType == "rim" then "Rims: " else "Underglow: ") .. list[index].name
+	if not PlayerData.spendCash(player, price, label .. " (" .. s.name .. ")") then
+		return false, "You need $" .. price .. "."
+	end
+	entry[modType] = index
+	PlayerData.markChanged(player)
+	local v = active[player]
+	if v and v.id == id then
+		applyLook(v.model, { paint = entry.paint, rim = entry.rim, glow = entry.glow })
+	end
+	Net.notify(player, "PAINT & MODS", label .. " fitted to your " .. s.name .. ".")
+	return true, "Done"
+end
+
+VehicleSpawn.OnServerInvoke = function(player: Player, id: any)
+	if not Net.allow(player, "VehicleSpawn", 1) then
+		return false, "Slow down."
+	end
+	if type(id) ~= "string" then
+		return false, "Invalid request."
+	end
+	local ok, message = spawnVehicle(player, id)
+	Net.notify(player, "GARAGE", message)
+	return ok, message
+end
+
+VehicleStore.OnServerInvoke = function(player: Player)
+	if not Net.allow(player, "VehicleStore", 1) then
+		return false, "Slow down."
+	end
+	if not active[player] then
+		return false, "Nothing is out."
+	end
+	local name = active[player].spec.name
+	despawn(player)
+	Net.notify(player, "GARAGE", "Your " .. name .. " was put away.")
+	return true, "Stored"
+end
+
+VehicleLights.OnServerEvent:Connect(function(player: Player)
+	if not Net.allow(player, "VehicleLights", 0.25) then
+		return
+	end
+	local v = active[player]
+	if v and v.driver == player then
+		v.model:SetAttribute("Headlights", not v.model:GetAttribute("Headlights"))
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Public API (used by Jobs)
+---------------------------------------------------------------------------
+-- The CityGrind vehicle the player is currently driving, if any.
+function Vehicles.drivingVehicle(player: Player): Model?
+	local v = active[player]
+	if v and v.driver == player and v.model.Parent then
+		return v.model
+	end
+	return nil
+end
+
+-- Distinct kinds ("Bike", "Scooter", "Motorcycle", "Car") the player owns.
+function Vehicles.ownedKinds(player: Player): { string }
+	local sec = section(player)
+	local kinds = {}
+	if sec then
+		for id in sec.owned do
+			local s = VC.byId[id]
+			if s and not table.find(kinds, s.kind) then
+				table.insert(kinds, s.kind)
+			end
+		end
+	end
+	return kinds
+end
+
+---------------------------------------------------------------------------
+-- Showroom and Paint & Mods bay
+---------------------------------------------------------------------------
+local function worldPart(props: { name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material?, collide: boolean?, parent: Instance, shape: Enum.PartType? }): Part
+	local p = Instance.new("Part")
+	p.Name = props.name
+	p.Anchored = true
+	p.Size = props.size
+	p.CFrame = props.cframe
+	p.Color = props.color
+	p.Material = props.material or Enum.Material.SmoothPlastic
+	p.CanCollide = if props.collide == nil then true else props.collide
+	if props.shape then
+		p.Shape = props.shape
+	end
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = props.parent
+	return p
+end
+
+local function textOn(part: BasePart, lines: { { text: string, size: number, color: Color3, font: Enum.Font? } })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 50
+	gui.LightInfluence = 0
+	gui.Parent = part
+	local list = Instance.new("UIListLayout")
+	list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	list.VerticalAlignment = Enum.VerticalAlignment.Center
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	list.Parent = gui
+	for i, line in lines do
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.new(1, -10, 0, line.size + 4)
+		label.Text = line.text
+		label.TextSize = line.size
+		label.TextColor3 = line.color
+		label.Font = line.font or Enum.Font.GothamBold
+		label.LayoutOrder = i
+		label.Parent = gui
+	end
+end
+
+local function buildShowroom(root: Folder)
+	local showroom = Instance.new("Folder")
+	showroom.Name = "Showroom"
+	showroom.Parent = root
+	local lotY = VC.LOT_Y
+	for i, s in VC.CATALOG do
+		local x = VC.LOT_CENTER.X - 31.5 + (i - 1) * 9
+		local z = VC.LOT_CENTER.Z - 6
+		local model = buildVehicle(s, { paint = s.defaultPaint, rim = 1, glow = 1 }, true)
+		model.Name = "Display_" .. s.id
+		model:PivotTo(CFrame.new(x, lotY + VC.groundOffset(s), z))
+		model.Parent = showroom
+
+		local prompt = Instance.new("ProximityPrompt")
+		prompt.Name = "ViewPrompt"
+		prompt.ActionText = "View"
+		prompt.ObjectText = s.name .. "  ·  " .. money(s.price)
+		prompt.KeyboardKeyCode = Enum.KeyCode.E
+		prompt.MaxActivationDistance = math.max(10, s.length / 2 + 4)
+		prompt.RequiresLineOfSight = false
+		prompt.Parent = model.PrimaryPart
+		prompt.Triggered:Connect(function(player: Player)
+			if Net.allow(player, "VehicleView", 0.4) and Net.distance(player, (model.PrimaryPart :: BasePart).Position) < 25 then
+				VehicleUI:FireClient(player, "Shop", s.id)
+			end
+		end)
+
+		-- price sign in front of each car
+		local signZ = z - 9.4
+		local board = worldPart({ name = "PriceSign", size = Vector3.new(6.6, 2.4, 0.25), cframe = CFrame.new(x, lotY + 1.9, signZ), color = Color3.fromRGB(20, 20, 26), parent = showroom })
+		for _, dx in { -2.9, 2.9 } do
+			worldPart({ name = "SignLeg", size = Vector3.new(0.2, 0.8, 0.2), cframe = CFrame.new(x + dx, lotY + 0.4, signZ), color = Color3.fromRGB(60, 60, 66), material = Enum.Material.Metal, parent = showroom })
+		end
+		local lines = {
+			{ text = s.name:upper(), size = 28, color = Color3.fromRGB(255, 255, 255), font = Enum.Font.GothamBlack },
+			{ text = money(s.price), size = 26, color = Color3.fromRGB(110, 230, 120), font = Enum.Font.GothamBlack },
+			{ text = string.format("%d MPH  ·  %d seat%s  ·  %s", math.floor(s.topSpeed * VC.MPH_PER_STUD), s.seats, if s.seats == 1 then "" else "s", s.class), size = 16, color = Color3.fromRGB(190, 190, 200) },
+		}
+		local req = VC.requirementText(s)
+		if req then
+			table.insert(lines, { text = "REQUIRES " .. req:upper(), size = 14, color = Color3.fromRGB(255, 170, 60) })
+		end
+		textOn(board, lines)
+	end
+
+	-- Paint & Mods bay: a canopy with a kiosk on the west side of the lot.
+	local bay = Instance.new("Model")
+	bay.Name = "PaintAndMods"
+	bay.Parent = root
+	local c = VC.MODS_POS
+	worldPart({ name = "BayFloor", size = Vector3.new(18, 0.06, 16), cframe = CFrame.new(c.X, c.Y + 0.03, c.Z), color = Color3.fromRGB(40, 70, 120), material = Enum.Material.Concrete, collide = false, parent = bay })
+	for _, dx in { -8.5, 8.5 } do
+		for _, dz in { -7.5, 7.5 } do
+			worldPart({ name = "Post", size = Vector3.new(0.6, 11, 0.6), cframe = CFrame.new(c.X + dx, c.Y + 5.5, c.Z + dz), color = Color3.fromRGB(50, 50, 56), material = Enum.Material.Metal, parent = bay })
+		end
+	end
+	worldPart({ name = "Canopy", size = Vector3.new(19, 0.6, 17), cframe = CFrame.new(c.X, c.Y + 11.3, c.Z), color = Color3.fromRGB(230, 230, 235), material = Enum.Material.Metal, parent = bay })
+	local board = worldPart({ name = "BaySign", size = Vector3.new(13, 2.4, 0.3), cframe = CFrame.new(c.X, c.Y + 9.6, c.Z - 8.6), color = Color3.fromRGB(20, 20, 26), parent = bay })
+	textOn(board, {
+		{ text = "PAINT & MODS", size = 56, color = Color3.fromRGB(255, 120, 200), font = Enum.Font.GothamBlack },
+		{ text = "Paint $150  ·  Rims $250  ·  Underglow $400", size = 26, color = Color3.fromRGB(230, 230, 235) },
+	})
+	local lamp = worldPart({ name = "BayLight", size = Vector3.new(8, 0.2, 2), cframe = CFrame.new(c.X, c.Y + 10.9, c.Z), color = Color3.fromRGB(255, 250, 235), material = Enum.Material.Neon, collide = false, parent = bay })
+	local light = Instance.new("PointLight")
+	light.Range = 22
+	light.Brightness = 1.4
+	light.Parent = lamp
+	-- paint cans on a shelf at the back
+	worldPart({ name = "Shelf", size = Vector3.new(10, 3, 1.2), cframe = CFrame.new(c.X, c.Y + 1.5, c.Z + 7.2), color = Color3.fromRGB(70, 60, 50), material = Enum.Material.Wood, parent = bay })
+	for i, p in VC.PAINTS do
+		worldPart({ name = "PaintCan", size = Vector3.new(0.9, 0.8, 0.8), cframe = CFrame.new(c.X - 4.4 + (i - 1) * 1.25, c.Y + 3.45, c.Z + 7.2) * CFrame.Angles(0, 0, math.pi / 2), color = p.color, shape = Enum.PartType.Cylinder, parent = bay })
+	end
+	local kiosk = worldPart({ name = "Kiosk", size = Vector3.new(2.6, 4, 1.4), cframe = CFrame.new(c.X - 6, c.Y + 2, c.Z - 6), color = Color3.fromRGB(30, 30, 36), material = Enum.Material.Metal, parent = bay })
+	worldPart({ name = "KioskScreen", size = Vector3.new(2.1, 1.4, 0.1), cframe = CFrame.new(c.X - 6, c.Y + 3.1, c.Z - 6.72), color = Color3.fromRGB(255, 120, 200), material = Enum.Material.Neon, collide = false, parent = bay })
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "ModsPrompt"
+	prompt.ActionText = "Customize"
+	prompt.ObjectText = "Paint & Mods"
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = kiosk
+	prompt.Triggered:Connect(function(player: Player)
+		if Net.allow(player, "VehicleModsOpen", 0.4) and Net.distance(player, kiosk.Position) < 20 then
+			VehicleUI:FireClient(player, "Mods")
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Simulation of empty vehicles, parking, and speed sanity
+---------------------------------------------------------------------------
+local function physicsStep(dt: number)
+	for _, v in active do
+		local chassis = v.chassis
+		if chassis.Anchored or not chassis.Parent then
+			continue
+		end
+		if v.driver == nil or v.override then
+			VC.step(v.sim, dt, 0, 0, false)
+			local still = chassis.AssemblyLinearVelocity.Magnitude < 0.5 and chassis.AssemblyAngularVelocity.Magnitude < 0.3
+			if still and v.sim.grounded == #v.sim.susp and chassis.CFrame.UpVector.Y > 0.9 then
+				v.restTime += dt
+			else
+				v.restTime = 0
+			end
+			if v.driver == nil and v.restTime > 1.2 then
+				-- parked: anchoring costs nothing to simulate or replicate
+				VC.idle(v.sim)
+				chassis.AssemblyLinearVelocity = Vector3.zero
+				chassis.AssemblyAngularVelocity = Vector3.zero
+				chassis.Anchored = true
+				v.restTime = 0
+			end
+		end
+	end
+end
+
+local function sanityStep(dt: number)
+	for owner, v in active do
+		local chassis = v.chassis
+		if not chassis.Parent then
+			despawn(owner)
+			continue
+		end
+		local pos = chassis.Position
+		if pos.Y < -40 or math.abs(pos.X) > 1000 or math.abs(pos.Z) > 1000 or pos.Y > 500 then
+			despawn(owner)
+			Net.notify(owner, "GARAGE", "Your vehicle was towed back to the garage.")
+			continue
+		end
+		if v.driver and not v.override and not chassis.Anchored then
+			local vel = chassis.AssemblyLinearVelocity
+			local flat = Vector3.new(vel.X, 0, vel.Z).Magnitude
+			if flat > v.spec.topSpeed * 1.5 + 8 or math.abs(vel.Y) > 160 then
+				v.overspeed += dt
+			else
+				v.overspeed = math.max(0, v.overspeed - dt * 0.5)
+			end
+			if v.overspeed > 2 then
+				-- the driver's client owns the physics; take it back and stop the car
+				v.overspeed = 0
+				v.override = true
+				setOwner(chassis, nil)
+				chassis.AssemblyLinearVelocity = Vector3.zero
+				chassis.AssemblyAngularVelocity = Vector3.zero
+				Net.notify(v.driver, "SLOW DOWN", "Your vehicle was moving impossibly fast and was stopped.")
+				task.delay(1.5, function()
+					if byModel[v.model] == v then
+						v.override = false
+						if v.driver and not chassis.Anchored then
+							setOwner(chassis, v.driver)
+						end
+					end
+				end)
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Vehicles.start(city: Instance)
+	local old = city:FindFirstChild("Vehicles")
+	if old then
+		old:Destroy()
+	end
+	local root = Instance.new("Folder")
+	root.Name = "Vehicles"
+	root.Parent = city
+	activeFolder = Instance.new("Folder")
+	activeFolder.Name = "Active"
+	activeFolder.Parent = root
+	buildShowroom(root)
+	Places.mapPoint(city, "Paint & Mods", "Shop", VC.MODS_POS + Vector3.new(0, 3, -10))
+
+	PlayerData.onPublish(function(player: Player, data: any)
+		local sec = data.sections and data.sections.vehicles
+		if sec then
+			local ok, json = pcall(HttpService.JSONEncode, HttpService, sec.owned)
+			if ok and player:GetAttribute("VehiclesOwned") ~= json then
+				player:SetAttribute("VehiclesOwned", json)
+			end
+		end
+	end)
+
+	local function onPlayer(player: Player)
+		player:SetAttribute("Driving", "")
+		player:SetAttribute("VehicleSpawned", "")
+		player.CharacterRemoving:Connect(function()
+			local v = active[player]
+			if v and v.driver == player then
+				clearDriving(v)
+				setOwner(v.chassis, nil)
+			end
+		end)
+	end
+	Players.PlayerAdded:Connect(onPlayer)
+	for _, player in Players:GetPlayers() do
+		onPlayer(player)
+	end
+	Players.PlayerRemoving:Connect(function(player)
+		despawn(player)
+		lastSpawn[player] = nil
+	end)
+
+	RunService.PreSimulation:Connect(physicsStep)
+	RunService.Heartbeat:Connect(sanityStep)
+	task.spawn(function()
+		while true do
+			refreshIgnore()
+			task.wait(1)
+		end
+	end)
+end
+
+return Vehicles
+]=====])
 local client = put(SPS, 'LocalScript', 'CityGrindClient', [=====[
 -- CITY GRIND: client entry point (StarterPlayerScripts.CityGrindClient).
 
@@ -3298,6 +12533,1247 @@ if not player:GetAttribute("DataLoaded") then
 	player:GetAttributeChangedSignal("DataLoaded"):Wait()
 end
 HUD.push("WELCOME TO THE NEIGHBORHOOD", "Press P for your phone. Run the route by your apartment to earn cash.")
+]=====])
+put(client, 'ModuleScript', 'Apartments', [=====[
+-- CITY GRIND: home UI (spec sections 48, 73, 77, 110).
+-- Phone "Home" app, Maple Realty panel, the in-home FURNITURE panel and the
+-- placement / edit tools. The client only previews: every purchase and every
+-- placement is checked again by the server (src/server/Apartments.luau) using
+-- ApartmentsConfig's own tables.
+--
+-- Controls while placing: mouse moves the ghost, click / PLACE places,
+-- R / RB / ROTATE turns 90 degrees, Q / B / CANCEL stops. Touch: tap the floor
+-- to move the ghost, then PLACE. Gamepad: aim with the camera, R2 places.
+
+local CollectionService = game:GetService("CollectionService")
+local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Cfg = require(shared:WaitForChild("ApartmentsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Apartments = {}
+
+local GREEN = Color3.fromRGB(90, 220, 120)
+local RED = Color3.fromRGB(255, 80, 80)
+local HOME_COLOR = Color3.fromRGB(60, 170, 130)
+
+---------------------------------------------------------------------------
+-- State from the server
+---------------------------------------------------------------------------
+type State = {
+	ownedTiers: { [string]: boolean },
+	activeTier: string,
+	inventory: { [string]: number },
+	placements: { Cfg.Placement },
+	onboarded: boolean,
+}
+local state: State? = nil
+local stateChanged = Instance.new("BindableEvent")
+
+local function setState(newState: any)
+	if type(newState) == "table" then
+		state = newState
+		stateChanged:Fire()
+	end
+end
+
+local requestRemote: RemoteFunction? = nil
+local function getRequest(): RemoteFunction?
+	if not requestRemote then
+		local remotes = shared:WaitForChild("Remotes", 10)
+		requestRemote = remotes and remotes:WaitForChild("ApartmentsRequest", 10) :: RemoteFunction?
+	end
+	return requestRemote
+end
+
+-- Sends a request; shows the server's message as a toast. Returns success.
+local busy = false
+local function request(action: string, payload: any?): boolean
+	if busy then
+		return false
+	end
+	local remote = getRequest()
+	if not remote then
+		HUD.push("HOME", "Can't reach the city right now.")
+		return false
+	end
+	busy = true
+	local ok, success, message, newState = pcall(function()
+		return remote:InvokeServer(action, payload)
+	end)
+	busy = false
+	if not ok then
+		HUD.push("HOME", "Request failed. Try again.")
+		return false
+	end
+	setState(newState)
+	if type(message) == "string" then
+		HUD.push(if success then "HOME" else "CAN'T DO THAT", message)
+	end
+	return success == true
+end
+
+local function placedCount(itemId: string): number
+	local n = 0
+	if state then
+		for _, p in state.placements do
+			if p.id == itemId then
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
+-- The unit model the local player is standing in, if it is their own.
+local function myUnit(): Model?
+	if player:GetAttribute("HomeUnit") ~= player.UserId then
+		return nil
+	end
+	local city = Workspace:FindFirstChild("City")
+	local folder = city and city:FindFirstChild("Apartments")
+	local units = folder and folder:FindFirstChild("Units")
+	local unit = units and units:FindFirstChild("Unit_" .. player.UserId)
+	return if unit and unit:IsA("Model") then unit else nil
+end
+
+local function isGamepad(): boolean
+	local last = UserInputService:GetLastInputType()
+	return last.Name:sub(1, 7) == "Gamepad"
+end
+
+---------------------------------------------------------------------------
+-- Shared list builders (phone app + realty panel + furniture panel)
+---------------------------------------------------------------------------
+local function cardFrame(parent: Instance, height: number, order: number): Frame
+	return UI.new("Frame", {
+		BackgroundColor3 = colors.panelLight,
+		Size = UDim2.new(1, -20, 0, height),
+		LayoutOrder = order,
+		Parent = parent,
+	}, { UI.corner(14), UI.padding(10) })
+end
+
+local function clearList(container: Instance)
+	for _, child in container:GetChildren() do
+		if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
+			child:Destroy()
+		end
+	end
+end
+
+-- A button that needs a second tap within 4 seconds (for big purchases).
+local function confirmButton(props: { [string]: any }, confirmText: string, onConfirm: () -> ())
+	local button = UI.button(props)
+	local label = button.Text
+	local color = button.BackgroundColor3
+	local armedAt = 0
+	button.Activated:Connect(function()
+		if os.clock() - armedAt < 4 then
+			armedAt = 0
+			button.Text = label
+			button.BackgroundColor3 = color
+			onConfirm()
+			return
+		end
+		armedAt = os.clock()
+		button.Text = confirmText
+		button.BackgroundColor3 = colors.accent
+		task.delay(4, function()
+			if os.clock() - armedAt >= 3.9 and button.Parent then
+				button.Text = label
+				button.BackgroundColor3 = color
+			end
+		end)
+	end)
+	return button
+end
+
+local function requirementText(tier: Cfg.Tier): (string, boolean)
+	local level = player:GetAttribute("Level") or 1
+	local rep = player:GetAttribute("Reputation") or 0
+	local parts = {}
+	local met = true
+	if tier.level > 1 then
+		local ok = level >= tier.level
+		met = met and ok
+		table.insert(parts, "Level " .. tier.level .. (if ok then " ✓" else " ✗"))
+	end
+	if tier.reputation > 0 then
+		local ok = rep >= tier.reputation
+		met = met and ok
+		table.insert(parts, UI.formatCash(tier.reputation):sub(2) .. " rep" .. (if ok then " ✓" else " ✗"))
+	end
+	if #parts == 0 then
+		return "No requirements", true
+	end
+	return "Needs " .. table.concat(parts, " · "), met
+end
+
+local function tierCard(parent: Instance, tier: Cfg.Tier, order: number)
+	local card = cardFrame(parent, 138, order)
+	local owned = state ~= nil and state.ownedTiers[tier.id] == true
+	local active = state ~= nil and state.activeTier == tier.id
+	UI.label({ Text = tier.name, Font = UI.FONT_BLACK, TextSize = 17, Size = UDim2.new(1, -90, 0, 20), Parent = card })
+	UI.label({
+		Text = if tier.price == 0 then "FREE" else UI.formatCash(tier.price),
+		Font = UI.FONT_BLACK,
+		TextSize = 15,
+		TextColor3 = colors.cash,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.fromScale(1, 0),
+		Size = UDim2.new(0, 90, 0, 20),
+		Parent = card,
+	})
+	UI.label({
+		Text = tier.description,
+		TextSize = 12,
+		TextColor3 = colors.subtext,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Position = UDim2.fromOffset(0, 24),
+		Size = UDim2.new(1, 0, 0, 44),
+		Parent = card,
+	})
+	local reqText, met = requirementText(tier)
+	UI.label({
+		Text = if owned then string.format("Owned · holds %d pieces", tier.maxItems) else reqText,
+		TextSize = 12,
+		Font = UI.FONT_BOLD,
+		TextColor3 = if owned or met then GREEN else RED,
+		TextWrapped = true,
+		Position = UDim2.fromOffset(0, 70),
+		Size = UDim2.new(1, 0, 0, 16),
+		Parent = card,
+	})
+	local actionProps = {
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.fromScale(1, 1),
+		Size = UDim2.fromOffset(150, 30),
+		TextSize = 14,
+		Parent = card,
+	}
+	if active then
+		UI.label({ Text = "🏠 You live here", Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = GREEN, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.fromOffset(150, 30), Parent = card })
+	elseif owned then
+		actionProps.Text = "MOVE IN"
+		actionProps.BackgroundColor3 = HOME_COLOR
+		UI.button(actionProps).Activated:Connect(function()
+			request("MoveIn", tier.id)
+		end)
+	elseif met then
+		actionProps.Text = "BUY " .. UI.formatCash(tier.price)
+		actionProps.BackgroundColor3 = colors.xp
+		confirmButton(actionProps, "TAP TO CONFIRM", function()
+			request("BuyTier", tier.id)
+		end)
+	else
+		UI.label({ Text = "🔒 LOCKED", Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.fromOffset(150, 30), Parent = card })
+	end
+end
+
+local function storeRow(parent: Instance, item: Cfg.Item, order: number)
+	local card = cardFrame(parent, 58, order)
+	local owned = if state then state.inventory[item.id] or 0 else 0
+	UI.label({ Text = item.name, Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -86, 0, 18), Parent = card })
+	UI.label({
+		Text = string.format("%s · %s · own %d", UI.formatCash(item.price), item.category, owned),
+		TextSize = 12,
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 20),
+		Size = UDim2.new(1, -86, 0, 16),
+		Parent = card,
+	})
+	if owned >= Cfg.MAX_PER_ITEM then
+		UI.label({ Text = "MAX", Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(78, 30), Parent = card })
+		return
+	end
+	local props = { Text = "BUY", TextSize = 14, BackgroundColor3 = colors.xp, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(78, 32), Parent = card }
+	local function buy()
+		request("BuyFurniture", item.id)
+	end
+	if item.price >= 1000 then
+		confirmButton(props, "SURE?", buy) -- big purchases need a second tap
+	else
+		UI.button(props).Activated:Connect(buy)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Screen GUI pieces
+---------------------------------------------------------------------------
+local gui: ScreenGui
+local homeButtons: Frame
+local furniturePanel: Frame
+local furnitureList: ScrollingFrame
+local furnitureHeader: TextLabel
+local furnitureTab = "items"
+local tabButtons: { [string]: TextButton } = {}
+local realtyPanel: Frame
+local realtyList: ScrollingFrame
+local placeBar: Frame
+local placeTitle: TextLabel
+local placeStatus: TextLabel
+local editBar: Frame
+local editTitle: TextLabel
+local editActions: Frame
+local fade: Frame
+local fadeText: TextLabel
+
+-- Shrinks a fixed-size panel so it always fits the screen (phones).
+local function autoFit(panel: GuiObject, w: number, h: number)
+	local scale = UI.new("UIScale", { Parent = panel })
+	local function apply()
+		local camera = Workspace.CurrentCamera
+		if not camera then
+			return
+		end
+		local vp = camera.ViewportSize
+		scale.Scale = math.clamp(math.min((vp.X - 24) / w, (vp.Y - 90) / h), 0.45, 1)
+	end
+	apply()
+	if Workspace.CurrentCamera then
+		Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(apply)
+	end
+end
+
+local function panel(name: string, size: Vector2, props: { [string]: any }): Frame
+	local defaults = {
+		Name = name,
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.04,
+		Size = UDim2.fromOffset(size.X, size.Y),
+		Visible = false,
+		Parent = gui,
+	}
+	for k, v in props do
+		defaults[k] = v
+	end
+	local frame = UI.new("Frame", defaults, { UI.corner(16), UI.stroke(Color3.fromRGB(70, 70, 85), 1.5) })
+	autoFit(frame, size.X, size.Y)
+	return frame
+end
+
+local function scrollList(parent: Instance, top: number): ScrollingFrame
+	return UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, top),
+		Size = UDim2.new(1, 0, 1, -top - 8),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 4,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = parent,
+	}, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+		UI.new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 8) }),
+	})
+end
+
+local function closeButton(parent: Instance, onClose: () -> ())
+	local b = UI.button({ Text = "✕", TextSize = 16, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10), Size = UDim2.fromOffset(34, 34), Parent = parent })
+	b.Activated:Connect(onClose)
+	return b
+end
+
+local function selectFirstButton(container: Instance)
+	if not isGamepad() then
+		return
+	end
+	for _, d in container:GetDescendants() do
+		if d:IsA("GuiButton") and d.Visible then
+			GuiService.SelectedObject = d
+			return
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Realty panel (opened at the Maple Realty desk)
+---------------------------------------------------------------------------
+local function renderRealty()
+	if not realtyPanel.Visible then
+		return
+	end
+	clearList(realtyList)
+	if not state then
+		local c = cardFrame(realtyList, 40, 1)
+		UI.label({ Text = "Loading listings…", Size = UDim2.fromScale(1, 1), Parent = c })
+		return
+	end
+	for i, tier in Cfg.TIERS do
+		tierCard(realtyList, tier, i)
+	end
+end
+
+local function openRealty()
+	realtyPanel.Visible = true
+	if not state then
+		task.spawn(request, "GetState")
+	end
+	renderRealty()
+	selectFirstButton(realtyPanel)
+end
+
+local function buildRealtyPanel()
+	realtyPanel = panel("Realty", Vector2.new(460, 540), { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.52) })
+	UI.label({ Text = "MAPLE REALTY", Font = UI.FONT_BLACK, TextSize = 22, TextColor3 = Color3.fromRGB(120, 230, 170), Position = UDim2.fromOffset(16, 14), Size = UDim2.new(1, -70, 0, 24), Parent = realtyPanel })
+	local sub = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, Position = UDim2.fromOffset(16, 40), Size = UDim2.new(1, -70, 0, 16), Parent = realtyPanel })
+	local function refreshSub()
+		sub.Text = string.format("Your cash %s · Level %d · %d rep", UI.formatCash(player:GetAttribute("Cash") or 0), player:GetAttribute("Level") or 1, player:GetAttribute("Reputation") or 0)
+	end
+	for _, attr in { "Cash", "Level", "Reputation" } do
+		player:GetAttributeChangedSignal(attr):Connect(function()
+			refreshSub()
+			renderRealty()
+		end)
+	end
+	refreshSub()
+	closeButton(realtyPanel, function()
+		realtyPanel.Visible = false
+	end)
+	realtyList = scrollList(realtyPanel, 66)
+end
+
+---------------------------------------------------------------------------
+-- Furniture panel (inside your home)
+---------------------------------------------------------------------------
+local startPlacement: (itemId: string, uid: number?, rot: number?) -> ()
+local startEdit: () -> ()
+
+local function renderFurniture()
+	if not furniturePanel.Visible then
+		return
+	end
+	for name, b in tabButtons do
+		b.BackgroundColor3 = if name == furnitureTab then HOME_COLOR else colors.panelLight
+	end
+	clearList(furnitureList)
+	if not state then
+		furnitureHeader.Text = "Loading…"
+		return
+	end
+	local tier = Cfg.TIER_BY_ID[state.activeTier]
+	local total = #state.placements
+	furnitureHeader.Text = string.format("%s · %d / %d pieces placed", tier.name, total, tier.maxItems)
+	if furnitureTab == "store" then
+		for i, item in Cfg.ITEMS do
+			storeRow(furnitureList, item, i)
+		end
+		return
+	end
+	local order = 0
+	for _, item in Cfg.ITEMS do
+		local owned = state.inventory[item.id] or 0
+		if owned > 0 then
+			order += 1
+			local placed = placedCount(item.id)
+			local free = owned - placed
+			local card = cardFrame(furnitureList, 58, order)
+			UI.label({ Text = item.name, Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, -96, 0, 18), Parent = card })
+			UI.label({ Text = string.format("%d placed · %d in storage", placed, free), TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 20), Size = UDim2.new(1, -96, 0, 16), Parent = card })
+			if free > 0 and total < tier.maxItems then
+				local b = UI.button({ Text = "PLACE", TextSize = 14, BackgroundColor3 = HOME_COLOR, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(88, 32), Parent = card })
+				b.Activated:Connect(function()
+					startPlacement(item.id, nil, 0)
+				end)
+			else
+				UI.label({ Text = if free > 0 then "HOME FULL" else "ALL PLACED", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(88, 32), Parent = card })
+			end
+		end
+	end
+	if order == 0 then
+		local c = cardFrame(furnitureList, 52, 1)
+		UI.label({ Text = "Nothing in storage. Buy furniture in the STORE tab.", TextSize = 13, TextWrapped = true, Size = UDim2.fromScale(1, 1), Parent = c })
+	end
+	local hint = cardFrame(furnitureList, 52, order + 1)
+	hint.BackgroundTransparency = 1
+	UI.label({ Text = "Use EDIT to move, rotate or store pieces you've already placed.", TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, Size = UDim2.fromScale(1, 1), Parent = hint })
+end
+
+local function setFurnitureOpen(open: boolean)
+	furniturePanel.Visible = open
+	if open then
+		renderFurniture()
+		selectFirstButton(furniturePanel)
+	end
+end
+
+local function buildFurniturePanel()
+	furniturePanel = panel("Furniture", Vector2.new(330, 440), { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 160, 0.5, 0) })
+	UI.label({ Text = "FURNITURE", Font = UI.FONT_BLACK, TextSize = 20, TextColor3 = Color3.fromRGB(120, 230, 170), Position = UDim2.fromOffset(14, 12), Size = UDim2.new(1, -60, 0, 22), Parent = furniturePanel })
+	furnitureHeader = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(14, 36), Size = UDim2.new(1, -60, 0, 16), Parent = furniturePanel })
+	closeButton(furniturePanel, function()
+		setFurnitureOpen(false)
+	end)
+	for i, tab in { { "items", "MY ITEMS" }, { "store", "STORE" } } do
+		local b = UI.button({ Text = tab[2], TextSize = 14, Position = UDim2.new((i - 1) * 0.5, if i == 1 then 12 else 4, 0, 60), Size = UDim2.new(0.5, -16, 0, 32), Parent = furniturePanel })
+		tabButtons[tab[1]] = b
+		b.Activated:Connect(function()
+			furnitureTab = tab[1]
+			renderFurniture()
+		end)
+	end
+	furnitureList = scrollList(furniturePanel, 100)
+end
+
+---------------------------------------------------------------------------
+-- Placement mode
+---------------------------------------------------------------------------
+type Placing = {
+	itemId: string,
+	item: Cfg.Item,
+	uid: number?,
+	rot: number,
+	x: number,
+	z: number,
+	f: number,
+	valid: boolean,
+	reason: string?,
+	ghost: Model,
+	highlight: Highlight,
+	unit: Model,
+	tier: Cfg.Tier,
+	origin: Vector3,
+	floors: RaycastParams,
+	original: Model?,
+	returnToEdit: boolean,
+}
+local placing: Placing? = nil
+local editing = false
+local touchPoint: Vector2? = nil
+local renderConn: RBXScriptConnection? = nil
+local editHover: Highlight
+local editSelect: Highlight
+local selectedPiece: Model? = nil
+
+local function pointerRay(): Ray?
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return nil
+	end
+	local vp = camera.ViewportSize
+	if isGamepad() then
+		return camera:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+	elseif UserInputService:GetLastInputType() == Enum.UserInputType.Touch then
+		if touchPoint then
+			return camera:ScreenPointToRay(touchPoint.X, touchPoint.Y)
+		end
+		return camera:ViewportPointToRay(vp.X / 2, vp.Y / 2)
+	end
+	local mouse = UserInputService:GetMouseLocation()
+	return camera:ViewportPointToRay(mouse.X, mouse.Y)
+end
+
+local function floorParams(unit: Model): RaycastParams
+	local floors = {}
+	for _, d in unit:GetDescendants() do
+		if d:IsA("BasePart") and d.Name == "Floor" and d:GetAttribute("FloorIndex") then
+			table.insert(floors, d)
+		end
+	end
+	-- selene: allow(undefined_variable)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = floors
+	return params
+end
+
+local function setOriginalHidden(model: Model?, hidden: boolean)
+	if not model then
+		return
+	end
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.LocalTransparencyModifier = if hidden then 0.8 else 0
+		end
+	end
+end
+
+local function makeGhost(model: Model)
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.CanQuery = false
+			d.CanTouch = false
+			d.CastShadow = false
+			if d.Name ~= "Hitbox" then
+				d.Transparency = math.max(d.Transparency, 0.35)
+			end
+			if d:IsA("Seat") then
+				d.Disabled = true
+			end
+		elseif d:IsA("Light") then
+			d.Enabled = false
+		end
+	end
+end
+
+local function unbindPlacementActions()
+	ContextActionService:UnbindAction("HomePlace")
+	ContextActionService:UnbindAction("HomeRotate")
+	ContextActionService:UnbindAction("HomeCancel")
+end
+
+local function stopRender()
+	if renderConn then
+		renderConn:Disconnect()
+		renderConn = nil
+	end
+end
+
+local updateEdit: () -> ()
+local stopEdit: () -> ()
+
+local function cancelPlacement(silent: boolean?)
+	local p = placing
+	if not p then
+		return
+	end
+	placing = nil
+	p.ghost:Destroy()
+	p.highlight:Destroy()
+	setOriginalHidden(p.original, false)
+	placeBar.Visible = false
+	unbindPlacementActions()
+	stopRender()
+	if p.returnToEdit and not silent and myUnit() then
+		startEdit()
+	end
+end
+
+local function updateGhost()
+	local p = placing
+	if not p then
+		return
+	end
+	if not p.unit.Parent or myUnit() ~= p.unit then
+		cancelPlacement(true)
+		return
+	end
+	local ray = pointerRay()
+	local result = ray and Workspace:Raycast(ray.Origin, ray.Direction * 500, p.floors)
+	if result then
+		local rel = result.Position - p.origin
+		p.x = math.round(rel.X)
+		p.z = math.round(rel.Z)
+		p.f = result.Instance:GetAttribute("FloorIndex") or 1
+		local ok, reason = Cfg.validatePlacement(p.tier.id, p.itemId, p.x, p.z, p.f, p.rot, if state then state.placements else {}, p.uid)
+		p.valid = ok
+		p.reason = reason
+		p.ghost:PivotTo(Cfg.pieceCFrame(p.origin, p.tier, p.item, p.x, p.z, p.f, p.rot))
+	else
+		p.valid = false
+		p.reason = "Point at the floor of your home."
+	end
+	local color = if p.valid then GREEN else RED
+	p.highlight.FillColor = color
+	p.highlight.OutlineColor = color
+	placeStatus.Text = if p.valid then "Looks good — PLACE it" else (p.reason or "Can't go here")
+	placeStatus.TextColor3 = color
+end
+
+local function rotatePlacement()
+	local p = placing
+	if p then
+		p.rot = (p.rot + 90) % 360
+		updateGhost()
+	end
+end
+
+local function confirmPlacement()
+	local p = placing
+	if not p then
+		return
+	end
+	updateGhost()
+	if not p.valid then
+		HUD.push("CAN'T PLACE HERE", p.reason or "Try another spot.")
+		return
+	end
+	local payload = { id = p.itemId, u = p.uid, x = p.x, z = p.z, f = p.f, r = p.rot }
+	local ok = request(if p.uid then "Move" else "Place", payload)
+	if ok and placing == p then
+		cancelPlacement()
+	end
+end
+
+startPlacement = function(itemId: string, uid: number?, rot: number?)
+	local unit = myUnit()
+	local item = Cfg.ITEM_BY_ID[itemId]
+	if not unit or not item then
+		HUD.push("HOME", "Go inside your home to place furniture.")
+		return
+	end
+	local tier = Cfg.TIER_BY_ID[unit:GetAttribute("Tier") or ""]
+	local origin = unit:GetAttribute("Origin")
+	if not tier or typeof(origin) ~= "Vector3" then
+		return
+	end
+	cancelPlacement(true)
+	local returnToEdit = editing
+	if editing then
+		stopEdit()
+	end
+	setFurnitureOpen(false)
+
+	local ghost = Cfg.buildItem(itemId) :: Model
+	makeGhost(ghost)
+	ghost.Parent = Workspace.CurrentCamera
+	local highlight = UI.new("Highlight", {
+		Adornee = ghost,
+		FillTransparency = 0.55,
+		OutlineTransparency = 0,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+		Parent = ghost,
+	})
+	local original: Model? = nil
+	if uid then
+		local furniture = unit:FindFirstChild("Furniture")
+		if furniture then
+			for _, m in furniture:GetChildren() do
+				if m:GetAttribute("PlacementId") == uid and m:IsA("Model") then
+					original = m
+				end
+			end
+		end
+		setOriginalHidden(original, true)
+	end
+	placing = {
+		itemId = itemId,
+		item = item,
+		uid = uid,
+		rot = rot or 0,
+		x = 0,
+		z = 0,
+		f = 1,
+		valid = false,
+		reason = nil,
+		ghost = ghost,
+		highlight = highlight,
+		unit = unit,
+		tier = tier,
+		origin = origin,
+		floors = floorParams(unit),
+		original = original,
+		returnToEdit = returnToEdit,
+	}
+	placeTitle.Text = (if uid then "MOVING  " else "PLACING  ") .. item.name:upper()
+	placeBar.Visible = true
+
+	ContextActionService:BindAction("HomePlace", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			confirmPlacement()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.Return, Enum.KeyCode.ButtonR2)
+	ContextActionService:BindAction("HomeRotate", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			rotatePlacement()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.R, Enum.KeyCode.ButtonR1)
+	ContextActionService:BindAction("HomeCancel", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			cancelPlacement()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.Q, Enum.KeyCode.ButtonB)
+
+	stopRender()
+	renderConn = RunService.RenderStepped:Connect(updateGhost)
+	updateGhost()
+end
+
+---------------------------------------------------------------------------
+-- Edit mode: pick a placed piece, then MOVE / ROTATE / STORE it
+---------------------------------------------------------------------------
+local function pieceAt(screenRay: Ray?): Model?
+	local unit = myUnit()
+	local furniture = unit and unit:FindFirstChild("Furniture")
+	if not furniture or not screenRay then
+		return nil
+	end
+	-- selene: allow(undefined_variable)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { furniture }
+	local result = Workspace:Raycast(screenRay.Origin, screenRay.Direction * 500, params)
+	local inst: Instance? = result and result.Instance
+	while inst and inst.Parent ~= furniture do
+		inst = inst.Parent
+	end
+	return if inst and inst:IsA("Model") then inst else nil
+end
+
+local function placementOf(model: Model): Cfg.Placement?
+	local uid = model:GetAttribute("PlacementId")
+	if state then
+		for _, p in state.placements do
+			if p.u == uid then
+				return p
+			end
+		end
+	end
+	return nil
+end
+
+local function selectPiece(model: Model?)
+	selectedPiece = model
+	editSelect.Adornee = model
+	editActions.Visible = model ~= nil
+	if model then
+		local item = Cfg.ITEM_BY_ID[model:GetAttribute("ItemId") or ""]
+		editTitle.Text = "SELECTED  " .. (if item then item.name:upper() else "PIECE")
+		selectFirstButton(editActions)
+	else
+		editTitle.Text = if UserInputService.TouchEnabled and not UserInputService.MouseEnabled then "Tap a piece to select it" else "Click a piece to select it (R2 on gamepad)"
+	end
+end
+
+updateEdit = function()
+	if not editing then
+		return
+	end
+	if not myUnit() then
+		stopEdit()
+		return
+	end
+	if selectedPiece and not selectedPiece.Parent then
+		selectPiece(nil)
+	end
+	local hover = pieceAt(pointerRay())
+	editHover.Adornee = if hover ~= selectedPiece then hover else nil
+end
+
+local function editSelectAtPointer(screenRay: Ray?)
+	local piece = pieceAt(screenRay)
+	if piece then
+		selectPiece(piece)
+	end
+end
+
+stopEdit = function()
+	if not editing then
+		return
+	end
+	editing = false
+	editBar.Visible = false
+	editHover.Adornee = nil
+	selectPiece(nil)
+	ContextActionService:UnbindAction("HomeEditSelect")
+	ContextActionService:UnbindAction("HomeEditDone")
+	stopRender()
+end
+
+startEdit = function()
+	if not myUnit() then
+		return
+	end
+	cancelPlacement(true)
+	setFurnitureOpen(false)
+	editing = true
+	editBar.Visible = true
+	selectPiece(nil)
+	ContextActionService:BindAction("HomeEditSelect", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			editSelectAtPointer(pointerRay())
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.Return, Enum.KeyCode.ButtonR2)
+	ContextActionService:BindAction("HomeEditDone", function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			stopEdit()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.KeyCode.Q, Enum.KeyCode.ButtonB)
+	stopRender()
+	renderConn = RunService.RenderStepped:Connect(updateEdit)
+end
+
+local function buildBars()
+	placeBar = panel("PlaceBar", Vector2.new(440, 112), { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -50) })
+	placeTitle = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 0, 18), Parent = placeBar })
+	placeStatus = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = placeBar })
+	local row = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 52), Size = UDim2.new(1, -24, 0, 40), Parent = placeBar }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+	})
+	local function barButton(parent: Instance, text: string, color: Color3, fn: () -> ()): TextButton
+		local b = UI.button({ Text = text, TextSize = 15, BackgroundColor3 = color, Size = UDim2.fromOffset(128, 40), Parent = parent })
+		b.Activated:Connect(fn)
+		return b
+	end
+	barButton(row, "⟳ ROTATE", colors.panelLight, rotatePlacement)
+	barButton(row, "✔ PLACE", HOME_COLOR, confirmPlacement)
+	barButton(row, "✕ CANCEL", Color3.fromRGB(140, 50, 50), function()
+		cancelPlacement()
+	end)
+	if UserInputService.KeyboardEnabled then
+		UI.label({ Text = "Click to place · R rotate · Q cancel", TextSize = 11, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -2), Size = UDim2.new(1, 0, 0, 14), Parent = placeBar })
+	end
+
+	editBar = panel("EditBar", Vector2.new(560, 104), { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -50) })
+	editTitle = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 10), Size = UDim2.new(1, 0, 0, 18), Parent = editBar })
+	local editRow = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 44), Size = UDim2.new(1, -24, 0, 40), Parent = editBar }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	editActions = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(400, 40), LayoutOrder = 1, Visible = false, Parent = editRow }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	barButton(editActions, "✥ MOVE", HOME_COLOR, function()
+		local piece = selectedPiece
+		local p = piece and placementOf(piece)
+		if p then
+			startPlacement(p.id, p.u, p.r)
+		end
+	end)
+	barButton(editActions, "⟳ ROTATE", colors.panelLight, function()
+		local piece = selectedPiece
+		local p = piece and placementOf(piece)
+		if p then
+			request("Move", { u = p.u, x = p.x, z = p.z, f = p.f, r = (p.r + 90) % 360 })
+		end
+	end)
+	barButton(editActions, "📦 STORE", Color3.fromRGB(150, 110, 40), function()
+		local piece = selectedPiece
+		local p = piece and placementOf(piece)
+		if p and request("Store", p.u) then
+			selectPiece(nil)
+		end
+	end)
+	local done = barButton(editRow, "DONE", Color3.fromRGB(70, 70, 85), function()
+		stopEdit()
+	end)
+	done.LayoutOrder = 2
+	done.Size = UDim2.fromOffset(100, 40)
+
+	editHover = UI.new("Highlight", { FillTransparency = 1, OutlineColor = Color3.new(1, 1, 1), OutlineTransparency = 0.2, DepthMode = Enum.HighlightDepthMode.Occluded, Parent = gui })
+	editSelect = UI.new("Highlight", { FillColor = HOME_COLOR, FillTransparency = 0.6, OutlineColor = GREEN, OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = gui })
+end
+
+---------------------------------------------------------------------------
+-- Home buttons, welcome card, sleep fade
+---------------------------------------------------------------------------
+local function buildHomeButtons()
+	homeButtons = UI.new("Frame", {
+		Name = "HomeButtons",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.5, -60),
+		Size = UDim2.fromOffset(140, 136),
+		Visible = false,
+		Parent = gui,
+	}, {
+		UI.new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local furniture = UI.button({ Text = "🛋 FURNITURE", TextSize = 14, BackgroundColor3 = HOME_COLOR, Size = UDim2.fromOffset(140, 40), LayoutOrder = 1, Parent = homeButtons })
+	furniture.Activated:Connect(function()
+		if placing then
+			cancelPlacement(true)
+		end
+		if editing then
+			stopEdit()
+		end
+		setFurnitureOpen(not furniturePanel.Visible)
+	end)
+	local edit = UI.button({ Text = "✏ EDIT", TextSize = 14, BackgroundColor3 = colors.panelLight, Size = UDim2.fromOffset(140, 40), LayoutOrder = 2, Parent = homeButtons })
+	edit.Activated:Connect(function()
+		if editing then
+			stopEdit()
+		else
+			startEdit()
+		end
+	end)
+	local hint = UI.label({ Text = "", TextSize = 11, TextColor3 = colors.subtext, TextStrokeTransparency = 0.6, TextWrapped = true, Size = UDim2.fromOffset(140, 32), LayoutOrder = 3, Parent = homeButtons })
+	if UserInputService.KeyboardEnabled then
+		hint.Text = "B furniture · G edit"
+	elseif UserInputService.GamepadEnabled then
+		hint.Text = "D-pad ← furniture · → edit"
+	end
+end
+
+local function showWelcome(tierName: string)
+	local card = panel("Welcome", Vector2.new(420, 300), { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Visible = true })
+	UI.label({ Text = "WELCOME HOME", Font = UI.FONT_BLACK, TextSize = 24, TextColor3 = Color3.fromRGB(120, 230, 170), TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 28), Parent = card })
+	UI.label({
+		Text = "This " .. tierName .. " at Maple Court is yours.\n\n"
+			.. "• Sleep in your bed to fully restore stamina.\n"
+			.. "• FURNITURE: place what you own or buy more in the Store.\n"
+			.. "• EDIT: move, rotate or store placed pieces.\n"
+			.. "• Bigger homes: Maple Realty outside, or the Home app on your phone.",
+		TextSize = 14,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Position = UDim2.fromOffset(20, 54),
+		Size = UDim2.new(1, -40, 0, 180),
+		Parent = card,
+	})
+	local ok = UI.button({ Text = "GOT IT", TextSize = 16, BackgroundColor3 = HOME_COLOR, AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -16), Size = UDim2.fromOffset(160, 40), Parent = card })
+	ok.Activated:Connect(function()
+		card:Destroy()
+	end)
+	selectFirstButton(card)
+end
+
+local function sleepFade()
+	fade.Visible = true
+	fade.BackgroundTransparency = 1
+	fadeText.TextTransparency = 1
+	TweenService:Create(fade, TweenInfo.new(0.6), { BackgroundTransparency = 0 }):Play()
+	TweenService:Create(fadeText, TweenInfo.new(0.6), { TextTransparency = 0 }):Play()
+	task.delay(1.9, function()
+		TweenService:Create(fade, TweenInfo.new(0.8), { BackgroundTransparency = 1 }):Play()
+		local t = TweenService:Create(fadeText, TweenInfo.new(0.8), { TextTransparency = 1 })
+		t:Play()
+		t.Completed:Wait()
+		fade.Visible = false
+	end)
+end
+
+---------------------------------------------------------------------------
+-- TV channels (screens are tagged by the server; this only changes the picture)
+---------------------------------------------------------------------------
+local CHANNELS = {
+	{ ch = "CG1", show = "Neighborhood Hoops · LIVE", color = Color3.fromRGB(20, 30, 80) },
+	{ ch = "CG2", show = "City News: Maple Court rents rising", color = Color3.fromRGB(120, 20, 30) },
+	{ ch = "CG3", show = "Grind FM · Late Night Beats", color = Color3.fromRGB(70, 20, 110) },
+	{ ch = "CG4", show = "Mama's Kitchen: Sunday Gravy", color = Color3.fromRGB(130, 70, 20) },
+	{ ch = "CG5", show = "Weather: clear skies tonight", color = Color3.fromRGB(20, 100, 140) },
+	{ ch = "CG6", show = "Iron Box Workout Hour", color = Color3.fromRGB(30, 100, 50) },
+}
+local function runTVs()
+	local index = 1
+	while true do
+		task.wait(5)
+		index = index % #CHANNELS + 1
+		local channel = CHANNELS[index]
+		for _, screen in CollectionService:GetTagged("CityGrindTV") do
+			local tvGui = screen:FindFirstChild("TVGui")
+			local bg = tvGui and tvGui:FindFirstChild("BG")
+			if bg and bg:IsA("Frame") then
+				bg.BackgroundColor3 = channel.color
+				local show = bg:FindFirstChild("Show")
+				local ch = bg:FindFirstChild("Channel")
+				if show and show:IsA("TextLabel") then
+					show.Text = channel.show
+				end
+				if ch and ch:IsA("TextLabel") then
+					ch.Text = channel.ch
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Phone app
+---------------------------------------------------------------------------
+local phoneTab = "homes"
+
+local function buildPhoneApp(content: ScrollingFrame)
+	local function render()
+		Phone.clear(content)
+		local top = Phone.card(content, 122, 0)
+		local tierName = if state then Cfg.TIER_BY_ID[state.activeTier].name else "…"
+		UI.label({ Text = "Your home", TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = top })
+		UI.label({ Text = tierName .. " · Maple Court", Font = UI.FONT_BLACK, TextSize = 16, Position = UDim2.fromOffset(0, 14), Size = UDim2.new(1, 0, 0, 20), Parent = top })
+		if (player:GetAttribute("HomeUnit") or 0) == player.UserId then
+			UI.label({ Text = "🏠 You're home", Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = GREEN, Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 0, 24), Parent = top })
+		else
+			local gps = UI.button({ Text = "📍 GO HOME (GPS)", TextSize = 13, BackgroundColor3 = colors.xp, Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 0, 28), Parent = top })
+			gps.Activated:Connect(function()
+				Phone.setGPS("Maple Court", Cfg.HOME_GPS)
+			end)
+		end
+		for i, tab in { { "homes", "HOMES" }, { "store", "FURNITURE" } } do
+			local b = UI.button({
+				Text = tab[2],
+				TextSize = 12,
+				BackgroundColor3 = if phoneTab == tab[1] then HOME_COLOR else Color3.fromRGB(55, 55, 68),
+				Position = UDim2.new((i - 1) * 0.5, if i == 1 then 0 else 3, 0, 72),
+				Size = UDim2.new(0.5, -3, 0, 24),
+				Parent = top,
+			})
+			b.Activated:Connect(function()
+				phoneTab = tab[1]
+				render()
+			end)
+		end
+		if not state then
+			local c = Phone.card(content, 40, 1)
+			UI.label({ Text = "Loading…", Size = UDim2.fromScale(1, 1), Parent = c })
+			return
+		end
+		if phoneTab == "homes" then
+			for i, tier in Cfg.TIERS do
+				tierCard(content, tier, i)
+			end
+		else
+			local note = Phone.card(content, 40, 1)
+			UI.label({ Text = "Delivered to your storage. Place it with FURNITURE at home.", TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, Size = UDim2.fromScale(1, 1), Parent = note })
+			for i, item in Cfg.ITEMS do
+				storeRow(content, item, i + 1)
+			end
+		end
+	end
+
+	local function refreshIfOpen()
+		Phone.refresh("Homes")
+	end
+	stateChanged.Event:Connect(refreshIfOpen)
+	for _, attr in { "Level", "Reputation", "HomeUnit" } do
+		player:GetAttributeChangedSignal(attr):Connect(refreshIfOpen)
+	end
+
+	return function()
+		render()
+		if not state then
+			if request("GetState") then
+				render()
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function onHomeUnitChanged()
+	local home = myUnit() ~= nil or player:GetAttribute("HomeUnit") == player.UserId
+	homeButtons.Visible = home
+	if home then
+		ContextActionService:BindAction("HomeFurniture", function(_, inputState)
+			if inputState == Enum.UserInputState.Begin then
+				if placing then
+					cancelPlacement(true)
+				end
+				if editing then
+					stopEdit()
+				end
+				setFurnitureOpen(not furniturePanel.Visible)
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.KeyCode.B, Enum.KeyCode.DPadLeft)
+		ContextActionService:BindAction("HomeEdit", function(_, inputState)
+			if inputState == Enum.UserInputState.Begin then
+				if editing then
+					stopEdit()
+				else
+					startEdit()
+				end
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.KeyCode.G, Enum.KeyCode.DPadRight)
+	else
+		ContextActionService:UnbindAction("HomeFurniture")
+		ContextActionService:UnbindAction("HomeEdit")
+		cancelPlacement(true)
+		stopEdit()
+		setFurnitureOpen(false)
+	end
+end
+
+local function setup()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindHome",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 4,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildHomeButtons()
+	buildFurniturePanel()
+	buildRealtyPanel()
+	buildBars()
+	fade = UI.new("Frame", { Name = "SleepFade", BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Position = UDim2.fromOffset(0, -60), Visible = false, ZIndex = 50, Parent = gui })
+	fade.Size = UDim2.new(1, 0, 1, 60)
+	fadeText = UI.label({ Text = "Zzz… resting", Font = UI.FONT_BLACK, TextSize = 28, TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 51, Parent = fade })
+
+	stateChanged.Event:Connect(function()
+		renderFurniture()
+		renderRealty()
+		-- a rebuilt unit or a tier change invalidates whatever was being placed
+		local p = placing
+		if p and (not state or state.activeTier ~= p.tier.id) then
+			cancelPlacement(true)
+		end
+		if selectedPiece and not placementOf(selectedPiece) then
+			selectPiece(nil)
+		end
+	end)
+	player:GetAttributeChangedSignal("HomeUnit"):Connect(onHomeUnitChanged)
+	player:GetAttributeChangedSignal("Cash"):Connect(renderFurniture)
+	onHomeUnitChanged()
+
+	-- clicks / taps in the world
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed or input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+			return
+		end
+		if placing then
+			confirmPlacement()
+		elseif editing then
+			editSelectAtPointer(pointerRay())
+		end
+	end)
+	UserInputService.TouchTapInWorld:Connect(function(position, processed)
+		if processed then
+			return
+		end
+		touchPoint = position
+		if placing then
+			updateGhost()
+		elseif editing then
+			local camera = Workspace.CurrentCamera
+			if camera then
+				editSelectAtPointer(camera:ScreenPointToRay(position.X, position.Y))
+			end
+		end
+	end)
+
+	local remotes = shared:WaitForChild("Remotes")
+	local event = remotes:WaitForChild("ApartmentsEvent") :: RemoteEvent
+	event.OnClientEvent:Connect(function(kind: any, arg: any)
+		if kind == "State" then
+			setState(arg)
+		elseif kind == "OpenRealty" then
+			openRealty()
+		elseif kind == "Sleep" then
+			sleepFade()
+		elseif kind == "Welcome" then
+			showWelcome(if type(arg) == "string" then arg else "home")
+		end
+	end)
+
+	if not player:GetAttribute("DataLoaded") then
+		player:GetAttributeChangedSignal("DataLoaded"):Wait()
+	end
+	if not state then
+		request("GetState")
+	end
+end
+
+function Apartments.start()
+	Phone.addApp({ id = "Homes", label = "Home", icon = "🏠", color = HOME_COLOR }, buildPhoneApp)
+	task.spawn(setup)
+	task.spawn(runTVs)
+end
+
+return Apartments
 ]=====])
 put(client, 'ModuleScript', 'Basketball', [=====[
 -- CITY GRIND: basketball controls and on-screen feedback.
@@ -3639,6 +14115,785 @@ end
 
 return Basketball
 ]=====])
+put(client, 'ModuleScript', 'Gym', [=====[
+-- CITY GRIND: Iron Box Gym client (sections 56, 69, 110, 120).
+-- Draws the rep meter while you train, sends button presses (with the server
+-- clock time of the press) and shows what the server awarded. The server
+-- judges every rep; nothing here decides stats, XP or money.
+-- Also adds the "Fitness" phone app and the pass / membership purchase panel.
+
+local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local GymConfig = require(shared:WaitForChild("GymConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Gym = {}
+
+local STATIONS = GymConfig.STATIONS
+local PER_POINT = Config.STAT_XP_PER_POINT
+local GOOD_COLOR = Color3.fromRGB(90, 220, 120)
+local PERFECT_COLOR = Color3.fromRGB(255, 215, 70)
+
+local remotes: Instance
+local gui: ScreenGui
+
+type Session = {
+	kind: string,
+	start: number,
+	seed: number,
+	goodReps: number,
+	startedAt: number,
+	streak: number,
+}
+local session: Session? = nil
+local blockedUntil = 0
+local raceState = "none"
+
+-- widgets filled in by buildPanel()
+local panel: Frame
+local titleLabel: TextLabel
+local repsLabel: TextLabel
+local subLabel: TextLabel
+local challengeLabel: TextLabel
+local meter: Frame
+local goodZone: Frame
+local perfectZone: Frame
+local marker: Frame
+local feedback: TextLabel
+local hintLabel: TextLabel
+local statRows: { { frame: Frame, name: TextLabel, value: TextLabel, setFill: (number) -> () } } = {}
+local fatigueText: TextLabel
+local setFatigue: (number) -> ()
+local fatigueFill: Frame
+local racePanel: Frame
+local raceLabel: TextLabel
+local racePrimary: TextButton
+local raceSecondary: TextButton
+local raceBars: Frame
+local setMyRace: (number) -> ()
+local setTheirRace: (number) -> ()
+local offerFrame: Frame
+local offerBody: TextLabel
+local offerCash: TextLabel
+local offerPass: TextButton
+local offerMember: TextButton
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function prettyStat(stat: string): string
+	return (stat:gsub("(%l)(%u)", "%1 %2"))
+end
+
+local function serverNow(): number
+	return Workspace:GetServerTimeNow()
+end
+
+local function currentFatigue(): number
+	return GymConfig.currentFatigue(player:GetAttribute("GymFatigue") or 0, player:GetAttribute("GymFatigueAt") or 0, serverNow())
+end
+
+local function inputHint(): string
+	if UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+		return "Press A when the marker is in the green zone · B to leave"
+	elseif UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+		return "Tap REP when the marker is in the green zone"
+	end
+	return "SPACE or CLICK when the marker is in the green zone · Backspace to leave"
+end
+
+local function popup(text: string, color: Color3, index: number)
+	local label = UI.label({
+		Text = text,
+		Font = UI.FONT_BLACK,
+		TextSize = 20,
+		TextColor3 = color,
+		TextStrokeTransparency = 0.4,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, (index - 1) * 150 - 40, 0, -6 - (index - 1) * 4),
+		Size = UDim2.fromOffset(220, 24),
+		ZIndex = 5,
+		Parent = panel,
+	})
+	local tween = TweenService:Create(label, TweenInfo.new(1.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Position = label.Position - UDim2.fromOffset(0, 60),
+		TextTransparency = 1,
+		TextStrokeTransparency = 1,
+	})
+	tween:Play()
+	task.delay(1.35, label.Destroy, label)
+end
+
+local function flash(text: string, color: Color3)
+	feedback.Text = text
+	feedback.TextColor3 = color
+	feedback.TextTransparency = 0
+	feedback.TextStrokeTransparency = 0.3
+	local scale = feedback:FindFirstChildOfClass("UIScale") :: UIScale
+	scale.Scale = 0.7
+	TweenService:Create(scale, TweenInfo.new(0.18, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+	local token = os.clock()
+	feedback:SetAttribute("Token", token)
+	task.delay(0.6, function()
+		if feedback:GetAttribute("Token") == token then
+			TweenService:Create(feedback, TweenInfo.new(0.3), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Training panel
+---------------------------------------------------------------------------
+local function setProgress(progress: { any }?)
+	if not progress then
+		return
+	end
+	for i, row in statRows do
+		local entry = progress[i]
+		row.frame.Visible = entry ~= nil
+		if entry then
+			row.name.Text = string.format("%s  %d", prettyStat(entry.stat), entry.value)
+			if entry.value >= 99 then
+				row.value.Text = "MAX"
+				row.setFill(1)
+			else
+				row.value.Text = string.format("%.1f / %d", entry.xp, PER_POINT)
+				row.setFill(entry.xp / PER_POINT)
+			end
+		end
+	end
+end
+
+local function setChallenge(ch: any)
+	if not ch or not session or ch.station ~= session.kind then
+		challengeLabel.Text = ""
+		return
+	end
+	if ch.done then
+		challengeLabel.Text = "Daily challenge done ✓"
+		challengeLabel.TextColor3 = colors.cash
+	else
+		challengeLabel.Text = string.format("Daily: %d / %d", ch.progress, ch.target)
+		challengeLabel.TextColor3 = colors.stamina
+	end
+end
+
+local function updateFatigue()
+	local f = currentFatigue()
+	local eff = GymConfig.efficiency(f)
+	setFatigue(f / 100)
+	fatigueFill.BackgroundColor3 = if f <= GymConfig.FATIGUE_FREE then colors.stamina elseif eff > 0.5 then colors.accent else colors.danger
+	if f <= GymConfig.FATIGUE_FREE then
+		fatigueText.Text = string.format("Fatigue %d%%  ·  Gains 100%%", math.floor(f))
+	else
+		fatigueText.Text = string.format("Fatigue %d%%  ·  Gains %d%%  ·  rest to recover", math.floor(f), math.floor(eff * 100))
+	end
+end
+
+local function buildPanel()
+	panel = UI.new("Frame", {
+		Name = "Training",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.08,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -48),
+		Size = UDim2.fromOffset(380, 238),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(colors.accent, 1.5, 0.4), UI.padding(12) })
+	local scale = UI.new("UIScale", { Parent = panel })
+	local function fit()
+		local cam = Workspace.CurrentCamera
+		if cam then
+			scale.Scale = math.clamp(math.min(cam.ViewportSize.X / 420, cam.ViewportSize.Y / 520), 0.6, 1)
+		end
+	end
+	fit()
+	if Workspace.CurrentCamera then
+		Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+	end
+
+	titleLabel = UI.label({ Text = "TRAINING", Font = UI.FONT_BLACK, TextSize = 18, Size = UDim2.new(1, -90, 0, 20), Parent = panel })
+	repsLabel = UI.label({ Text = "REPS 0", Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = colors.xp, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(90, 20), Parent = panel })
+	subLabel = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(0.6, 0, 0, 16), Parent = panel })
+	challengeLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.stamina, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 22), Size = UDim2.new(0.4, 0, 0, 16), Parent = panel })
+
+	meter = UI.new("Frame", { Name = "Meter", BackgroundColor3 = Color3.fromRGB(40, 40, 50), ClipsDescendants = false, Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 30), Parent = panel }, { UI.corner(8) })
+	goodZone = UI.new("Frame", { Name = "Good", BackgroundColor3 = GOOD_COLOR, Size = UDim2.fromScale(0.2, 1), Parent = meter }, { UI.corner(6) })
+	perfectZone = UI.new("Frame", { Name = "Perfect", BackgroundColor3 = PERFECT_COLOR, Size = UDim2.fromScale(0.06, 1), ZIndex = 2, Parent = meter }, { UI.corner(4) })
+	marker = UI.new("Frame", { Name = "Marker", BackgroundColor3 = Color3.new(1, 1, 1), AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 5, 1, 10), Position = UDim2.fromScale(0, 0.5), ZIndex = 3, Parent = meter }, { UI.corner(2), UI.stroke(Color3.new(0, 0, 0), 1, 0.3) })
+	feedback = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 26, TextTransparency = 1, TextStrokeTransparency = 1, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1.4), ZIndex = 4, Parent = meter }, { UI.new("UIScale") })
+
+	hintLabel = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 80), Size = UDim2.new(1, 0, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = panel })
+
+	for i = 1, 2 do
+		local y = 100 + (i - 1) * 22
+		local row = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 18), Parent = panel })
+		local name = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, Size = UDim2.fromOffset(120, 18), Parent = row })
+		local _, setFill = UI.bar({ Position = UDim2.fromOffset(124, 5), Size = UDim2.new(1, -214, 0, 8), Parent = row }, colors.xp)
+		local value = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(84, 18), Parent = row })
+		table.insert(statRows, { frame = row, name = name, value = value, setFill = setFill })
+	end
+
+	local fatigueBar
+	fatigueBar, setFatigue = UI.bar({ Position = UDim2.fromOffset(0, 150), Size = UDim2.new(1, 0, 0, 6), Parent = panel }, colors.stamina)
+	fatigueFill = fatigueBar:FindFirstChild("Fill") :: Frame
+	fatigueText = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 158), Size = UDim2.new(1, 0, 0, 14), Parent = panel })
+
+	local repButton = UI.button({ Name = "Rep", Text = "REP", Font = UI.FONT_BLACK, TextSize = 20, BackgroundColor3 = colors.accent, Position = UDim2.fromOffset(0, 178), Size = UDim2.new(0.62, -4, 0, 36), Parent = panel })
+	local leaveButton = UI.button({ Name = "Leave", Text = "LEAVE", Font = UI.FONT_BLACK, TextSize = 16, BackgroundColor3 = colors.panelLight, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 178), Size = UDim2.new(0.38, -4, 0, 36), Parent = panel })
+	repButton.Activated:Connect(function()
+		Gym.pressRep()
+	end)
+	leaveButton.Activated:Connect(function()
+		Gym.leave()
+	end)
+
+	-- race box sits above the training panel
+	racePanel = UI.new("Frame", {
+		Name = "Race",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.08,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 0, -14),
+		Size = UDim2.new(1, 24, 0, 74),
+		Visible = false,
+		Parent = panel,
+	}, { UI.corner(14), UI.stroke(Color3.fromRGB(80, 200, 255), 1.5, 0.3), UI.padding(10) })
+	raceLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, Size = UDim2.new(1, -130, 0, 34), Parent = racePanel })
+	racePrimary = UI.button({ Text = "RACE", Font = UI.FONT_BLACK, TextSize = 14, BackgroundColor3 = Color3.fromRGB(60, 160, 230), AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(120, 24), Parent = racePanel })
+	raceSecondary = UI.button({ Text = "DECLINE", Font = UI.FONT_BOLD, TextSize = 13, BackgroundColor3 = colors.panelLight, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 28), Size = UDim2.fromOffset(120, 24), Parent = racePanel })
+	raceBars = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, -130, 0, 16), Parent = racePanel })
+	local _, setMine = UI.bar({ Size = UDim2.new(1, 0, 0, 6), Parent = raceBars }, colors.cash)
+	local _, setTheirs = UI.bar({ Position = UDim2.fromOffset(0, 9), Size = UDim2.new(1, 0, 0, 6), Parent = raceBars }, colors.danger)
+	setMyRace, setTheirRace = setMine, setTheirs
+
+	local function racePrimaryAction()
+		if raceState == "available" then
+			remotes.GymRace:FireServer("invite")
+		elseif raceState == "waiting" then
+			remotes.GymRace:FireServer("cancel")
+		elseif raceState == "invite" then
+			remotes.GymRace:FireServer("accept")
+		end
+	end
+	racePrimary.Activated:Connect(racePrimaryAction)
+	raceSecondary.Activated:Connect(function()
+		if raceState == "invite" then
+			remotes.GymRace:FireServer("decline")
+		end
+	end)
+	Gym.racePrimaryAction = racePrimaryAction
+end
+
+local function showRace(payload: any)
+	raceState = payload.state
+	local opp = tostring(payload.opponent or "")
+	local keyHint = if UserInputService.KeyboardEnabled then " (R)" elseif UserInputService.GamepadEnabled then " (Y)" else ""
+	racePanel.Visible = raceState ~= "none" and session ~= nil
+	raceSecondary.Visible = raceState == "invite"
+	racePrimary.Visible = raceState ~= "active"
+	raceBars.Visible = raceState == "active"
+	if raceState == "available" then
+		raceLabel.Text = "🏁 " .. opp .. " is on the next treadmill. Race to " .. payload.target .. " good reps?"
+		racePrimary.Text = "RACE" .. keyHint
+	elseif raceState == "waiting" then
+		raceLabel.Text = "Waiting for " .. opp .. " to accept..."
+		racePrimary.Text = "CANCEL" .. keyHint
+	elseif raceState == "invite" then
+		raceLabel.Text = "🏁 " .. opp .. " challenges you! First to " .. payload.target .. " good reps."
+		racePrimary.Text = "ACCEPT" .. keyHint
+		raceSecondary.Text = "DECLINE"
+	elseif raceState == "active" then
+		local mine, theirs = payload.mine or 0, payload.theirs or 0
+		raceLabel.Text = string.format("RACE  ·  You %d  —  %d %s  ·  first to %d", mine, theirs, opp, payload.target)
+		setMyRace(mine / payload.target)
+		setTheirRace(theirs / payload.target)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Session start / stop
+---------------------------------------------------------------------------
+local animateWasEnabled = true
+
+local function setAnimate(enabled: boolean)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local animate = character:FindFirstChild("Animate")
+	if animate and animate:IsA("LocalScript") then
+		if not enabled then
+			animateWasEnabled = animate.Enabled
+			animate.Enabled = false
+		elseif animateWasEnabled then
+			animate.Enabled = true
+		end
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if not enabled and animator then
+		-- freeze the default walk/idle so the server's training pose reads cleanly
+		for _, track in animator:GetPlayingAnimationTracks() do
+			track:Stop(0.1)
+		end
+	end
+end
+
+local function bindInputs()
+	ContextActionService:BindActionAtPriority("GymRep", function(_, state)
+		if state == Enum.UserInputState.Begin then
+			Gym.pressRep()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Space, Enum.KeyCode.ButtonA)
+	ContextActionService:BindActionAtPriority("GymLeave", function(_, state)
+		if state == Enum.UserInputState.Begin then
+			Gym.leave()
+		end
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.Backspace, Enum.KeyCode.ButtonB)
+	ContextActionService:BindActionAtPriority("GymRaceKey", function(_, state)
+		if state == Enum.UserInputState.Begin and racePanel.Visible and racePrimary.Visible then
+			Gym.racePrimaryAction()
+			return Enum.ContextActionResult.Sink
+		end
+		return Enum.ContextActionResult.Pass
+	end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+end
+
+local function unbindInputs()
+	ContextActionService:UnbindAction("GymRep")
+	ContextActionService:UnbindAction("GymLeave")
+	ContextActionService:UnbindAction("GymRaceKey")
+end
+
+local function setPrompts(enabled: boolean)
+	pcall(function()
+		ProximityPromptService.Enabled = enabled
+	end)
+end
+
+local function onStart(payload: any)
+	local def = STATIONS[payload.kind]
+	if not def then
+		return
+	end
+	session = {
+		kind = payload.kind,
+		start = payload.start,
+		seed = payload.seed,
+		goodReps = payload.goodReps or 0,
+		startedAt = os.clock(),
+		streak = 0,
+	}
+	blockedUntil = os.clock() + 0.4
+	titleLabel.Text = string.upper(def.label)
+	titleLabel.TextColor3 = def.color
+	local names = {}
+	for _, entry in def.stats do
+		table.insert(names, prettyStat(entry[1]))
+	end
+	subLabel.Text = "Trains " .. table.concat(names, " + ")
+	repsLabel.Text = "REPS 0"
+	hintLabel.Text = inputHint()
+	goodZone.Size = UDim2.fromScale(def.good * 2, 1)
+	perfectZone.Size = UDim2.fromScale(def.perfect * 2, 1)
+	setProgress(payload.progress)
+	setChallenge(payload.challenge)
+	updateFatigue()
+	raceState = "none"
+	racePanel.Visible = false
+	panel.Visible = true
+	setAnimate(false)
+	setPrompts(false)
+	bindInputs()
+end
+
+local function onStop()
+	if not session then
+		return
+	end
+	session = nil
+	panel.Visible = false
+	racePanel.Visible = false
+	raceState = "none"
+	unbindInputs()
+	setPrompts(true)
+	setAnimate(true)
+	Phone.refresh("Fitness")
+end
+
+function Gym.pressRep()
+	local s = session
+	if not s then
+		return
+	end
+	local clock = os.clock()
+	if clock < blockedUntil then
+		return
+	end
+	local t = serverNow()
+	-- judge locally only to pace the button; the server makes the real call
+	local guess = GymConfig.judge(s.kind, t, s.start, s.seed, s.goodReps)
+	blockedUntil = clock + (if guess == "miss" then GymConfig.MISS_COOLDOWN else GymConfig.MIN_REP_INTERVAL + 0.02)
+	remotes.GymRep:FireServer(t)
+end
+
+function Gym.leave()
+	if session then
+		remotes.GymLeave:FireServer()
+	end
+end
+
+local function onResult(payload: any)
+	local s = session
+	if not s then
+		return
+	end
+	if payload.goodReps then
+		s.goodReps = payload.goodReps
+	end
+	local q = payload.quality
+	if q == "miss" then
+		s.streak = 0
+		flash("MISS", colors.danger)
+		return
+	elseif q == "tooFast" then
+		flash("TOO FAST", colors.accent)
+		return
+	elseif q == "race" then
+		setProgress(payload.progress)
+		flash("RACE WON!", Color3.fromRGB(80, 200, 255))
+		return
+	end
+	if q == "perfect" then
+		s.streak += 1
+		flash(if s.streak > 1 then "PERFECT x" .. s.streak else "PERFECT!", PERFECT_COLOR)
+	else
+		s.streak = 0
+		flash("GOOD", GOOD_COLOR)
+	end
+	repsLabel.Text = "REPS " .. s.goodReps
+	for i, gain in payload.gains or {} do
+		popup(string.format("+%s %s XP", tostring(gain.amount), prettyStat(gain.stat)), if q == "perfect" then PERFECT_COLOR else GOOD_COLOR, i)
+	end
+	setProgress(payload.progress)
+	setChallenge(payload.challenge)
+	updateFatigue()
+end
+
+---------------------------------------------------------------------------
+-- Purchase panel (door, outside kiosk, front desk)
+---------------------------------------------------------------------------
+local function buildOffer()
+	offerFrame = UI.new("Frame", {
+		Name = "GymOffer",
+		BackgroundColor3 = colors.panel,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(340, 262),
+		Visible = false,
+		ZIndex = 10,
+		Parent = gui,
+	}, { UI.corner(18), UI.stroke(Color3.fromRGB(230, 60, 45), 2, 0.2), UI.padding(16) })
+	local scale = UI.new("UIScale", { Parent = offerFrame })
+	local function fit()
+		local cam = Workspace.CurrentCamera
+		if cam then
+			scale.Scale = math.clamp(math.min(cam.ViewportSize.X / 380, cam.ViewportSize.Y / 320), 0.6, 1)
+		end
+	end
+	fit()
+	if Workspace.CurrentCamera then
+		Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+	end
+	UI.label({ Text = "IRON BOX GYM", Font = UI.FONT_BLACK, TextSize = 22, TextColor3 = Color3.fromRGB(255, 90, 70), Size = UDim2.new(1, 0, 0, 24), ZIndex = 10, Parent = offerFrame })
+	offerBody = UI.label({ Text = "", TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 0, 52), ZIndex = 10, Parent = offerFrame })
+	offerCash = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 16), ZIndex = 10, Parent = offerFrame })
+	offerPass = UI.button({
+		Text = string.format("DAY PASS  ·  $%d  ·  %d min", GymConfig.DAY_PASS_PRICE, GymConfig.DAY_PASS_SECONDS // 60),
+		BackgroundColor3 = Color3.fromRGB(60, 160, 230),
+		Position = UDim2.fromOffset(0, 108),
+		Size = UDim2.new(1, 0, 0, 40),
+		ZIndex = 10,
+		Parent = offerFrame,
+	})
+	offerMember = UI.button({
+		Text = string.format("MEMBERSHIP  ·  $%d  ·  forever", GymConfig.MEMBERSHIP_PRICE),
+		BackgroundColor3 = Color3.fromRGB(230, 60, 45),
+		Position = UDim2.fromOffset(0, 154),
+		Size = UDim2.new(1, 0, 0, 40),
+		ZIndex = 10,
+		Parent = offerFrame,
+	})
+	local close = UI.button({ Text = "Not now", Font = UI.FONT_BOLD, TextSize = 14, BackgroundColor3 = colors.panelLight, Position = UDim2.fromOffset(0, 200), Size = UDim2.new(1, 0, 0, 30), ZIndex = 10, Parent = offerFrame })
+	offerPass.Activated:Connect(function()
+		remotes.GymBuy:FireServer("pass")
+	end)
+	offerMember.Activated:Connect(function()
+		remotes.GymBuy:FireServer("member")
+	end)
+	close.Activated:Connect(function()
+		offerFrame.Visible = false
+		GuiService.SelectedObject = nil
+	end)
+	-- walking away closes it
+	RunService.Heartbeat:Connect(function()
+		if offerFrame.Visible and offerFrame:GetAttribute("OpenedAt") and os.clock() - offerFrame:GetAttribute("OpenedAt") > 1 then
+			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			local anchor = offerFrame:GetAttribute("Anchor") :: Vector3?
+			if root and anchor and (root.Position - anchor).Magnitude > 24 then
+				offerFrame.Visible = false
+				GuiService.SelectedObject = nil
+			end
+		end
+	end)
+end
+
+local function showOffer(payload: any)
+	local member = player:GetAttribute("GymMember") == true
+	local passUntil = player:GetAttribute("GymPassUntil") or 0
+	local left = passUntil - serverNow()
+	if member then
+		offerBody.Text = "You're an Iron Box member. Walk right in and train any time."
+	elseif left > 0 then
+		offerBody.Text = string.format("Your day pass has %d min left. Buying another adds %d minutes.", math.ceil(left / 60), GymConfig.DAY_PASS_SECONDS // 60)
+	elseif payload.where == "door" then
+		offerBody.Text = "Your free trial is used up. Grab a day pass or go all in with a membership."
+	else
+		offerBody.Text = "Day passes and memberships. Members train forever for one price."
+	end
+	offerCash.Text = "You have " .. UI.formatCash(player:GetAttribute("Cash") or 0)
+	offerPass.Visible = not member
+	offerMember.Visible = not member
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	offerFrame:SetAttribute("Anchor", if root then root.Position else nil)
+	offerFrame:SetAttribute("OpenedAt", os.clock())
+	offerFrame.Visible = true
+	if UserInputService.GamepadEnabled and not member then
+		GuiService.SelectedObject = offerPass
+	end
+end
+
+---------------------------------------------------------------------------
+-- Fitness phone app
+---------------------------------------------------------------------------
+local function buildFitnessApp(content: ScrollingFrame)
+	local busy = false
+	local function row(parent: Instance, y: number, left: string, right: string, rightColor: Color3?)
+		UI.label({ Text = left, Font = UI.FONT_BOLD, TextSize = 13, Position = UDim2.fromOffset(0, y), Size = UDim2.new(0.65, 0, 0, 16), Parent = parent })
+		UI.label({ Text = right, Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = rightColor or colors.text, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y), Size = UDim2.new(0.35, 0, 0, 16), Parent = parent })
+	end
+
+	return function()
+		if busy then
+			return
+		end
+		busy = true
+		local ok, data = pcall(function()
+			return shared:WaitForChild("Remotes"):WaitForChild("GymGetProgress"):InvokeServer()
+		end)
+		busy = false
+		if not ok or type(data) ~= "table" then
+			if not content:FindFirstChild("Loaded") then
+				Phone.clear(content)
+				UI.label({ Text = "Loading your fitness data...", TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 30), Parent = content })
+			end
+			return
+		end
+		Phone.clear(content)
+		UI.new("Folder", { Name = "Loaded", Parent = content })
+
+		-- membership + fatigue
+		local top = Phone.card(content, 112, 1)
+		UI.label({ Text = "IRON BOX GYM", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = Color3.fromRGB(255, 90, 70), Size = UDim2.new(1, 0, 0, 16), Parent = top })
+		local accessColor = if data.member then colors.cash elseif data.passLeft > 0 then colors.xp else colors.subtext
+		UI.label({ Text = data.access, Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = accessColor, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 20), Parent = top })
+		local fatigueBar, setF = UI.bar({ Position = UDim2.fromOffset(0, 46), Size = UDim2.new(1, 0, 0, 8), Parent = top }, colors.stamina)
+		setF(data.fatigue / 100)
+		local fill = fatigueBar:FindFirstChild("Fill") :: Frame
+		fill.BackgroundColor3 = if data.efficiency >= 1 then colors.stamina elseif data.efficiency > 0.5 then colors.accent else colors.danger
+		UI.label({ Text = string.format("Fatigue %d%%  ·  Gains %d%%", math.floor(data.fatigue), math.floor(data.efficiency * 100)), TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 58), Size = UDim2.new(1, 0, 0, 14), Parent = top })
+		UI.label({ Text = string.format("Total reps %d  ·  Race wins %d", data.totalReps, data.raceWins), TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 74), Size = UDim2.new(1, 0, 0, 14), Parent = top })
+
+		-- daily challenge
+		local ch = data.challenge
+		local chCard = Phone.card(content, 112, 2)
+		UI.label({ Text = "TODAY'S CHALLENGE", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 16), Parent = chCard })
+		UI.label({ Text = ch.text, Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 32), Parent = chCard })
+		local _, setCh = UI.bar({ Position = UDim2.fromOffset(0, 54), Size = UDim2.new(1, 0, 0, 8), Parent = chCard }, if ch.done then colors.cash else colors.stamina)
+		setCh(ch.progress / ch.target)
+		row(chCard, 66, if ch.done then "Completed ✓" else string.format("%d / %d reps", ch.progress, ch.target), string.format("$%d + %d XP", ch.cash, ch.xp), colors.cash)
+		UI.label({ Text = string.format("New challenge in %dh %02dm", ch.resetsIn // 3600, (ch.resetsIn % 3600) // 60), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 14), Parent = chCard })
+
+		-- the nine stats with progress to the next point
+		local perPoint = data.perPoint or PER_POINT
+		local statsCard = Phone.card(content, 24 + #Config.STATS * 36, 3)
+		UI.label({ Text = "ATTRIBUTES", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 16), Parent = statsCard })
+		for i, stat in Config.STATS do
+			local y = 22 + (i - 1) * 36
+			local value = data.stats[stat] or 1
+			local xp = data.statXP[stat] or 0
+			row(statsCard, y, prettyStat(stat), tostring(value), colors.accent)
+			local _, setStat = UI.bar({ Position = UDim2.fromOffset(0, y + 18), Size = UDim2.new(1, 0, 0, 6), Parent = statsCard }, colors.accent)
+			setStat(value / 99)
+			local _, setNext = UI.bar({ Position = UDim2.fromOffset(0, y + 26), Size = UDim2.new(0.62, 0, 0, 4), Parent = statsCard }, colors.xp)
+			setNext(if value >= 99 then 1 else xp / perPoint)
+			UI.label({
+				Text = if value >= 99 then "MAX" else string.format("%.1f / %d to next", xp, perPoint),
+				TextSize = 10,
+				TextColor3 = colors.subtext,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, 0, 0, y + 22),
+				Size = UDim2.new(0.36, 0, 0, 12),
+				Parent = statsCard,
+			})
+		end
+
+		-- getting there
+		local nav = Phone.card(content, 64, 4)
+		if player:GetAttribute("Interior") == GymConfig.INTERIOR then
+			UI.label({ Text = "You're at the Iron Box right now.\nWalk up to any machine and press Train.", TextSize = 13, TextWrapped = true, Size = UDim2.fromScale(1, 1), Parent = nav })
+		else
+			local gps = UI.button({ Text = "📍  GPS to Iron Box Gym", BackgroundColor3 = Color3.fromRGB(60, 160, 230), Size = UDim2.fromScale(1, 1), Parent = nav })
+			gps.Activated:Connect(function()
+				Phone.setGPS("Iron Box Gym", data.gymPosition)
+				Phone.setOpen(false)
+			end)
+		end
+		local tip = Phone.card(content, 64, 5)
+		UI.label({
+			Text = string.format("First visit is free. Day pass $%d (%d min) or membership $%d. Perfect reps give 50%% more. Rest when fatigue climbs.", GymConfig.DAY_PASS_PRICE, GymConfig.DAY_PASS_SECONDS // 60, GymConfig.MEMBERSHIP_PRICE),
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Size = UDim2.fromScale(1, 1),
+			Parent = tip,
+		})
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function setup()
+	remotes = shared:WaitForChild("Remotes")
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindGym",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 3,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildPanel()
+	buildOffer()
+
+	local sessionRemote = remotes:WaitForChild("GymSession") :: RemoteEvent
+	remotes:WaitForChild("GymRep")
+	remotes:WaitForChild("GymLeave")
+	remotes:WaitForChild("GymBuy")
+	remotes:WaitForChild("GymRace")
+	sessionRemote.OnClientEvent:Connect(function(kind: string, payload: any)
+		if kind == "start" then
+			onStart(payload)
+		elseif kind == "stop" then
+			onStop()
+		elseif kind == "result" then
+			onResult(payload)
+		elseif kind == "race" then
+			showRace(payload)
+		elseif kind == "offer" then
+			showOffer(payload)
+		elseif kind == "bought" then
+			offerFrame.Visible = false
+			GuiService.SelectedObject = nil
+			Phone.refresh("Fitness")
+		end
+	end)
+
+	-- mouse clicks anywhere outside UI count as a rep press
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if session and not processed and input.UserInputType == Enum.UserInputType.MouseButton1 then
+			Gym.pressRep()
+		end
+	end)
+	-- on touch-only devices the jump button leaves the station
+	UserInputService.JumpRequest:Connect(function()
+		local s = session
+		if s and UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled and os.clock() - s.startedAt > 1 then
+			Gym.leave()
+		end
+	end)
+
+	RunService.RenderStepped:Connect(function()
+		local s = session
+		if not s then
+			return
+		end
+		local def = STATIONS[s.kind]
+		marker.Position = UDim2.fromScale(GymConfig.meterPos(serverNow(), s.start, def.period), 0.5)
+		local c = GymConfig.zoneCenter(s.seed, s.goodReps)
+		goodZone.Position = UDim2.fromScale(c - def.good, 0)
+		perfectZone.Position = UDim2.fromScale(c - def.perfect, 0)
+		local resting = os.clock() < blockedUntil
+		goodZone.BackgroundTransparency = if resting then 0.65 else 0
+		perfectZone.BackgroundTransparency = if resting then 0.65 else 0
+	end)
+
+	-- fatigue recovers over time; keep the meter honest
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if session then
+				updateFatigue()
+			end
+		end
+	end)
+	for _, attr in { "GymFatigue", "GymFatigueAt" } do
+		player:GetAttributeChangedSignal(attr):Connect(function()
+			if session then
+				updateFatigue()
+			end
+		end)
+	end
+	player.CharacterAdded:Connect(function()
+		-- the server ends the set when the character dies; make sure the UI follows
+		onStop()
+	end)
+	if player:GetAttribute("Training") and player:GetAttribute("Training") ~= "" then
+		-- joined mid-set (shouldn't happen) — let the player out cleanly
+		remotes.GymLeave:FireServer()
+	end
+end
+
+function Gym.start()
+	Phone.addApp({ id = "Fitness", label = "Fitness", icon = "💪", color = Color3.fromRGB(230, 70, 50) }, function(content: ScrollingFrame)
+		return buildFitnessApp(content)
+	end)
+	task.spawn(setup)
+end
+
+return Gym
+]=====])
 put(client, 'ModuleScript', 'HUD', [=====[
 -- CITY GRIND: on-screen HUD. Cash, level/XP, reputation rank, stamina,
 -- run tracker and notification toasts. Every number shown here is read from
@@ -3902,6 +15157,599 @@ end
 
 return HUD
 ]=====])
+put(client, 'ModuleScript', 'Jobs', [=====[
+-- CITY GRIND: jobs on the client (sections 40, 68, 77, 110).
+-- * Phone app "Jobs": every job with its real pay range at your job level,
+--   level / XP bar, requirement, next unlock, START SHIFT / QUIT and GPS.
+-- * Shift HUD: objective, progress, timer, earnings, hot-food timer, combo.
+-- * Waypoint beam + marker to the current objective, highlight / ghost for
+--   the exact shelf box or build spot.
+-- * Hides other players' job markers and prompts that aren't for your job.
+-- The server owns every shift; this file only shows state and sends
+-- "start" / "quit" requests.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local JobsConfig = require(shared:WaitForChild("JobsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+local JOBS = JobsConfig.JOBS
+
+local Jobs = {}
+
+local JobAction: RemoteEvent? = nil
+local state: any = nil -- the active shift payload from the server, or nil
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function jobLevel(id: string): number
+	return player:GetAttribute("JobLevel_" .. id) or 1
+end
+
+local function jobXP(id: string): number
+	return player:GetAttribute("JobXP_" .. id) or 0
+end
+
+local function send(action: string, id: string?)
+	if JobAction then
+		JobAction:FireServer(action, id)
+	else
+		HUD.push("JOBS", "Still connecting, try again in a second.")
+	end
+end
+
+-- Does the player own a car? Read from the Vehicles system's mirror attribute.
+local vehiclesConfig: any = nil
+local function ownsCar(): boolean?
+	if JobsConfig.isCarKind(player:GetAttribute("Driving")) then
+		return true
+	end
+	local json = player:GetAttribute("VehiclesOwned")
+	if type(json) ~= "string" then
+		return nil
+	end
+	if vehiclesConfig == nil then
+		local module = shared:FindFirstChild("VehiclesConfig")
+		local ok, result = pcall(function()
+			return require(module :: any)
+		end)
+		vehiclesConfig = if module and ok then result else false
+	end
+	local ok, owned = pcall(function()
+		return game:GetService("HttpService"):JSONDecode(json)
+	end)
+	if not ok or type(owned) ~= "table" then
+		return nil
+	end
+	for id, value in owned do
+		local key = if type(id) == "string" then id else value
+		local spec = vehiclesConfig and vehiclesConfig.byId and vehiclesConfig.byId[key]
+		if spec and JobsConfig.isCarKind(spec.kind) then
+			return true
+		end
+	end
+	return false
+end
+
+local function formatTime(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	return string.format("%d:%02d", seconds // 60, seconds % 60)
+end
+
+local function nextUnlock(id: string, level: number)
+	for _, u in JOBS[id].unlocks do
+		if u.level > level then
+			return u
+		end
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- Waypoint: beam from you to the objective, marker with distance,
+-- highlight on the exact box and a ghost of the piece to build.
+---------------------------------------------------------------------------
+local waypoint: { marker: BasePart, beam: Beam, a0: Attachment, label: TextLabel }? = nil
+local highlight: Highlight
+local ghost: BasePart? = nil
+
+local function clearWaypoint()
+	if waypoint then
+		waypoint.marker:Destroy()
+		waypoint.a0:Destroy()
+		waypoint = nil
+	end
+end
+
+local function setWaypoint(target: Vector3?, name: string?, color: Color3)
+	if not target then
+		clearWaypoint()
+		return
+	end
+	if not waypoint then
+		local marker = UI.new("Part", {
+			Name = "JobWaypoint",
+			Anchored = true,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+			Transparency = 1,
+			Size = Vector3.one,
+			Parent = Workspace,
+		})
+		local a1 = UI.new("Attachment", { Parent = marker })
+		local a0 = UI.new("Attachment", { Position = Vector3.new(0, -2.5, 0) })
+		local beam = UI.new("Beam", {
+			Attachment0 = a0,
+			Attachment1 = a1,
+			Transparency = NumberSequence.new(0.25),
+			Width0 = 1,
+			Width1 = 1,
+			FaceCamera = true,
+			LightEmission = 1,
+			Segments = 1,
+			Parent = marker,
+		})
+		local gui = UI.new("BillboardGui", { Size = UDim2.fromOffset(220, 46), StudsOffset = Vector3.new(0, 7, 0), AlwaysOnTop = true, LightInfluence = 0, Parent = marker })
+		local label = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 17, TextStrokeTransparency = 0.3, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Parent = gui })
+		waypoint = { marker = marker, beam = beam, a0 = a0, label = label }
+	end
+	local wp = waypoint :: any
+	wp.marker.Position = target + Vector3.new(0, 2, 0)
+	wp.beam.Color = ColorSequence.new(color)
+	wp.label.TextColor3 = color
+	wp.name = name or "Objective"
+end
+
+local function setGhost(spec: any, color: Color3)
+	if ghost then
+		ghost:Destroy()
+		ghost = nil
+	end
+	if type(spec) ~= "table" or typeof(spec.cframe) ~= "CFrame" or typeof(spec.size) ~= "Vector3" then
+		return
+	end
+	local g = UI.new("Part", {
+		Name = "JobGhost",
+		Anchored = true,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+		Material = Enum.Material.ForceField,
+		Color = color,
+		Transparency = 0.2,
+		Size = spec.size,
+		CFrame = spec.cframe,
+		Parent = Workspace,
+	})
+	ghost = g
+end
+
+---------------------------------------------------------------------------
+-- Hiding job props that aren't yours
+---------------------------------------------------------------------------
+local jobsFolder: Instance? = nil
+
+local function applyVisibility(inst: Instance)
+	local myJob = player:GetAttribute("Job") or ""
+	if inst:IsA("ProximityPrompt") then
+		local start = inst:GetAttribute("JobStart")
+		local only = inst:GetAttribute("JobOnly")
+		local owner = inst:GetAttribute("JobOwner")
+		if start ~= nil then
+			inst.Enabled = myJob == ""
+		elseif only ~= nil then
+			inst.Enabled = myJob == only
+		elseif owner ~= nil then
+			inst.Enabled = owner == player.UserId
+		end
+	elseif inst:IsA("BasePart") then
+		local owner = inst:GetAttribute("JobOwner")
+		if owner ~= nil and owner ~= player.UserId then
+			inst.LocalTransparencyModifier = 1
+			for _, d in inst:GetDescendants() do
+				if d:IsA("BillboardGui") or d:IsA("Light") then
+					d.Enabled = false
+				end
+			end
+		end
+	end
+end
+
+local function applyAll()
+	if not jobsFolder then
+		return
+	end
+	for _, d in jobsFolder:GetDescendants() do
+		applyVisibility(d)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Shift HUD
+---------------------------------------------------------------------------
+local gui: ScreenGui
+local panel: Frame
+local titleLabel: TextLabel
+local timerLabel: TextLabel
+local objectiveLabel: TextLabel
+local progressLabel: TextLabel
+local setProgress: (number) -> ()
+local earnedLabel: TextLabel
+local extraLabel: TextLabel
+local quitButton: TextButton
+local quitArmedUntil = 0
+local summaryPanel: Frame
+
+local function buildHUD()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindJobs",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 3,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	panel = UI.new("Frame", {
+		Name = "ShiftPanel",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.12,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.45, 0),
+		Size = UDim2.fromOffset(250, 150),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.padding(10) })
+	local stroke = UI.stroke(colors.accent, 1.5, 0.35)
+	stroke.Name = "Accent"
+	stroke.Parent = panel
+	titleLabel = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = colors.accent, Size = UDim2.new(1, -60, 0, 18), Parent = panel })
+	timerLabel = UI.label({ Text = "0:00", Font = UI.FONT_BLACK, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(60, 18), Parent = panel })
+	objectiveLabel = UI.label({ Text = "", TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 36), Parent = panel })
+	local _, setter = UI.bar({ Position = UDim2.fromOffset(0, 64), Size = UDim2.new(1, 0, 0, 8), Parent = panel }, colors.cash)
+	setProgress = setter
+	progressLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 75), Size = UDim2.new(1, 0, 0, 15), Parent = panel })
+	earnedLabel = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 18, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 94), Size = UDim2.new(0.5, 0, 0, 20), Parent = panel })
+	extraLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.stamina, Position = UDim2.fromOffset(0, 114), Size = UDim2.new(1, -80, 0, 16), Parent = panel })
+	quitButton = UI.button({ Text = "QUIT", TextSize = 13, BackgroundColor3 = colors.danger, AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.fromOffset(76, 28), Parent = panel })
+	quitButton.Activated:Connect(function()
+		-- two taps so a stray touch doesn't throw away a shift
+		if os.clock() < quitArmedUntil then
+			quitArmedUntil = 0
+			send("quit")
+		else
+			quitArmedUntil = os.clock() + 3
+			quitButton.Text = "SURE?"
+			task.delay(3, function()
+				if quitButton.Text == "SURE?" then
+					quitButton.Text = "QUIT"
+				end
+			end)
+		end
+	end)
+
+	summaryPanel = UI.new("Frame", {
+		Name = "ShiftSummary",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.05,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.38),
+		Size = UDim2.fromOffset(300, 150),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.padding(14), UI.stroke(colors.cash, 2, 0.2) })
+end
+
+local function showSummary(s: any)
+	local def = JOBS[s.job]
+	if not def then
+		return
+	end
+	for _, child in summaryPanel:GetChildren() do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+	local headline = if s.completed then "SHIFT COMPLETE" else "SHIFT OVER"
+	UI.label({ Text = def.icon .. "  " .. headline, Font = UI.FONT_BLACK, TextSize = 20, TextColor3 = if s.completed then colors.cash else colors.stamina, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 24), Parent = summaryPanel })
+	UI.label({ Text = s.reason, TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 16), Parent = summaryPanel })
+	UI.label({ Text = UI.formatCash(s.earned), Font = UI.FONT_BLACK, TextSize = 30, TextColor3 = colors.cash, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 46), Size = UDim2.new(1, 0, 0, 32), Parent = summaryPanel })
+	local lines = string.format("%d/%d %s", s.done, s.goal, s.word)
+	if s.bonus and s.bonus > 0 then
+		lines ..= string.format("  ·  completion bonus %s", UI.formatCash(s.bonus))
+	end
+	UI.label({ Text = lines, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), Parent = summaryPanel })
+	UI.label({
+		Text = def.name .. " level " .. s.level .. (if s.levelledUp then "  ·  LEVEL UP!" else ""),
+		Font = UI.FONT_BOLD,
+		TextSize = 13,
+		TextColor3 = if s.levelledUp then colors.xp else colors.subtext,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromOffset(0, 102),
+		Size = UDim2.new(1, 0, 0, 16),
+		Parent = summaryPanel,
+	})
+	summaryPanel.Visible = true
+	local shownAt = os.clock()
+	summaryPanel:SetAttribute("ShownAt", shownAt)
+	task.delay(6, function()
+		if summaryPanel:GetAttribute("ShownAt") == shownAt then
+			summaryPanel.Visible = false
+		end
+	end)
+	HUD.push(headline, string.format("%s: %s for %d/%d %s.", def.name, UI.formatCash(s.earned), s.done, s.goal, s.word))
+end
+
+local function refreshPanel()
+	if not state then
+		panel.Visible = false
+		return
+	end
+	local def = JOBS[state.job]
+	panel.Visible = true
+	local accent = panel:FindFirstChild("Accent") :: UIStroke
+	accent.Color = def.color
+	titleLabel.Text = def.icon .. "  " .. string.upper(def.name)
+	titleLabel.TextColor3 = def.color
+	objectiveLabel.Text = state.objective or ""
+	setProgress(if state.goal > 0 then state.progress / state.goal else 0)
+	progressLabel.Text = string.format("%d / %d %s", state.progress, state.goal, state.word)
+	earnedLabel.Text = UI.formatCash(state.earned)
+end
+
+---------------------------------------------------------------------------
+-- Phone app
+---------------------------------------------------------------------------
+local appContent: ScrollingFrame? = nil
+
+local function buildJobCard(content: ScrollingFrame, id: string, order: number)
+	local def = JOBS[id]
+	local level = jobLevel(id)
+	local lo, hi = JobsConfig.payRange(id, level)
+	local steps = JobsConfig.steps(id, level)
+	local card = Phone.card(content, 246, order)
+	UI.stroke(def.color, 1.5, 0.5).Parent = card
+
+	UI.label({ Text = def.icon .. "  " .. string.upper(def.name), Font = UI.FONT_BLACK, TextSize = 15, Size = UDim2.new(1, -56, 0, 18), Parent = card })
+	UI.new("TextLabel", {
+		Text = "LV " .. level,
+		Font = UI.FONT_BLACK,
+		TextSize = 12,
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundColor3 = def.color,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.fromScale(1, 0),
+		Size = UDim2.fromOffset(50, 18),
+		Parent = card,
+	}, { UI.corner(9) })
+	UI.label({ Text = string.format("$%d–$%d per shift", lo, hi), Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 18), Parent = card })
+	UI.label({ Text = string.format("%d %s  ·  pay x%.2f", steps, def.stepWord, JobsConfig.payMult(id, level)), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 41), Size = UDim2.new(1, 0, 0, 13), Parent = card })
+
+	local maxed = level >= JobsConfig.MAX_LEVEL
+	local toNext = JobsConfig.xpToNext(level)
+	local _, setXP = UI.bar({ Position = UDim2.fromOffset(0, 58), Size = UDim2.new(1, 0, 0, 7), Parent = card }, colors.xp)
+	setXP(if maxed then 1 else jobXP(id) / toNext)
+	UI.label({ Text = if maxed then "MAX LEVEL" else string.format("%d / %d job XP", jobXP(id), toNext), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 67), Size = UDim2.new(1, 0, 0, 13), Parent = card })
+
+	UI.label({ Text = def.blurb, TextSize = 12, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 44), Parent = card })
+
+	local reqText = "Requirement: " .. def.requirement
+	local reqColor = colors.subtext
+	if id == "Taxi" then
+		local has = ownsCar()
+		if has == true then
+			reqText ..= "  ✓"
+			reqColor = colors.cash
+		elseif has == false then
+			reqText = "Requirement: own a car. Buy one at Budget Wheels."
+			reqColor = colors.danger
+		end
+	end
+	UI.label({ Text = reqText, TextSize = 11, TextWrapped = true, TextColor3 = reqColor, Position = UDim2.fromOffset(0, 130), Size = UDim2.new(1, 0, 0, 26), Parent = card })
+	local nu = nextUnlock(id, level)
+	UI.label({
+		Text = if nu then string.format("Next unlock (LV %d): %s", nu.level, nu.text) else "All unlocks earned",
+		TextSize = 11,
+		TextWrapped = true,
+		TextColor3 = colors.xp,
+		Position = UDim2.fromOffset(0, 158),
+		Size = UDim2.new(1, 0, 0, 26),
+		Parent = card,
+	})
+
+	local onThis = state and state.job == id
+	local onOther = state and state.job ~= id
+	if onThis then
+		local quit = UI.button({ Text = "QUIT SHIFT", TextSize = 13, BackgroundColor3 = colors.danger, Position = UDim2.fromOffset(0, 186), Size = UDim2.new(0.62, -4, 0, 30), Parent = card })
+		quit.Activated:Connect(function()
+			send("quit")
+		end)
+	elseif onOther then
+		UI.label({ Text = "Finish your current shift first", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 186), Size = UDim2.new(0.62, -4, 0, 30), Parent = card })
+	else
+		local start = UI.button({ Text = "START SHIFT", TextSize = 13, BackgroundColor3 = def.color, Position = UDim2.fromOffset(0, 186), Size = UDim2.new(0.62, -4, 0, 30), Parent = card })
+		start.Activated:Connect(function()
+			send("start", id)
+		end)
+	end
+	local gps = UI.button({ Text = "📍 GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 186), Size = UDim2.new(0.38, -4, 0, 30), Parent = card })
+	gps.Activated:Connect(function()
+		if onThis and state and state.target then
+			Phone.setGPS(state.targetName or JobsConfig.START_NAMES[id], state.target)
+		else
+			Phone.setGPS(JobsConfig.START_NAMES[id], JobsConfig.START[id])
+		end
+	end)
+end
+
+local function renderApp()
+	local content = appContent
+	if not content then
+		return
+	end
+	Phone.clear(content)
+	local header = Phone.card(content, if state then 96 else 60, 0)
+	if state then
+		local def = JOBS[state.job]
+		UI.label({ Text = "ON SHIFT  ·  " .. def.icon .. " " .. def.name, Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = def.color, Size = UDim2.new(1, 0, 0, 16), Parent = header })
+		UI.label({ Text = state.objective or "", TextSize = 12, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 20), Size = UDim2.new(1, 0, 0, 30), Parent = header })
+		UI.label({ Text = string.format("%d/%d %s  ·  %s earned", state.progress, state.goal, state.word, UI.formatCash(state.earned)), Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 54), Size = UDim2.new(1, 0, 0, 16), Parent = header })
+	else
+		UI.label({ Text = "JOB CENTER", Font = UI.FONT_BLACK, TextSize = 15, Size = UDim2.new(1, 0, 0, 18), Parent = header })
+		UI.label({ Text = "Pick a job and start a shift. Pay grows with each job's level.", TextSize = 11, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 20), Size = UDim2.new(1, 0, 0, 28), Parent = header })
+	end
+	for i, id in JobsConfig.ORDER do
+		buildJobCard(content, id, i)
+	end
+end
+
+local function buildApp(content: ScrollingFrame)
+	appContent = content
+	return renderApp
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function onState(kind: any, data: any)
+	if kind == "state" and type(data) == "table" and JOBS[data.job] then
+		local fresh = state == nil
+		state = data
+		if fresh then
+			-- the shift's own waypoint replaces any map GPS
+			Phone.clearGPS()
+			summaryPanel.Visible = false
+		end
+		local def = JOBS[data.job]
+		setWaypoint(data.target, data.targetName, def.color)
+		highlight.Adornee = if typeof(data.adornee) == "Instance" then data.adornee else nil
+		highlight.FillColor = def.color
+		setGhost(data.ghost, def.color)
+		refreshPanel()
+		Phone.refresh("Jobs")
+	elseif kind == "end" and type(data) == "table" then
+		state = nil
+		clearWaypoint()
+		highlight.Adornee = nil
+		setGhost(nil, colors.accent)
+		refreshPanel()
+		showSummary(data)
+		Phone.refresh("Jobs")
+	elseif kind == "open" then
+		Phone.setOpen(true)
+		Phone.showPage("Jobs")
+	end
+end
+
+function Jobs.start()
+	Phone.addApp({ id = "Jobs", label = "Jobs", icon = "💼", color = Color3.fromRGB(60, 140, 90) }, buildApp)
+
+	task.spawn(function()
+		buildHUD()
+		highlight = UI.new("Highlight", {
+			Name = "JobHighlight",
+			FillTransparency = 0.35,
+			OutlineColor = Color3.new(1, 1, 1),
+			DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+			Parent = gui,
+		})
+
+		local remotes = shared:WaitForChild("Remotes")
+		JobAction = remotes:WaitForChild("JobAction") :: RemoteEvent
+		local JobState = remotes:WaitForChild("JobState") :: RemoteEvent
+		JobState.OnClientEvent:Connect(onState)
+
+		-- refresh the app whenever job levels or ownership change
+		player.AttributeChanged:Connect(function(name)
+			if name:sub(1, 8) == "JobLevel" or name:sub(1, 5) == "JobXP" or name == "VehiclesOwned" then
+				Phone.refresh("Jobs")
+			elseif name == "Job" then
+				applyAll()
+			end
+		end)
+
+		-- per-frame: timer, hot food / combo text, waypoint distance
+		RunService.RenderStepped:Connect(function()
+			if not state then
+				return
+			end
+			local t = Workspace:GetServerTimeNow()
+			local left = (state.endsAt or t) - t
+			timerLabel.Text = formatTime(left)
+			timerLabel.TextColor3 = if left < 20 then colors.danger else colors.text
+			local extra = ""
+			if state.hotUntil then
+				local hot = state.hotUntil - t
+				extra = if hot > 0 then string.format("🔥 Hot for %ds — faster = bigger tip", math.ceil(hot)) else "❄️ Food went cold, no tip"
+			elseif state.combo and state.combo > 0 then
+				extra = string.format("⚡ Combo x%.1f", 1 + 0.1 * state.combo)
+			end
+			extraLabel.Text = extra
+			local wp = waypoint :: any
+			if wp then
+				local character = player.Character
+				local root = character and character:FindFirstChild("HumanoidRootPart")
+				if root and root:IsA("BasePart") then
+					if wp.a0.Parent ~= root then
+						wp.a0.Parent = root
+					end
+					local p = wp.marker.Position
+					local dist = Vector3.new(root.Position.X - p.X, 0, root.Position.Z - p.Z).Magnitude
+					wp.label.Text = string.format("%s  ·  %dm", wp.name, math.floor(dist / 3.57))
+				end
+			end
+		end)
+
+		-- pulse the ghost so the build spot is easy to spot
+		task.spawn(function()
+			while true do
+				local g = ghost
+				if g and g.Parent then
+					TweenService:Create(g, TweenInfo.new(0.6), { Transparency = 0.6 }):Play()
+					task.wait(0.6)
+					if g.Parent then
+						TweenService:Create(g, TweenInfo.new(0.6), { Transparency = 0.15 }):Play()
+					end
+					task.wait(0.6)
+				else
+					task.wait(0.5)
+				end
+			end
+		end)
+
+		-- job props: hide other players' markers and prompts that aren't for you
+		local city = Workspace:WaitForChild("City", 60)
+		local folder = city and city:WaitForChild("Jobs", 60)
+		if folder then
+			jobsFolder = folder
+			applyAll()
+			folder.DescendantAdded:Connect(function(d)
+				-- attributes are set before parenting, but wait a frame for children
+				task.defer(applyVisibility, d)
+				if d:IsA("BasePart") and d:GetAttribute("JobOwner") ~= nil then
+					task.defer(function()
+						for _, sub in d:GetDescendants() do
+							applyVisibility(sub)
+						end
+						applyVisibility(d)
+					end)
+				end
+			end)
+		end
+	end)
+end
+
+return Jobs
+]=====])
 put(client, 'ModuleScript', 'Movement', [=====[
 -- CITY GRIND: sprint, stamina, crouch and slide (section 12).
 -- PC: Shift sprint, C crouch (C while sprinting = slide).
@@ -4056,6 +15904,10 @@ function Movement.start()
 			speed = Config.SPRINT_SPEED
 			-- Better Speed stat makes sprinting cheaper (movement efficiency).
 			local efficiency = 1 - (statValue("Speed") - 1) / 200
+			-- Sports drinks (Corner Mart) halve sprint drain for a while.
+			if os.time() < (player:GetAttribute("StaminaBoostUntil") or 0) then
+				efficiency *= 0.5
+			end
 			stamina -= Config.SPRINT_DRAIN_PER_SEC * efficiency * dt
 			if stamina <= 0 then
 				stamina = 0
@@ -5086,5 +16938,1085 @@ function UI.timeAgo(timestamp: number): string
 end
 
 return UI
+]=====])
+put(client, 'ModuleScript', 'Vehicles', [=====[
+-- CITY GRIND: vehicles on the client.
+-- * Budget Wheels purchase panel and the Paint & Mods panel (opened by the
+--   server when you use a showroom / kiosk prompt).
+-- * Garage phone app: spawn / put away / locate owned vehicles.
+-- * Driving: while you sit in the driver seat of your own vehicle your client
+--   owns its physics and runs VehiclesConfig.step every frame, reading the
+--   VehicleSeat's ThrottleFloat / SteerFloat (keyboard, gamepad and the mobile
+--   thumbstick all feed those). H / Y / on-screen button toggles headlights.
+-- * Visuals for every nearby vehicle: wheels spin, steer and follow the
+--   suspension; headlights at night; brake lights.
+-- Every purchase, mod and spawn is validated by the server.
+
+local CollectionService = game:GetService("CollectionService")
+local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local VC = require(shared:WaitForChild("VehiclesConfig"))
+local remotes = shared:WaitForChild("Remotes")
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Vehicles = {}
+
+local TAG = "CityVehicle"
+local LIGHTS_ACTION = "CityVehicleLights"
+
+local gui: ScreenGui
+local panel: Frame
+local panelScale: UIScale
+local panelBody: Frame
+local panelCleanup: { () -> () } = {}
+local panelMode: string? = nil
+local panelAnchor: Vector3? = nil
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function remote(name: string): any
+	return remotes:WaitForChild(name)
+end
+
+type Owned = { [string]: { paint: number, rim: number, glow: number } }
+
+local function ownedVehicles(): Owned
+	local json = player:GetAttribute("VehiclesOwned")
+	if type(json) ~= "string" then
+		return {}
+	end
+	local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
+	if ok and type(data) == "table" then
+		return data
+	end
+	return {}
+end
+
+local function sortedOwned(): { VC.Spec }
+	local list = {}
+	for id in ownedVehicles() do
+		local s = VC.byId[id]
+		if s then
+			table.insert(list, s)
+		end
+	end
+	table.sort(list, function(a, b)
+		return a.price < b.price
+	end)
+	return list
+end
+
+local function myVehicle(): Model?
+	for _, model in CollectionService:GetTagged(TAG) do
+		if model:IsA("Model") and model:GetAttribute("Owner") == player.UserId then
+			return model
+		end
+	end
+	return nil
+end
+
+local function characters(): { Instance }
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	return list
+end
+
+local function mph(studsPerSecond: number): number
+	return math.floor(math.abs(studsPerSecond) * VC.MPH_PER_STUD + 0.5)
+end
+
+local function swatch(parent: Instance, color: Color3, size: number, order: number): TextButton
+	local b = UI.new("TextButton", {
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 14,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0.4,
+		AutoButtonColor = true,
+		BackgroundColor3 = color,
+		Size = UDim2.fromOffset(size, size),
+		LayoutOrder = order,
+		Parent = parent,
+	}, { UI.corner(size // 2) })
+	return b
+end
+
+local function row(parent: Instance, y: number, height: number): Frame
+	return UI.new("Frame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, y),
+		Size = UDim2.new(1, 0, 0, height),
+		Parent = parent,
+	}, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Center }),
+	})
+end
+
+---------------------------------------------------------------------------
+-- 3D preview (a clone of the showroom model in a ViewportFrame)
+---------------------------------------------------------------------------
+local function showroomModel(id: string): Model?
+	local city = workspace:FindFirstChild("City")
+	local root = city and city:FindFirstChild("Vehicles")
+	local showroom = root and root:FindFirstChild("Showroom")
+	local model = showroom and showroom:FindFirstChild("Display_" .. id)
+	return if model and model:IsA("Model") then model else nil
+end
+
+local function recolor(model: Model, paintIndex: number, rimIndex: number, glowIndex: number)
+	local paintColor = (VC.PAINTS[paintIndex] or VC.PAINTS[1]).color
+	local rim = VC.RIMS[rimIndex] or VC.RIMS[1]
+	local glow = VC.GLOWS[glowIndex] or VC.GLOWS[1]
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			if d:GetAttribute("Paint") then
+				d.Color = paintColor
+			elseif d:GetAttribute("Rim") then
+				d.Color = rim.color
+				d.Material = rim.material
+			elseif d:GetAttribute("Glow") then
+				d.Color = glow.color
+				d.Transparency = if glowIndex == 1 then 1 else 0
+			end
+		end
+	end
+end
+
+-- Returns a function that recolors the preview.
+local function preview(parent: Instance, id: string, y: number, height: number): (number, number, number) -> ()
+	local vp = UI.new("ViewportFrame", {
+		BackgroundColor3 = Color3.fromRGB(28, 30, 40),
+		Position = UDim2.fromOffset(0, y),
+		Size = UDim2.new(1, 0, 0, height),
+		Ambient = Color3.fromRGB(150, 150, 160),
+		LightColor = Color3.fromRGB(255, 250, 240),
+		LightDirection = Vector3.new(-1, -2, -1),
+		Parent = parent,
+	}, { UI.corner(12) })
+	local source = showroomModel(id)
+	if not source then
+		UI.label({ Text = "Preview loading... walk closer to the showroom.", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Parent = vp })
+		return function() end
+	end
+	local clone = source:Clone()
+	for _, d in clone:GetDescendants() do
+		if d:IsA("ProximityPrompt") or d:IsA("SurfaceGui") or d:IsA("Light") then
+			d:Destroy()
+		end
+	end
+	clone:PivotTo(CFrame.new())
+	clone.Parent = vp
+	local camera = Instance.new("Camera")
+	camera.FieldOfView = 35
+	camera.Parent = vp
+	vp.CurrentCamera = camera
+	local extents = clone:GetExtentsSize()
+	local radius = math.max(extents.X, extents.Z, extents.Y * 1.6)
+	local distance = radius * 1.75
+	camera.CFrame = CFrame.lookAt(Vector3.new(0, radius * 0.45, distance), Vector3.new(0, -extents.Y * 0.1, 0))
+	local angle = math.rad(-35)
+	local conn = RunService.RenderStepped:Connect(function(dt)
+		angle += dt * 0.5
+		clone:PivotTo(CFrame.Angles(0, angle, 0))
+	end)
+	table.insert(panelCleanup, function()
+		conn:Disconnect()
+	end)
+	return function(p: number, r: number, g: number)
+		recolor(clone, p, r, g)
+	end
+end
+
+local function statBars(parent: Instance, s: VC.Spec, y: number): number
+	local entries = {
+		{ "TOP SPEED", s.topSpeed / VC.STAT_MAX.topSpeed, mph(s.topSpeed) .. " mph" },
+		{ "ACCELERATION", s.accel / VC.STAT_MAX.accel },
+		{ "HANDLING", s.handling / VC.STAT_MAX.handling },
+		{ "BRAKING", s.brake / VC.STAT_MAX.brake },
+		{ "GRIP", s.grip / VC.STAT_MAX.grip },
+	}
+	for i, e in entries do
+		local ry = y + (i - 1) * 21
+		UI.label({ Text = e[1], Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, ry), Size = UDim2.fromOffset(110, 16), Parent = parent })
+		local _, setFill = UI.bar({ Position = UDim2.fromOffset(112, ry + 4), Size = UDim2.new(1, -182, 0, 8), Parent = parent }, colors.accent)
+		setFill(e[2])
+		UI.label({
+			Text = e[3] or (tostring(math.clamp(math.round(e[2] * 10), 1, 10)) .. "/10"),
+			Font = UI.FONT_BOLD,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, 0, 0, ry),
+			Size = UDim2.fromOffset(64, 16),
+			Parent = parent,
+		})
+	end
+	return y + #entries * 21
+end
+
+---------------------------------------------------------------------------
+-- Panel shell
+---------------------------------------------------------------------------
+local function closePanel()
+	for _, fn in panelCleanup do
+		pcall(fn)
+	end
+	table.clear(panelCleanup)
+	if panelBody then
+		panelBody:Destroy()
+	end
+	panel.Visible = false
+	panelMode = nil
+	panelAnchor = nil
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(panel) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+-- Clears the panel and returns a fresh body frame plus a status label.
+local function openPanel(mode: string, title: string, subtitle: string, height: number, anchor: Vector3): (Frame, TextLabel)
+	for _, fn in panelCleanup do
+		pcall(fn)
+	end
+	table.clear(panelCleanup)
+	if panelBody then
+		panelBody:Destroy()
+	end
+	panelMode = mode
+	panelAnchor = anchor
+	panel.Size = UDim2.fromOffset(380, height + 24)
+	panelBody = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = panel })
+	UI.label({ Text = title, Font = UI.FONT_BLACK, TextSize = 22, Size = UDim2.new(1, -44, 0, 26), TextTruncate = Enum.TextTruncate.AtEnd, Parent = panelBody })
+	UI.label({ Text = subtitle, Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = colors.accent, Position = UDim2.fromOffset(0, 27), Size = UDim2.new(1, -44, 0, 16), Parent = panelBody })
+	local close = UI.button({
+		Text = "✕",
+		TextSize = 18,
+		BackgroundColor3 = colors.panelLight,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(36, 36),
+		Parent = panelBody,
+	})
+	close.Activated:Connect(closePanel)
+	local status = UI.label({
+		Text = "",
+		TextSize = 13,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 30),
+		Parent = panelBody,
+	})
+	local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+	panelScale.Scale = math.min(1, (viewport.Y - 30) / (height + 24), (viewport.X - 20) / 380)
+	panel.Visible = true
+	return panelBody, status
+end
+
+local function setStatus(label: TextLabel, text: string, good: boolean)
+	label.Text = text
+	label.TextColor3 = if good then colors.cash else colors.danger
+end
+
+local function selectForGamepad(button: GuiObject)
+	if UserInputService.GamepadEnabled then
+		GuiService.SelectedObject = button
+	end
+end
+
+---------------------------------------------------------------------------
+-- Purchase panel
+---------------------------------------------------------------------------
+local function openShop(id: string)
+	local s = VC.byId[id]
+	if not s then
+		return
+	end
+	local body, status = openPanel("Shop", s.name:upper(), s.class:upper() .. "  ·  " .. s.seats .. (if s.seats == 1 then " SEAT" else " SEATS"), 560, VC.LOT_CENTER)
+	local paintIndex = s.defaultPaint
+	local setLook = preview(body, id, 50, 150)
+	setLook(paintIndex, 1, 1)
+
+	UI.label({ Text = UI.formatCash(s.price), Font = UI.FONT_BLACK, TextSize = 26, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 206), Size = UDim2.new(0.5, 0, 0, 30), Parent = body })
+	local cashLabel = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 214), Size = UDim2.new(0.5, 0, 0, 16), Parent = body })
+	UI.label({ Text = s.blurb, TextSize = 13, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 240), Size = UDim2.new(1, 0, 0, 32), Parent = body })
+	local reqLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, Position = UDim2.fromOffset(0, 274), Size = UDim2.new(1, 0, 0, 16), Parent = body })
+	local y = statBars(body, s, 298)
+
+	local paintTitle = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y + 8), Size = UDim2.new(1, 0, 0, 16), Parent = body })
+	local swatchRow = row(body, y + 28, 34)
+	local buy = UI.button({ Text = "", TextSize = 18, Font = UI.FONT_BLACK, BackgroundColor3 = colors.accent, Position = UDim2.fromOffset(0, y + 74), Size = UDim2.new(1, 0, 0, 46), Parent = body })
+	local busy = false
+
+	local swatches: { TextButton } = {}
+	local function refresh()
+		local owned = ownedVehicles()[id] ~= nil
+		local level = player:GetAttribute("Level") or 1
+		local rep = player:GetAttribute("Reputation") or 0
+		local cash = player:GetAttribute("Cash") or 0
+		local unlocked = level >= s.level and rep >= s.rep
+		cashLabel.Text = "You have " .. UI.formatCash(cash)
+		local req = VC.requirementText(s)
+		if req then
+			reqLabel.Text = (if unlocked then "✓ Unlocked: " else "🔒 Requires ") .. req .. string.format("  (you: Lv %d, %d rep)", level, rep)
+			reqLabel.TextColor3 = if unlocked then colors.cash else colors.stamina
+		else
+			reqLabel.Text = "No requirements"
+			reqLabel.TextColor3 = colors.subtext
+		end
+		swatchRow.Visible = not owned
+		if owned then
+			paintTitle.Text = "YOU OWN THIS · RESPRAY IT AT THE PAINT & MODS BAY"
+			buy.Text = "SPAWN IT"
+			buy.BackgroundColor3 = colors.xp
+		else
+			paintTitle.Text = "PAINT: " .. VC.PAINTS[paintIndex].name:upper()
+			if not unlocked then
+				buy.Text = "🔒 LOCKED"
+				buy.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+			else
+				buy.Text = "BUY  " .. UI.formatCash(s.price)
+				buy.BackgroundColor3 = if cash >= s.price then colors.accent else Color3.fromRGB(120, 70, 50)
+			end
+		end
+		for i, b in swatches do
+			local stroke = b:FindFirstChildOfClass("UIStroke")
+			if stroke then
+				stroke.Transparency = if i == paintIndex then 0 else 1
+			end
+		end
+	end
+
+	for i, p in VC.PAINTS do
+		local b = swatch(swatchRow, p.color, 32, i)
+		UI.stroke(Color3.new(1, 1, 1), 3, 1).Parent = b
+		b.Activated:Connect(function()
+			paintIndex = i
+			setLook(paintIndex, 1, 1)
+			refresh()
+		end)
+		swatches[i] = b
+	end
+
+	buy.Activated:Connect(function()
+		if busy then
+			return
+		end
+		busy = true
+		if ownedVehicles()[id] then
+			local ok, message = remote("VehicleSpawn"):InvokeServer(id)
+			setStatus(status, message or "", ok == true)
+			if ok then
+				closePanel()
+			end
+		else
+			setStatus(status, "Processing...", true)
+			local ok, message = remote("VehicleBuy"):InvokeServer(id, paintIndex)
+			if ok then
+				setStatus(status, "It's yours! Tap SPAWN IT, or use the Garage app on your phone.", true)
+			else
+				setStatus(status, message or "Purchase failed.", false)
+			end
+		end
+		busy = false
+		if panelMode == "Shop" and buy.Parent then
+			refresh()
+		end
+	end)
+
+	local conns = {
+		player:GetAttributeChangedSignal("Cash"):Connect(refresh),
+		player:GetAttributeChangedSignal("VehiclesOwned"):Connect(refresh),
+		player:GetAttributeChangedSignal("Level"):Connect(refresh),
+		player:GetAttributeChangedSignal("Reputation"):Connect(refresh),
+	}
+	table.insert(panelCleanup, function()
+		for _, c in conns do
+			c:Disconnect()
+		end
+	end)
+	refresh()
+	selectForGamepad(buy)
+end
+
+---------------------------------------------------------------------------
+-- Paint & Mods panel
+---------------------------------------------------------------------------
+local MOD_ROWS = {
+	{ key = "paint", label = "PAINT", list = VC.PAINTS },
+	{ key = "rim", label = "RIMS", list = VC.RIMS },
+	{ key = "glow", label = "UNDERGLOW", list = VC.GLOWS },
+}
+
+local modsSelectedId: string? = nil
+
+local function openMods()
+	local list = sortedOwned()
+	if #list == 0 then
+		local body, _ = openPanel("Mods", "PAINT & MODS", "BUDGET WHEELS", 170, VC.MODS_POS)
+		UI.label({ Text = "You don't own a vehicle yet. Pick one from the lot first, then come back to make it yours.", TextSize = 14, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 56), Size = UDim2.new(1, 0, 0, 60), Parent = body })
+		return
+	end
+	if not modsSelectedId or not ownedVehicles()[modsSelectedId] then
+		local mine = myVehicle()
+		local spawnedId = mine and mine:GetAttribute("VehicleId")
+		modsSelectedId = if type(spawnedId) == "string" and ownedVehicles()[spawnedId] then spawnedId else list[1].id
+	end
+	local id = modsSelectedId :: string
+	local s = VC.byId[id]
+	local entry = ownedVehicles()[id]
+	local body, status = openPanel("Mods", "PAINT & MODS", s.name:upper(), 520, VC.MODS_POS)
+
+	-- vehicle chooser
+	local chooser = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 50),
+		Size = UDim2.new(1, 0, 0, 34),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 2,
+		Parent = body,
+	}, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	for i, item in list do
+		local b = UI.button({
+			Text = item.name,
+			TextSize = 13,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(0, 30),
+			BackgroundColor3 = if item.id == id then colors.accent else colors.panelLight,
+			LayoutOrder = i,
+			Parent = chooser,
+		}, { UI.padding(8) })
+		b.Activated:Connect(function()
+			modsSelectedId = item.id
+			openMods()
+		end)
+	end
+
+	local selection = { paint = entry.paint, rim = entry.rim, glow = entry.glow }
+	local setLook = preview(body, id, 90, 140)
+	setLook(selection.paint, selection.rim, selection.glow)
+
+	local y = 240
+	local busy = false
+	for _, def in MOD_ROWS do
+		local key = def.key
+		local price = VC.MOD_PRICES[key]
+		local title = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, -110, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = body })
+		local apply = UI.button({ Text = "", TextSize = 13, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y - 6), Size = UDim2.fromOffset(104, 28), Parent = body })
+		local swatchRow = row(body, y + 20, 34)
+		local buttons: { TextButton } = {}
+		local function refreshRow()
+			local current = entry[key]
+			local chosen = selection[key]
+			title.Text = string.format("%s · %s  (now: %s)", def.label, UI.formatCash(price), def.list[current] and def.list[current].name or "?")
+			if chosen == current then
+				apply.Text = "FITTED"
+				apply.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+				apply.AutoButtonColor = false
+			else
+				apply.Text = "APPLY " .. UI.formatCash(price)
+				apply.BackgroundColor3 = colors.accent
+				apply.AutoButtonColor = true
+			end
+			for i, b in buttons do
+				local stroke = b:FindFirstChildOfClass("UIStroke")
+				if stroke then
+					stroke.Transparency = if i == chosen then 0 else 1
+				end
+				b.Text = if i == current then "✓" elseif key == "glow" and i == 1 then "✕" else ""
+			end
+		end
+		for i, option in def.list do
+			local b = swatch(swatchRow, option.color, 30, i)
+			UI.stroke(Color3.new(1, 1, 1), 3, 1).Parent = b
+			b.Activated:Connect(function()
+				selection[key] = i
+				setLook(selection.paint, selection.rim, selection.glow)
+				refreshRow()
+				status.Text = def.label .. ": " .. option.name
+				status.TextColor3 = colors.text
+			end)
+			buttons[i] = b
+		end
+		apply.Activated:Connect(function()
+			if busy or selection[key] == entry[key] then
+				return
+			end
+			busy = true
+			setStatus(status, "Working on it...", true)
+			local ok, message = remote("VehicleMod"):InvokeServer(id, key, selection[key])
+			busy = false
+			if ok then
+				entry[key] = selection[key]
+				setStatus(status, def.list[selection[key]].name .. " fitted!", true)
+			else
+				setStatus(status, message or "Could not apply.", false)
+			end
+			if apply.Parent then
+				refreshRow()
+			end
+		end)
+		refreshRow()
+		y += 72
+	end
+	UI.label({ Text = "Changes are saved and show up on your vehicle right away.", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 16), Parent = body })
+	local first = chooser:FindFirstChildWhichIsA("TextButton")
+	if first then
+		selectForGamepad(first)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Garage phone app
+---------------------------------------------------------------------------
+local function buildGarage(content: ScrollingFrame)
+	local busy = false
+	local function render()
+		Phone.clear(content)
+		local list = sortedOwned()
+		local spawnedId = player:GetAttribute("VehicleSpawned") or ""
+		if not player:GetAttribute("DataLoaded") then
+			UI.label({ Text = "Loading your garage...", TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 30), Parent = content })
+			return
+		end
+		if #list == 0 then
+			local c = Phone.card(content, 150, 1)
+			UI.label({ Text = "NO VEHICLES YET", Font = UI.FONT_BLACK, TextSize = 16, Size = UDim2.new(1, 0, 0, 20), Parent = c })
+			UI.label({ Text = "Budget Wheels sells everything from a $350 bike to supercars. Head over and pick your first ride.", TextSize = 13, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 52), Parent = c })
+			local gps = UI.button({ Text = "📍 GPS TO BUDGET WHEELS", TextSize = 13, BackgroundColor3 = colors.xp, Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 36), Parent = c })
+			gps.Activated:Connect(function()
+				Phone.setGPS("Budget Wheels", VC.LOT_GPS)
+			end)
+			return
+		end
+		UI.label({ Text = "YOUR VEHICLES", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = 0, Parent = content })
+		local owned = ownedVehicles()
+		for i, s in list do
+			local isOut = spawnedId == s.id
+			local c = Phone.card(content, if isOut then 118 else 84, i)
+			local look = owned[s.id]
+			local paintColor = (VC.PAINTS[look.paint] or VC.PAINTS[1]).color
+			UI.new("Frame", { BackgroundColor3 = paintColor, Size = UDim2.fromOffset(34, 34), Parent = c }, { UI.corner(17), UI.stroke(Color3.new(1, 1, 1), 1.5, 0.5) })
+			UI.label({ Text = s.name, Font = UI.FONT_BOLD, TextSize = 15, Position = UDim2.fromOffset(44, 0), Size = UDim2.new(1, -44, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+			UI.label({
+				Text = string.format("%s · %d mph · %d seat%s", s.class, mph(s.topSpeed), s.seats, if s.seats == 1 then "" else "s"),
+				TextSize = 12,
+				TextColor3 = colors.subtext,
+				Position = UDim2.fromOffset(44, 18),
+				Size = UDim2.new(1, -44, 0, 16),
+				Parent = c,
+			})
+			local action = UI.button({
+				Text = if isOut then "PUT AWAY" else "SPAWN",
+				TextSize = 13,
+				BackgroundColor3 = if isOut then Color3.fromRGB(150, 60, 60) else colors.accent,
+				Position = UDim2.fromOffset(0, 44),
+				Size = UDim2.new(1, 0, 0, 30),
+				Parent = c,
+			})
+			action.Activated:Connect(function()
+				if busy then
+					return
+				end
+				busy = true
+				action.Text = "..."
+				if isOut then
+					remote("VehicleStore"):InvokeServer()
+				else
+					remote("VehicleSpawn"):InvokeServer(s.id)
+				end
+				busy = false
+				render()
+			end)
+			if isOut then
+				local locate = UI.button({ Text = "📍 LOCATE", TextSize = 13, BackgroundColor3 = colors.xp, Position = UDim2.fromOffset(0, 78), Size = UDim2.new(1, 0, 0, 28), Parent = c })
+				locate.Activated:Connect(function()
+					local model = myVehicle()
+					if model and model.PrimaryPart then
+						Phone.setGPS("My " .. s.name, model.PrimaryPart.Position)
+					end
+				end)
+			end
+		end
+		local footer = Phone.card(content, 92, #list + 1)
+		UI.label({ Text = "Paint, rims & underglow at the Paint & Mods bay. More rides at Budget Wheels.", TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Size = UDim2.new(1, 0, 0, 32), Parent = footer })
+		local gps = UI.button({ Text = "📍 GPS TO BUDGET WHEELS", TextSize = 12, BackgroundColor3 = colors.panel, Position = UDim2.fromOffset(0, 36), Size = UDim2.new(1, 0, 0, 30), Parent = footer })
+		gps.Activated:Connect(function()
+			Phone.setGPS("Budget Wheels", VC.LOT_GPS)
+		end)
+	end
+	for _, attr in { "VehiclesOwned", "VehicleSpawned", "DataLoaded" } do
+		player:GetAttributeChangedSignal(attr):Connect(function()
+			Phone.refresh("Garage")
+		end)
+	end
+	return render
+end
+
+---------------------------------------------------------------------------
+-- Vehicle visuals (all nearby vehicles)
+---------------------------------------------------------------------------
+type Wheel = { motor: Motor6D, mount: Vector3, steer: boolean, spin: number, drop: number }
+type Tracked = {
+	model: Model,
+	chassis: BasePart,
+	seat: VehicleSeat?,
+	spec: VC.Spec,
+	wheels: { Wheel },
+	heads: { BasePart },
+	tails: { BasePart },
+	lights: { SpotLight },
+	drive: ProximityPrompt?,
+	ride: ProximityPrompt?,
+	params: RaycastParams,
+	lightsOn: boolean?,
+	tailState: string?,
+}
+
+local tracked: { [Model]: Tracked } = {}
+local humanoid: Humanoid? = nil
+
+local function updatePrompts()
+	local seated = humanoid ~= nil and humanoid.SeatPart ~= nil
+	for model, t in tracked do
+		if t.drive then
+			t.drive.Enabled = not seated and model:GetAttribute("Owner") == player.UserId
+		end
+		if t.ride then
+			t.ride.Enabled = not seated
+		end
+	end
+end
+
+local function track(model: Instance)
+	if not model:IsA("Model") or tracked[model] then
+		return
+	end
+	task.spawn(function()
+		local chassis = model:WaitForChild("Chassis", 15)
+		local s = VC.byId[model:GetAttribute("VehicleId") or ""]
+		if not chassis or not chassis:IsA("BasePart") or not s or not model:IsDescendantOf(workspace) then
+			return
+		end
+		-- selene: allow(undefined_variable)
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.RespectCanCollide = true
+		local t: Tracked = {
+			model = model,
+			chassis = chassis,
+			seat = model:FindFirstChild("DriverSeat") :: VehicleSeat?,
+			spec = s,
+			wheels = {},
+			heads = {},
+			tails = {},
+			lights = {},
+			drive = model:FindFirstChild("DrivePrompt", true) :: ProximityPrompt?,
+			ride = model:FindFirstChild("RidePrompt", true) :: ProximityPrompt?,
+			params = params,
+		}
+		local list = characters()
+		table.insert(list, model)
+		params.FilterDescendantsInstances = list
+		for _, d in model:GetDescendants() do
+			if d:IsA("Motor6D") and d.Name == "WheelMotor" then
+				table.insert(t.wheels, { motor = d, mount = d.C0.Position, steer = d:GetAttribute("Steer") == true, spin = 0, drop = s.travel - s.sag })
+			elseif d:IsA("BasePart") and d:GetAttribute("Head") then
+				table.insert(t.heads, d)
+			elseif d:IsA("BasePart") and d:GetAttribute("Tail") then
+				table.insert(t.tails, d)
+			elseif d:IsA("SpotLight") then
+				table.insert(t.lights, d)
+			end
+		end
+		tracked[model] = t
+		updatePrompts()
+	end)
+end
+
+local function isNight(): boolean
+	return Lighting.ClockTime < 6.3 or Lighting.ClockTime > 17.7
+end
+
+local driveSim: VC.Sim? = nil
+local driveSeat: VehicleSeat? = nil
+local driveModel: Model? = nil
+
+local function updateVisuals(dt: number)
+	local camera = workspace.CurrentCamera
+	local camPos = if camera then camera.CFrame.Position else Vector3.zero
+	local night = isNight()
+	for model, t in tracked do
+		local chassis = t.chassis
+		if not chassis.Parent then
+			tracked[model] = nil
+			continue
+		end
+		if (chassis.Position - camPos).Magnitude > 260 then
+			continue
+		end
+		local s = t.spec
+		local cf = chassis.CFrame
+		local up = cf.UpVector
+		local vf = chassis.AssemblyLinearVelocity:Dot(cf.LookVector)
+		local seat = t.seat
+		local steer = 0
+		local throttle = 0
+		if model == driveModel and driveSim then
+			steer = driveSim.steer
+			throttle = if driveSeat then driveSeat.ThrottleFloat else 0
+		elseif seat and seat.Occupant then
+			steer = seat.SteerFloat
+			throttle = seat.ThrottleFloat
+		end
+
+		-- wheels: suspension drop, steering and spin
+		local rest = s.travel - s.sag
+		local r = s.wheelRadius
+		for _, w in t.wheels do
+			local mount = cf:PointToWorldSpace(w.mount + Vector3.new(0, rest, 0))
+			local hit = workspace:Raycast(mount, -up * (s.travel + r), t.params)
+			local drop = if hit then math.clamp(hit.Distance - r, 0, s.travel) else s.travel
+			w.drop += (drop - w.drop) * math.min(1, dt * 25)
+			w.spin = (w.spin - vf / r * dt) % (math.pi * 2)
+			local steerAngle = if w.steer then -steer * s.steerAngle * 0.8 else 0
+			w.motor.Transform = CFrame.new(0, rest - w.drop, 0) * CFrame.Angles(0, steerAngle, 0) * CFrame.Angles(w.spin, 0, 0)
+		end
+
+		-- headlights: automatic at night, or forced on by the driver (H)
+		local lightsOn = night or model:GetAttribute("Headlights") == true
+		if lightsOn ~= t.lightsOn then
+			t.lightsOn = lightsOn
+			for _, p in t.heads do
+				p.Material = if lightsOn then Enum.Material.Neon else Enum.Material.SmoothPlastic
+			end
+			for _, light in t.lights do
+				light.Enabled = lightsOn
+			end
+		end
+		local braking = (throttle < -0.1 and vf > 1) or (throttle > 0.1 and vf < -1)
+		local tailState = if braking then "brake" elseif lightsOn then "on" else "off"
+		if tailState ~= t.tailState then
+			t.tailState = tailState
+			for _, p in t.tails do
+				p.Material = if tailState == "off" then Enum.Material.SmoothPlastic else Enum.Material.Neon
+				p.Color = if tailState == "brake" then Color3.fromRGB(255, 30, 30) elseif tailState == "on" then Color3.fromRGB(170, 20, 20) else Color3.fromRGB(120, 20, 22)
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Driving
+---------------------------------------------------------------------------
+local speedo: Frame
+local speedLabel: TextLabel
+local gearLabel: TextLabel
+local nameLabel: TextLabel
+local lightsLabel: TextLabel
+
+local function onLightsAction(_, state: Enum.UserInputState)
+	if state == Enum.UserInputState.Begin then
+		remote("VehicleLights"):FireServer()
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function stopDriving()
+	if driveSim then
+		pcall(VC.idle, driveSim)
+	end
+	driveSim = nil
+	driveSeat = nil
+	driveModel = nil
+	speedo.Visible = false
+	ContextActionService:UnbindAction(LIGHTS_ACTION)
+end
+
+local function startDriving(model: Model, seat: VehicleSeat)
+	local sim = VC.newSim(model)
+	if not sim then
+		return
+	end
+	VC.setIgnore(sim, characters())
+	driveSim = sim
+	driveSeat = seat
+	driveModel = model
+	nameLabel.Text = sim.spec.name:upper()
+	speedo.Visible = true
+	ContextActionService:BindAction(LIGHTS_ACTION, onLightsAction, true, Enum.KeyCode.H, Enum.KeyCode.ButtonY)
+	ContextActionService:SetTitle(LIGHTS_ACTION, "Lights")
+	ContextActionService:SetPosition(LIGHTS_ACTION, UDim2.new(1, -180, 1, -130))
+end
+
+-- After getting out, stand next to the vehicle instead of on top of it.
+local function placeOutside(seat: BasePart)
+	local model = seat.Parent
+	local chassis = model and model:IsA("Model") and model.PrimaryPart
+	local character = player.Character
+	if not chassis or not chassis.Parent or not character or not humanoid or humanoid.Health <= 0 then
+		return
+	end
+	local root = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root or (root.Position - chassis.Position).Magnitude > 25 then
+		return
+	end
+	local cf = chassis.CFrame
+	local localSeat = cf:PointToObjectSpace(seat.Position)
+	local sides = if localSeat.X > 0.1 then { 1, -1 } else { -1, 1 }
+	-- selene: allow(undefined_variable)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = characters()
+	table.insert(ignore, model :: Instance)
+	rayParams.FilterDescendantsInstances = ignore
+	rayParams.RespectCanCollide = true
+	-- selene: allow(undefined_variable)
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances = ignore
+	overlap.RespectCanCollide = true
+	local flatLook = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+	local yaw = if flatLook.Magnitude > 0.1 then CFrame.lookAt(Vector3.zero, flatLook) else CFrame.identity
+	local candidates = {}
+	for _, side in sides do
+		table.insert(candidates, Vector3.new(side * ((chassis :: BasePart).Size.X / 2 + 2.2), 0, localSeat.Z))
+	end
+	table.insert(candidates, Vector3.new(0, 0, (chassis :: BasePart).Size.Z / 2 + 2.5))
+	for _, offset in candidates do
+		local spot = cf:PointToWorldSpace(offset)
+		local hit = workspace:Raycast(spot + Vector3.new(0, 8, 0), Vector3.new(0, -20, 0), rayParams)
+		if hit then
+			local stand = hit.Position + Vector3.new(0, 3, 0)
+			if #workspace:GetPartBoundsInBox(CFrame.new(stand + Vector3.new(0, 0.3, 0)), Vector3.new(2, 4.4, 2), overlap) == 0 then
+				character:PivotTo(yaw + stand)
+				return
+			end
+		end
+	end
+end
+
+local function hookCharacter(character: Model)
+	humanoid = character:WaitForChild("Humanoid", 10) :: Humanoid?
+	if not humanoid then
+		return
+	end
+	local hum = humanoid :: Humanoid
+	local lastSeat: BasePart? = nil
+	hum.Seated:Connect(function(active: boolean, seatPart: BasePart?)
+		if active and seatPart then
+			lastSeat = seatPart
+			local model = seatPart.Parent
+			if seatPart:IsA("VehicleSeat") and model and model:IsA("Model") and CollectionService:HasTag(model, TAG) and model:GetAttribute("Owner") == player.UserId then
+				startDriving(model, seatPart)
+			end
+		else
+			stopDriving()
+			local seat = lastSeat
+			lastSeat = nil
+			if seat then
+				task.delay(0.05, placeOutside, seat)
+			end
+		end
+		updatePrompts()
+	end)
+	hum.Died:Connect(stopDriving)
+	updatePrompts()
+end
+
+local function buildSpeedo()
+	speedo = UI.new("Frame", {
+		Name = "Speedometer",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.12,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -48),
+		Size = UDim2.fromOffset(220, 66),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(14), UI.padding(8), UI.stroke(colors.accent, 1.5, 0.4) })
+	nameLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, -60, 0, 12), Parent = speedo })
+	speedLabel = UI.label({ Text = "0", Font = UI.FONT_BLACK, TextSize = 34, Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(78, 36), TextXAlignment = Enum.TextXAlignment.Right, Parent = speedo })
+	UI.label({ Text = "MPH", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(82, 28), Size = UDim2.fromOffset(40, 14), Parent = speedo })
+	gearLabel = UI.new("TextLabel", {
+		Text = "N",
+		Font = UI.FONT_BLACK,
+		TextSize = 18,
+		TextColor3 = Color3.new(1, 1, 1),
+		BackgroundColor3 = colors.panelLight,
+		Position = UDim2.fromOffset(126, 16),
+		Size = UDim2.fromOffset(28, 28),
+		Parent = speedo,
+	}, { UI.corner(8) })
+	lightsLabel = UI.label({ Text = "💡", TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(158, 16), Size = UDim2.fromOffset(28, 28), Parent = speedo })
+	local exit = UI.button({
+		Text = "EXIT",
+		TextSize = 11,
+		BackgroundColor3 = Color3.fromRGB(150, 60, 60),
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, -2),
+		Size = UDim2.fromOffset(44, 22),
+		Parent = speedo,
+	})
+	exit.Activated:Connect(function()
+		if humanoid and humanoid.SeatPart then
+			humanoid.Jump = true
+		end
+	end)
+	if UserInputService.KeyboardEnabled then
+		UI.label({
+			Text = "WASD drive · H lights · Space exit",
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 1, 6),
+			Size = UDim2.new(1, 40, 0, 12),
+			TextStrokeTransparency = 0.6,
+			Parent = speedo,
+		})
+	end
+
+	RunService.RenderStepped:Connect(function()
+		local model = driveModel
+		local seat = driveSeat
+		if not speedo.Visible or not model or not seat then
+			return
+		end
+		local chassis = model.PrimaryPart
+		if not chassis then
+			return
+		end
+		local vf = chassis.AssemblyLinearVelocity:Dot(chassis.CFrame.LookVector)
+		speedLabel.Text = tostring(mph(vf))
+		local throttle = seat.ThrottleFloat
+		gearLabel.Text = if vf < -1 or (throttle < -0.1 and vf < 1) then "R" elseif math.abs(vf) < 0.5 and math.abs(throttle) < 0.1 then "N" else "D"
+		gearLabel.BackgroundColor3 = if gearLabel.Text == "R" then colors.danger elseif gearLabel.Text == "D" then Color3.fromRGB(40, 140, 70) else colors.panelLight
+		local on = isNight() or model:GetAttribute("Headlights") == true
+		lightsLabel.TextTransparency = if on then 0 else 0.7
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Vehicles.start()
+	Phone.addApp({ id = "Garage", label = "Garage", icon = "🚗", color = Color3.fromRGB(40, 140, 220) }, buildGarage)
+
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindVehicles",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 6,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	panel = UI.new("Frame", {
+		Name = "VehiclePanel",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.04,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(380, 560),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(18), UI.padding(12), UI.stroke(colors.accent, 1.5, 0.3) })
+	panelScale = UI.new("UIScale", { Parent = panel })
+	buildSpeedo()
+
+	task.spawn(function()
+		remote("VehicleUI").OnClientEvent:Connect(function(mode: any, id: any)
+			if mode == "Shop" and type(id) == "string" then
+				openShop(id)
+			elseif mode == "Mods" then
+				openMods()
+			end
+		end)
+	end)
+
+	-- close the panel when walking away
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			if panel.Visible and panelAnchor then
+				local character = player.Character
+				local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				local range = if panelMode == "Mods" then VC.MODS_RANGE else VC.SHOP_RANGE
+				if not root or (root.Position - panelAnchor).Magnitude > range then
+					closePanel()
+				end
+			end
+		end
+	end)
+
+	CollectionService:GetInstanceAddedSignal(TAG):Connect(track)
+	CollectionService:GetInstanceRemovedSignal(TAG):Connect(function(model)
+		if model:IsA("Model") then
+			tracked[model] = nil
+		end
+	end)
+	for _, model in CollectionService:GetTagged(TAG) do
+		track(model)
+	end
+
+	-- keep raycasts from hitting characters
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			local list = characters()
+			for model, t in tracked do
+				local filter = table.clone(list)
+				table.insert(filter, model)
+				t.params.FilterDescendantsInstances = filter
+			end
+			if driveSim then
+				VC.setIgnore(driveSim, list)
+			end
+		end
+	end)
+
+	RunService.PreSimulation:Connect(function(dt: number)
+		local sim, seat = driveSim, driveSeat
+		if sim and seat then
+			if seat.Parent and humanoid and humanoid.SeatPart == seat and sim.chassis.Parent then
+				VC.step(sim, dt, seat.ThrottleFloat, seat.SteerFloat, true)
+			else
+				stopDriving()
+			end
+		end
+		updateVisuals(dt)
+	end)
+
+	player.CharacterAdded:Connect(function(character)
+		stopDriving()
+		task.spawn(hookCharacter, character)
+	end)
+	if player.Character then
+		task.spawn(hookCharacter, player.Character)
+	end
+end
+
+return Vehicles
 ]=====])
 print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')

@@ -5,14 +5,32 @@
     "ReplicatedStorage": {
       "CityGrind": {
         "$className": "Folder",
+        "ApartmentsConfig": {
+          "$path": "src/shared/ApartmentsConfig.luau"
+        },
         "Config": {
           "$path": "src/shared/Config.luau"
+        },
+        "GymConfig": {
+          "$path": "src/shared/GymConfig.luau"
+        },
+        "JobsConfig": {
+          "$path": "src/shared/JobsConfig.luau"
+        },
+        "ShopsConfig": {
+          "$path": "src/shared/ShopsConfig.luau"
+        },
+        "VehiclesConfig": {
+          "$path": "src/shared/VehiclesConfig.luau"
         }
       }
     },
     "ServerScriptService": {
       "CityGrindServer": {
         "$path": "src/server/Main.server.luau",
+        "Apartments": {
+          "$path": "src/server/Apartments.luau"
+        },
         "Basketball": {
           "$path": "src/server/Basketball.luau"
         },
@@ -22,6 +40,12 @@
         "CourtGames": {
           "$path": "src/server/CourtGames.luau"
         },
+        "Gym": {
+          "$path": "src/server/Gym.luau"
+        },
+        "Jobs": {
+          "$path": "src/server/Jobs.luau"
+        },
         "Net": {
           "$path": "src/server/Net.luau"
         },
@@ -30,6 +54,9 @@
         },
         "PlayerData": {
           "$path": "src/server/PlayerData.luau"
+        },
+        "Vehicles": {
+          "$path": "src/server/Vehicles.luau"
         }
       }
     },
@@ -40,11 +67,20 @@
       "StarterPlayerScripts": {
         "CityGrindClient": {
           "$path": "src/client/Client.client.luau",
+          "Apartments": {
+            "$path": "src/client/Apartments.luau"
+          },
           "Basketball": {
             "$path": "src/client/Basketball.luau"
           },
+          "Gym": {
+            "$path": "src/client/Gym.luau"
+          },
           "HUD": {
             "$path": "src/client/HUD.luau"
+          },
+          "Jobs": {
+            "$path": "src/client/Jobs.luau"
           },
           "Movement": {
             "$path": "src/client/Movement.luau"
@@ -54,6 +90,9 @@
           },
           "UI": {
             "$path": "src/client/UI.luau"
+          },
+          "Vehicles": {
+            "$path": "src/client/Vehicles.luau"
           }
         }
       }
