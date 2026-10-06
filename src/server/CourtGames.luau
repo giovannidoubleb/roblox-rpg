@@ -297,6 +297,13 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 end
 
 local function updateIdle(court: Court)
+	-- A city event (3-Point Contest) has the court; no pickup games until it ends.
+	if court.model:GetAttribute("Event") then
+		court.state = "Idle"
+		setScoreboard(court, court.model:GetAttribute("EventName") or "CITY EVENT")
+		publish(court)
+		return
+	end
 	local home, away = {}, {}
 	for _, player in Players:GetPlayers() do
 		local r = rootOf(player)
@@ -571,6 +578,10 @@ local function setupCourt(model: Model)
 	local prompt = rack and rack:FindFirstChild("GrabBall")
 	if prompt and prompt:IsA("ProximityPrompt") then
 		prompt.Triggered:Connect(function(player)
+			if model:GetAttribute("Event") then
+				PlayerData.onNotify:Fire(player, "EVENT IN PROGRESS", "The rack is closed during the contest.")
+				return
+			end
 			if playerGame[player] or court.state == "Playing" then
 				PlayerData.onNotify:Fire(player, "GAME IN PROGRESS", "Free play balls come back when the game ends.")
 				return
