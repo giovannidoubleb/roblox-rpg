@@ -5,9 +5,11 @@
 --     app (progress per set, hints by district, secrets found, weather).
 --   * Weather: renders the server's Workspace attribute "Weather" with local
 --     Atmosphere / Clouds / ColorCorrection tweaks (never touches ClockTime, so
---     the day/night cycle keeps working), a rain emitter that follows the camera
+--     the day/night cycle keeps working; the base post-processing — bloom, sun
+--     rays, day/district grading, Atmosphere Color/Decay — is owned by
+--     client/Effects.luau, this layers weather on top), a rain emitter that follows the camera
 --     (off under roofs and indoors) and lightning flashes in storms. Rain density
---     follows Roblox's own graphics quality setting. A small chip shows the weather.
+--     follows the Graphics setting (or Roblox's quality slider on Auto). A small chip shows the weather.
 --   * Pedestrians: procedural leg/arm swing for nearby "CityNPC" rigs.
 
 local CollectionService = game:GetService("CollectionService")
@@ -18,6 +20,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local WC = require(shared:WaitForChild("WorldConfig"))
@@ -217,8 +220,12 @@ local function weatherId(): string
 	return if type(id) == "string" and LOOKS[id] then id else "Clear"
 end
 
--- 0.25..1 from Roblox's own graphics quality slider (Automatic = full).
+-- 0.25..1 from the game's Graphics setting, else Roblox's own quality slider (Automatic = full).
 local function qualityScale(): number
+	local gfx = player:GetAttribute("Graphics")
+	if gfx == "Low" or gfx == "Medium" or gfx == "High" then
+		return if gfx == "Low" then 0.3 elseif gfx == "Medium" then 0.65 else 1
+	end
 	local ok, level = pcall(function()
 		return UserSettings():GetService("UserGameSettings").SavedQualityLevel.Value
 	end)
@@ -597,6 +604,7 @@ function World.start()
 		Size = UDim2.fromOffset(130, 30),
 		Parent = gui,
 	}, { UI.corner(12) })
+	HUD.slot("topRight", chip, 5) -- stacks under the stats card
 	updateChip()
 
 	startWeather()

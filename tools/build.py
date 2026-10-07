@@ -58,6 +58,8 @@ def item_xml(cls, name, src, children, indent):
 def build_rbxlx():
     parts = ['<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" version="4">']
     parts.append(f'  <Item class="Workspace" referent="{next_ref()}"><Properties><string name="Name">Workspace</string></Properties></Item>')
+    # Future lighting (Enum.Technology.Future = 3); scripts can't set this at runtime.
+    parts.append(f'  <Item class="Lighting" referent="{next_ref()}"><Properties><string name="Name">Lighting</string><token name="Technology">3</token></Properties></Item>')
     for service, children in TREE:
         extra = '<bool name="EnableMouseLockOption">false</bool>' if service == "StarterPlayer" else ""
         parts.append(f'  <Item class="{service}" referent="{next_ref()}"><Properties><string name="Name">{service}</string>{extra}</Properties>')
@@ -99,6 +101,7 @@ def build_installer():
     lines.append(f"local client = put(SPS, 'LocalScript', 'CityGrindClient', {lit('client/Client.client.luau')})")
     for n, f in CLIENT:
         lines.append(f"put(client, 'ModuleScript', '{n}', {lit(f)})")
+    lines.append("pcall(function() game:GetService('Lighting').Technology = Enum.Technology.Future end)")
     lines.append("print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')")
     return "\n".join(lines) + "\n"
 
