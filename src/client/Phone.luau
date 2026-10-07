@@ -449,37 +449,41 @@ local function buildMap()
 		if not city then
 			return
 		end
-		-- redraw only when the city changed (e.g. districts finished streaming in)
-		local descendants = city:GetDescendants()
-		if #descendants == drawnParts then
+		-- collect what the map draws; redraw only when that set changed (e.g. districts
+		-- finished streaming in), not when NPCs, vehicles or speech bubbles come and go
+		local shapes: { { part: BasePart, color: Color3, z: number } } = {}
+		for _, d in city:GetDescendants() do
+			if d:IsA("BasePart") and d.Position.Y < 400 then
+				local mapColor = d:GetAttribute("MapColor")
+				if typeof(mapColor) == "Color3" then
+					local layer = d:GetAttribute("MapLayer")
+					table.insert(shapes, { part = d, color = mapColor, z = if type(layer) == "number" then layer else 2 })
+				elseif d.Name == "Ground" and d.Parent and d.Parent.Name == "Streets" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(86, 140, 70), z = 1 })
+				elseif d.Name == "MainRoad" or d.Name == "CrossRoad" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(50, 50, 55), z = 2 })
+				elseif d.Name == "Sidewalk" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(170, 170, 165), z = 2 })
+				elseif d.Name == "Body" and d.Parent and d.Parent.Parent and d.Parent.Parent.Name == "Buildings" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(200, 190, 175), z = 3 })
+				elseif d.Name == "CourtFloor" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(40, 90, 150), z = 4 })
+				elseif d.Name == "Lot" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(60, 60, 66), z = 2 })
+				end
+			end
+		end
+		if #shapes == drawnParts then
 			return
 		end
-		drawnParts = #descendants
+		drawnParts = #shapes
 		for _, child in world:GetChildren() do
 			if child.Name == "Shape" then
 				child:Destroy()
 			end
 		end
-		for _, d in descendants do
-			if d:IsA("BasePart") and d.Position.Y < 400 then
-				local mapColor = d:GetAttribute("MapColor")
-				if typeof(mapColor) == "Color3" then
-					local layer = d:GetAttribute("MapLayer")
-					rect(d, mapColor, if type(layer) == "number" then layer else 2)
-				elseif d.Name == "Ground" and d.Parent and d.Parent.Name == "Streets" then
-					rect(d, Color3.fromRGB(86, 140, 70), 1)
-				elseif d.Name == "MainRoad" or d.Name == "CrossRoad" then
-					rect(d, Color3.fromRGB(50, 50, 55), 2)
-				elseif d.Name == "Sidewalk" then
-					rect(d, Color3.fromRGB(170, 170, 165), 2)
-				elseif d.Name == "Body" and d.Parent and d.Parent.Parent and d.Parent.Parent.Name == "Buildings" then
-					rect(d, Color3.fromRGB(200, 190, 175), 3)
-				elseif d.Name == "CourtFloor" then
-					rect(d, Color3.fromRGB(40, 90, 150), 4)
-				elseif d.Name == "Lot" then
-					rect(d, Color3.fromRGB(60, 60, 66), 2)
-				end
-			end
+		for _, sh in shapes do
+			rect(sh.part, sh.color, sh.z)
 		end
 	end
 

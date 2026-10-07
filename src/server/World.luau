@@ -822,6 +822,8 @@ local function spawnNPCs(rng: Random)
 		hum.WalkSpeed = rng:NextNumber(6.5, 9)
 		hum.UseJumpPower = true
 		hum.JumpPower = 30
+		-- never sit down on benches / seats along the sidewalk (would strand the NPC)
+		hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
 		paint(model, rng)
 		local shoulder = model:FindFirstChild("RightShoulder", true)
 		local npc: NPC = {

@@ -2088,6 +2088,10 @@ function Districts.build(cityModel: Model)
 	local well = old and old:FindFirstChild("Stairwell")
 	local hood = DC.station("Neighborhood")
 	if well and hood then
+		local oldPrompt = well:FindFirstChild("TakeSubway")
+		if oldPrompt then
+			oldPrompt:Destroy() -- left over in a saved City; replaced by a wired one
+		end
 		stationPrompts.Neighborhood = addPrompt(well, "TakeSubway", "Take Subway", "Subway · " .. hood.name, 10)
 		local points = city:FindFirstChild("MapPoints")
 		local point = points and points:FindFirstChild("Subway Station")

@@ -39,7 +39,14 @@ local city = CityBuilder.build()
 
 -- The rest of the city (Downtown, Beach, Industrial, Old Town, Luxury, subway).
 local districtsModule = script:FindFirstChild("Districts")
-if districtsModule and not city.city:FindFirstChild("Districts") then
+if districtsModule then
+	-- A City saved into the place (the shipped rbxlx never has one) may carry an old
+	-- Districts folder. Its parts have no runtime wiring (subway prompts, ferris wheel,
+	-- leaderboard, District attribute loop), so rebuild the districts from scratch.
+	local stale = city.city:FindFirstChild("Districts")
+	if stale then
+		stale:Destroy()
+	end
 	local ok, err = pcall(function()
 		require(districtsModule).build(city.city)
 	end)

@@ -811,10 +811,16 @@ local function findSpot(player: Player, s: Spec): CFrame?
 				continue
 			end
 			local hit = workspace:Raycast(Vector3.new(p.X, 80, p.Z), Vector3.new(0, -120, 0), rayParams)
-			if not hit or hit.Position.Y > 1.2 or hit.Position.Y < -1 then
-				continue -- roof, interior or nothing: only ground level counts
+			if not hit then
+				continue
 			end
 			local road = ROAD_NAMES[hit.Instance.Name]
+			-- ground level only (no roofs / interiors), except raised roads and the
+			-- Luxury Hills hilltop when the player is standing at that height
+			local raised = (road ~= nil or hit.Instance.Name == "HillTop") and math.abs(hit.Position.Y - (origin.Y - 3)) < 4
+			if (hit.Position.Y > 1.2 or hit.Position.Y < -1) and not raised then
+				continue
+			end
 			local dir = lookFlat
 			if road == "x" then
 				dir = Vector3.new(if lookFlat.X < 0 then -1 else 1, 0, 0)
