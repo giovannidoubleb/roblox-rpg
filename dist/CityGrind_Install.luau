@@ -1068,6 +1068,7 @@ CityTokConfig.VIRAL_AT = 60
 CityTokConfig.TRENDING_REWARD = { rep = 25, fame = 40 }
 CityTokConfig.VIRAL_REWARD = { rep = 75, fame = 120 }
 CityTokConfig.DAILY_REP_CAP = 150 -- reputation CityTok can give one player per day
+CityTokConfig.DAILY_FAME_CAP = 480 -- [Security] fame CityTok can give one player per day (alt rings re-posting clips)
 CityTokConfig.MIN_WATCH_FOR_VIEW = 1.5 -- seconds a viewer must have had the post open
 
 -- Trending score = engagement / (age in hours + 2) ^ 1.5
@@ -1273,6 +1274,7 @@ Config.Game = {
 	LOSS_CASH = 20,
 	LOSS_XP = 30,
 	LOSS_REP = 3,
+	REWARDED_PER_HOUR = 12, -- [Security] pickup games paying cash/rep per rolling hour (a real game takes 3-6 min)
 }
 
 return Config
@@ -8262,7 +8264,9 @@ local function onCheckpoint(player: Player, index: number)
 	end
 
 	local previous = if expected == 1 then #route else expected - 1
-	local minTime = legDistance(previous, expected) / MAX_AVG_SPEED
+	-- a gate counts from ~8 studs out (trigger + body), so a leg can be cut short
+	-- by that much at each end; without the margin a tight corner was a false DQ
+	local minTime = math.max(0, legDistance(previous, expected) - 16) / MAX_AVG_SPEED
 	if now - run.legStartedAt < minTime then
 		runs[player] = nil
 		setRunAttributes(player)
@@ -8323,6 +8327,8 @@ Basketball.announce = function(players: { Player }, text: string)
 	end
 end
 Basketball.dunkJump = function(player: Player, rim: Vector3)
+	-- the dunk launch is a fast scripted leap toward the rim; let movement checks skip it
+	require(script:WaitForChild("AntiCheat")).allowTeleport(player, 2)
 	BallFx:FireClient(player, "Dunk", rim)
 end
 Basketball.onTrain = function(player: Player, statName: string, amount: number)
@@ -8347,7 +8353,7 @@ CourtGames.start()
 ---------------------------------------------------------------------------
 -- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
+for _, name in { "AntiCheat", "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -8418,6 +8424,348 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 end)
+]=====])
+put(server, 'ModuleScript', 'AntiCheat', [=====[
+-- CITY GRIND: lightweight movement sanity (Phase 9 anti-exploit).
+-- Every player's client owns its own character's physics, so the server cannot
+-- trust where a character is. Four times a second this module checks each
+-- character for:
+--   * speed: a token bucket of allowed horizontal distance (sprint/slide speed
+--     plus slack, banked for a few seconds so lag bursts never trip it);
+--   * fly: sustained hovering/rising far above the ground;
+--   * noclip: the root sitting inside an anchored, collidable part.
+-- Violations add to a score that decays over time; past a threshold the
+-- character is rubber-banded to its last good position. Nobody is ever kicked.
+-- Exempt: seated (cars, ferris wheel, benches), driving, Gym exercises,
+-- PlatformStand / anchored (emotes, ragdoll), dead, story cinematic, and any
+-- window opened by AntiCheat.allowTeleport (server teleports, dunk jumps).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+
+local AntiCheat = {}
+
+local TICK = 0.25
+-- Fastest legit on-foot speed (a slide) with 20% slack; nothing in the game
+-- raises WalkSpeed above Config.SLIDE_SPEED.
+local FOOT_SPEED = math.max(Config.SLIDE_SPEED, Config.SPRINT_SPEED) * 1.2
+local BUCKET_SECONDS = 4 -- how long a lag burst may bank distance
+local BUCKET_SLACK = 24 -- studs (step-ups, seat dismount pops, small pushes)
+local BUCKET_CAP = FOOT_SPEED * BUCKET_SECONDS + BUCKET_SLACK
+local HOVER_HEIGHT = 11 -- studs from root to ground before "airborne" (a normal jump peaks ~9.5)
+local HOVER_LIMIT = 1.5 -- seconds airborne without actually falling
+local SCORE_DECAY = 0.6 -- per second
+local SCORE_LIMIT = 4
+local EXEMPT_RESET_GRACE = 2 -- seconds after leaving an exempt state (car momentum, seat pop)
+
+type State = {
+	character: Model?,
+	lastPos: Vector3?,
+	lastAt: number,
+	lastGood: CFrame?,
+	bucket: number,
+	hover: number,
+	inside: number,
+	score: number,
+	graceUntil: number,
+	warned: { [string]: boolean },
+}
+
+local states: { [Player]: State } = {}
+
+local function newState(): State
+	return {
+		character = nil,
+		lastPos = nil,
+		lastAt = 0,
+		lastGood = nil,
+		bucket = BUCKET_CAP,
+		hover = 0,
+		inside = 0,
+		score = 0,
+		graceUntil = os.clock() + 3,
+		warned = {},
+	}
+end
+
+local function stateOf(player: Player): State
+	local s = states[player]
+	if not s then
+		s = newState()
+		states[player] = s
+	end
+	return s
+end
+
+-- Lets the player's character move freely for `seconds` (server-side teleports,
+-- scripted launches). Call it BEFORE moving the character.
+function AntiCheat.allowTeleport(player: Player, seconds: number?)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return
+	end
+	local s = stateOf(player)
+	s.graceUntil = math.max(s.graceUntil, os.clock() + (seconds or 2))
+	s.lastPos = nil
+	s.bucket = BUCKET_CAP
+	s.hover = 0
+	s.inside = 0
+end
+
+-- For reward checks that read a character's position (claiming a cache, a
+-- pickup): false while the player is flagged, or when the character has moved
+-- further since the last sample than its speed budget allows (a teleport the
+-- 4 Hz loop has not caught yet). True for players the checks do not cover.
+function AntiCheat.positionOk(player: Player): boolean
+	local s = states[player]
+	if not s or not s.lastPos then
+		return true
+	end
+	if s.score >= SCORE_LIMIT * 0.5 then
+		return false
+	end
+	local now = os.clock()
+	if now < s.graceUntil then
+		return true
+	end
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return true
+	end
+	local pos, last = root.Position, s.lastPos :: Vector3
+	local flat = Vector3.new(pos.X - last.X, 0, pos.Z - last.Z).Magnitude
+	return flat <= math.max(0, s.bucket) + FOOT_SPEED * (now - s.lastAt) + BUCKET_SLACK
+end
+
+local function warnOnce(player: Player, s: State, kind: string, detail: string)
+	if not s.warned[kind] then
+		s.warned[kind] = true
+		warn(string.format("[Security] AntiCheat %s: %s (%s)", kind, player.Name, detail))
+	end
+end
+
+local function attrSet(player: Player, name: string): boolean
+	local v = player:GetAttribute(name)
+	return v ~= nil and v ~= false and v ~= ""
+end
+
+-- True while something legit (and server-driven) moves or holds the character.
+local function exempt(player: Player, humanoid: Humanoid, root: BasePart): boolean
+	if humanoid.Health <= 0 or humanoid.SeatPart ~= nil or humanoid.Sit or humanoid.PlatformStand or root.Anchored then
+		return true
+	end
+	if attrSet(player, "Driving") or attrSet(player, "Training") or attrSet(player, "StoryCinematic") then
+		return true
+	end
+	local st = humanoid:GetState()
+	if st == Enum.HumanoidStateType.Seated or st == Enum.HumanoidStateType.Ragdoll or st == Enum.HumanoidStateType.FallingDown
+		or st == Enum.HumanoidStateType.Physics or st == Enum.HumanoidStateType.Dead then
+		return true
+	end
+	-- welded ONTO something outside the character (a seat weld has the seat as
+	-- Part0). Things the player carries (a held ball, a plate) weld the other way
+	-- round and are massless, so holding a ball never exempts anyone.
+	for _, j in root:GetJoints() do
+		if j:IsA("JointInstance") or j:IsA("WeldConstraint") then
+			local other = (j :: any).Part0
+			if (j :: any).Part1 == root and other and other:IsA("BasePart") and not other.Massless
+				and not other:IsDescendantOf(root.Parent :: Instance) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local overlap = OverlapParams.new()
+overlap.FilterType = Enum.RaycastFilterType.Exclude
+overlap.MaxParts = 24
+local ray = RaycastParams.new()
+ray.FilterType = Enum.RaycastFilterType.Exclude
+ray.RespectCanCollide = true
+ray.IgnoreWater = false
+
+local function characterList(): { Instance }
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	return list
+end
+
+-- Something unanchored moving fast right next to the player (a car bumping
+-- them, the roof of a moving car) can legitimately carry or fling them.
+local function nearMovingAssembly(character: Model, pos: Vector3): boolean
+	overlap.FilterDescendantsInstances = { character }
+	for _, part in workspace:GetPartBoundsInRadius(pos, 14, overlap) do
+		if not part.Anchored and part.AssemblyLinearVelocity.Magnitude > 15 then
+			return true
+		end
+	end
+	return false
+end
+
+-- The root's centre is inside an anchored part it should collide with.
+local function insideSolid(chars: { Instance }, root: BasePart): boolean
+	overlap.FilterDescendantsInstances = chars
+	for _, part in workspace:GetPartBoundsInBox(root.CFrame, Vector3.new(0.4, 0.8, 0.4), overlap) do
+		if part.Anchored and part.CanCollide and part.Transparency < 1.01 and root:CanCollideWith(part) then
+			local size = part.Size
+			if size.X >= 1 and size.Y >= 1 and size.Z >= 1 and (part:IsA("Part") and part.Shape == Enum.PartType.Block) then
+				-- block parts only: their bounding box is their real shape
+				local localPos = part.CFrame:PointToObjectSpace(root.Position)
+				if math.abs(localPos.X) < size.X / 2 - 0.1 and math.abs(localPos.Y) < size.Y / 2 - 0.1 and math.abs(localPos.Z) < size.Z / 2 - 0.1 then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function rubberBand(player: Player, s: State, character: Model, root: BasePart, why: string)
+	warnOnce(player, s, why, string.format("score %.1f", s.score))
+	s.score = 1
+	s.bucket = BUCKET_CAP * 0.5
+	s.hover = 0
+	s.inside = 0
+	local target = s.lastGood
+	if target then
+		root.AssemblyLinearVelocity = Vector3.zero
+		character:PivotTo(target)
+		s.lastPos = target.Position
+	else
+		s.lastPos = root.Position
+	end
+end
+
+local function check(player: Player, s: State, dt: number, now: number, chars: { Instance })
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not character or not humanoid or not root or not root:IsA("BasePart") then
+		s.lastPos = nil
+		return
+	end
+	if s.character ~= character then
+		-- new spawn: start clean
+		s.character = character
+		s.lastGood = nil
+		s.lastPos = nil
+		s.graceUntil = math.max(s.graceUntil, now + 3)
+	end
+	s.score = math.max(0, s.score - SCORE_DECAY * dt)
+	local pos = root.Position
+	s.lastAt = now
+
+	if now < s.graceUntil or exempt(player, humanoid, root) then
+		if now >= s.graceUntil then
+			s.graceUntil = now + EXEMPT_RESET_GRACE
+		end
+		s.lastPos = pos
+		s.bucket = BUCKET_CAP
+		s.hover = 0
+		s.inside = 0
+		return
+	end
+
+	local last = s.lastPos
+	s.lastPos = pos
+	if not last then
+		return
+	end
+
+	-- 1) horizontal speed (token bucket)
+	s.bucket = math.min(BUCKET_CAP, s.bucket + FOOT_SPEED * dt)
+	local flat = Vector3.new(pos.X - last.X, 0, pos.Z - last.Z).Magnitude
+	s.bucket -= flat
+	local speedBad = false
+	if s.bucket < 0 then
+		if nearMovingAssembly(character, pos) then
+			s.bucket = BUCKET_CAP * 0.5
+			s.graceUntil = now + EXEMPT_RESET_GRACE
+		else
+			s.score += 2 + (-s.bucket) / 20
+			s.bucket = 0
+			speedBad = true
+		end
+	end
+
+	-- 2) fly: airborne high above the ground and not falling
+	-- a 3x3 block cast so standing on a ledge with the root past the edge still counts
+	ray.FilterDescendantsInstances = chars
+	local grounded = workspace:Blockcast(CFrame.new(pos), Vector3.new(3, 1, 3), Vector3.new(0, -HOVER_HEIGHT, 0), ray) ~= nil
+	local flyBad = false
+	if not grounded and pos.Y - last.Y > -2 then
+		s.hover += dt
+		if s.hover > HOVER_LIMIT then
+			if nearMovingAssembly(character, pos) then
+				s.hover = 0
+			else
+				s.score += 1.25
+				flyBad = true
+			end
+		end
+	else
+		s.hover = 0
+	end
+
+	-- 3) noclip: centre of the root inside solid anchored geometry
+	local noclipBad = false
+	-- (skipped in the interiors high above the city, where players place furniture)
+	if pos.Y < 400 and insideSolid(chars, root) then
+		s.inside += 1
+		if s.inside >= 3 then
+			s.score += 1.5
+			noclipBad = true
+		end
+	else
+		s.inside = 0
+	end
+
+	if s.score >= SCORE_LIMIT then
+		rubberBand(player, s, character, root, if speedBad then "speed" elseif flyBad then "fly" elseif noclipBad then "noclip" else "movement")
+		return
+	end
+
+	-- remember a safe spot: standing on something, clean, budget healthy
+	if grounded and not speedBad and not flyBad and not noclipBad and s.inside == 0 and s.bucket > BUCKET_CAP * 0.4 and s.score < 1 then
+		s.lastGood = root.CFrame
+	end
+end
+
+local started = false
+function AntiCheat.start(_city: Instance?)
+	if started then
+		return
+	end
+	started = true
+	Players.PlayerRemoving:Connect(function(player)
+		states[player] = nil
+	end)
+	task.spawn(function()
+		local lastTime = os.clock()
+		while true do
+			task.wait(TICK)
+			local now = os.clock()
+			local dt = math.min(now - lastTime, 1)
+			lastTime = now
+			local chars = characterList()
+			for _, player in Players:GetPlayers() do
+				local ok, err = pcall(check, player, stateOf(player), dt, now, chars)
+				if not ok then
+					warn("[CityGrind] AntiCheat check failed:", err)
+				end
+			end
+		end
+	end)
+end
+
+return AntiCheat
 ]=====])
 put(server, 'ModuleScript', 'Apartments', [=====[
 -- CITY GRIND: apartments, real estate and furniture (spec sections 48, 73, 77, 110).
@@ -9538,7 +9886,12 @@ function Apartments.start(city: Instance)
 		if not sec then
 			return false, "Your save is still loading.", nil
 		end
-		local ok, message = handlers[action](player, sec, payload)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, message = pcall(handlers[action], player, sec, payload)
+		if not pok then
+			warn("[Security] ApartmentsRequest failed:", action, ok)
+			ok, message = false, "Something went wrong."
+		end
 		local state = stateFor(player)
 		if ok and action ~= "GetState" then
 			pushState(player)
@@ -10295,6 +10648,11 @@ local heldBy: { [Player]: Ball } = {}
 local hoops: { Hoop } = {}
 local stealCooldown: { [Player]: number } = {}
 local trainCooldown: { [Player]: { [string]: number } } = {}
+-- [Security] Hourly stat-XP budget per stat from court training (two alts passing back and
+-- forth could otherwise farm ~5,000 Passing XP an hour with no level softening or fatigue).
+-- Keyed by UserId so rejoining doesn't reset it.
+local TRAIN_XP_PER_HOUR = 900
+local trainBudget: { [number]: { [string]: { start: number, total: number } } } = {}
 local rng = Random.new()
 
 local ballFolder = Instance.new("Folder")
@@ -10427,6 +10785,20 @@ local function train(player: Player, statName: string, amount: number)
 		return
 	end
 	cooldowns[statName] = now
+	local mine = trainBudget[player.UserId]
+	if not mine then
+		mine = {}
+		trainBudget[player.UserId] = mine
+	end
+	local b = mine[statName]
+	if not b or now - b.start >= 3600 then
+		b = { start = now, total = 0 }
+		mine[statName] = b
+	end
+	if b.total >= TRAIN_XP_PER_HOUR then
+		return
+	end
+	b.total += amount
 	Basketball.onTrain(player, statName, amount)
 end
 Basketball.train = train
@@ -10733,6 +11105,8 @@ local function shoot(player: Player, ball: Ball, held: number)
 		task.delay(0.28, function()
 			if balls[ball] then
 				ball.part.Anchored = false
+				-- unanchoring drops the manual owner; keep the free ball on the server
+				pcall(ball.part.SetNetworkOwner, ball.part, nil)
 				ball.lastPos = ball.part.Position
 				ball.part.AssemblyLinearVelocity = Vector3.new(0, -45, 0)
 			end
@@ -10875,6 +11249,15 @@ RunService.Heartbeat:Connect(function()
 
 		local part = ball.part
 		local pos = part.Position
+
+		-- [Security] a free ball is always simulated by the server: a client that
+		-- owned it could fly it through any rim (anchoring/unanchoring resets owners)
+		if not part.Anchored then
+			local okOwner, owner = pcall(part.GetNetworkOwner, part)
+			if okOwner and owner ~= nil then
+				pcall(part.SetNetworkOwner, part, nil)
+			end
+		end
 
 		-- Scoring: the ball's centre passes down through the rim.
 		if now > ball.scoreDebounce then
@@ -13806,6 +14189,10 @@ local function handle(player: Player, action: any, a: any, b: any): (boolean, st
 	elseif action == "delete" then
 		return deletePost(player, a)
 	elseif action == "followers" or action == "following" then
+		-- [Security] any userId costs a DataStore read: cap the flood rate
+		if not Net.budget(player, "CityGramLookup", 30, 30) then
+			return false, "Slow down.", nil
+		end
 		return followList(player, a, action)
 	elseif action == "myFollowing" then
 		return true, nil, followingIds(player.UserId)
@@ -13833,7 +14220,7 @@ function CityGram.start(_city: Instance?)
 		return success, message, data
 	end
 	CityGramProfile.OnServerInvoke = function(player: Player, userId: any)
-		if not Net.allow(player, "CityGramProfile", 0.3) then
+		if not Net.allow(player, "CityGramProfile", 0.3) or not Net.budget(player, "CityGramLookup", 30, 30) then
 			return nil
 		end
 		local ok, data = pcall(profileData, player, userId)
@@ -13972,7 +14359,7 @@ local TOPIC = "CityTok_v1"
 local CityTok = {}
 
 PlayerData.registerSection("citytok", function()
-	return { posts = {}, favs = {}, inbox = {}, repDay = "", repToday = 0 }
+	return { posts = {}, favs = {}, inbox = {}, repDay = "", repToday = 0, fameToday = 0 }
 end)
 
 local city: Instance? = nil
@@ -15027,6 +15414,10 @@ local function scoreOf(m: Meta): number
 end
 
 local function getMeta(id: string, maxAge: number?): Meta?
+	-- [Security] post ids are short alphanumerics (newId); anything else would cost a DataStore read per call
+	if type(id) ~= "string" or #id == 0 or #id > 32 or not id:match("^%w+$") then
+		return nil
+	end
 	local c = metaCache[id]
 	if c and os.clock() - c.at < (maxAge or 45) then
 		return c.meta
@@ -15239,25 +15630,30 @@ end
 local function reward(player: Player, kind: string)
 	local r = if kind == "viral" then Cfg.VIRAL_REWARD else Cfg.TRENDING_REWARD
 	local sec = section(player)
-	local rep = 0
+	local rep, fame = 0, 0
 	if sec then
 		local day = os.date("!%Y-%m-%d")
 		if sec.repDay ~= day then
 			sec.repDay = day
 			sec.repToday = 0
+			sec.fameToday = 0
 		end
 		rep = math.max(0, math.min(r.rep, Cfg.DAILY_REP_CAP - (sec.repToday or 0)))
 		sec.repToday = (sec.repToday or 0) + rep
+		fame = math.max(0, math.min(r.fame, Cfg.DAILY_FAME_CAP - (sec.fameToday or 0)))
+		sec.fameToday = (sec.fameToday or 0) + fame
 		PlayerData.markChanged(player)
 	end
 	if rep > 0 then
 		PlayerData.addReputation(player, rep)
 	end
-	PlayerData.addFame(player, r.fame)
+	if fame > 0 then
+		PlayerData.addFame(player, fame)
+	end
 	if kind == "viral" then
-		Net.notify(player, "CityTok", "Your video went viral! +" .. rep .. " rep, +" .. r.fame .. " fame.")
+		Net.notify(player, "CityTok", "Your video went viral! +" .. rep .. " rep, +" .. fame .. " fame.")
 	else
-		Net.notify(player, "CityTok", "Your video is trending. +" .. rep .. " rep, +" .. r.fame .. " fame.")
+		Net.notify(player, "CityTok", "Your video is trending. +" .. rep .. " rep, +" .. fame .. " fame.")
 	end
 end
 
@@ -16195,6 +16591,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local G = Config.Game
@@ -16238,6 +16635,27 @@ type Match = {
 
 local courts: { Court } = {}
 local playerGame: { [Player]: { court: Court, team: Team } } = {}
+
+-- [Security] Pickup games have no same-opponent rule, so two alts trading 60 s games could
+-- farm cash + rep all day. After G.REWARDED_PER_HOUR rewarded games in a rolling hour a
+-- game pays half XP only. Keyed by UserId so leaving and rejoining doesn't reset it.
+local rewardedAt: { [number]: { number } } = {}
+local function underPickupCap(player: Player): boolean
+	local cutoff = os.time() - 3600
+	local kept = {}
+	local log: { number } = rewardedAt[player.UserId] or {}
+	for _, t in log do
+		if t > cutoff then
+			table.insert(kept, t)
+		end
+	end
+	rewardedAt[player.UserId] = kept
+	if #kept >= (G.REWARDED_PER_HOUR or 12) then
+		return false
+	end
+	table.insert(kept, os.time())
+	return true
+end
 
 local function other(team: Team): Team
 	return if team == "Home" then "Away" else "Home"
@@ -16434,7 +16852,11 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 				leaveGame(player)
 				continue
 			end
-			if eligible then
+			if eligible and not underPickupCap(player) then
+				PlayerData.addXP(player, math.floor((if won then G.WIN_XP else G.LOSS_XP) / 2))
+				PlayerData.recordBasketball(player, { games = 1 }) -- wins feed the leaderboards: not over the cap
+				PlayerData.onNotify:Fire(player, "REWARD LIMIT", "You've played a lot of pickup games this hour: XP only for now.")
+			elseif eligible then
 				if won then
 					PlayerData.addCash(player, math.floor(G.WIN_CASH * sizeBonus), "Won a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
 					PlayerData.addXP(player, math.floor(G.WIN_XP * sizeBonus))
@@ -16524,6 +16946,7 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 				humanoid.Sit = false
 			end
 			if player.Character then
+				AntiCheat.allowTeleport(player, 3)
 				player.Character:PivotTo(CFrame.lookAt(pos, pos + facing))
 			end
 		end
@@ -17050,8 +17473,10 @@ local RunService = game:GetService("RunService")
 
 local Net = require(script.Parent:WaitForChild("Net"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local CB = require(shared:WaitForChild("CrewBattlesConfig"))
+local SPRINT_CREDIT = require(shared:WaitForChild("Config")).SPRINT_SPEED * 1.15 -- studs/s of distance credit
 
 local CrewBattles = {}
 
@@ -17699,8 +18124,10 @@ local function trackTick(dt: number)
 			local pos = root.Position
 			if tr.lastPos then
 				local d = Vector3.new(pos.X - tr.lastPos.X, 0, pos.Z - tr.lastPos.Z).Magnitude
-				if onFoot(p) and d < 40 * math.max(dt, 0.1) then
-					tr.distance += d
+				if onFoot(p) and d < 40 * math.max(dt, 0.1) and AntiCheat.positionOk(p) then
+					-- [Security] credit at most a sprint's worth per tick, so a client
+					-- running just under the speed checks can't out-score honest runners
+					tr.distance += math.min(d, SPRINT_CREDIT * math.max(dt, 0.1))
 				end
 			end
 			tr.lastPos = pos
@@ -18369,10 +18796,7 @@ local function battleView(b: Battle, viewer: Player, myId: string): any
 	}
 end
 
-CrewBattleGet.OnServerInvoke = function(player: Player)
-	if not Net.allow(player, "CrewBattleGet", 0.3) then
-		return nil
-	end
+local function getSnapshot(player: Player): any
 	local c = crewOf(player)
 	local week = CB.week(now())
 	local snapshot: any = {
@@ -18436,6 +18860,19 @@ CrewBattleGet.OnServerInvoke = function(player: Player)
 	snapshot.history = hist
 	local sec = sectionOf(player)
 	snapshot.me = sec and { played = sec.played, wins = sec.wins, mvps = sec.mvps } or nil
+	return snapshot
+end
+
+CrewBattleGet.OnServerInvoke = function(player: Player)
+	if not Net.allow(player, "CrewBattleGet", 0.3) then
+		return nil
+	end
+	-- [Security] a failed read returns nothing instead of throwing into the client
+	local ok, snapshot = pcall(getSnapshot, player)
+	if not ok then
+		warn("[Security] CrewBattleGet failed:", snapshot)
+		return nil
+	end
 	return snapshot
 end
 
@@ -19370,7 +19807,26 @@ local function releaseName(lower: string, id: string)
 	end)
 end
 
+local creating: { [Player]: boolean } = {}
+local createCrew: (Player, any) -> (boolean, string?)
+
+-- [Security] create yields (text filter + DataStore) for longer than its cooldown, so two
+-- requests could both pass the "not in a crew" check and found (and pay for) two crews.
 function Crews.create(player: Player, args: any): (boolean, string?)
+	if creating[player] then
+		return false, "Your crew is still being set up."
+	end
+	creating[player] = true
+	local ok, okResult, msg = pcall(createCrew, player, args)
+	creating[player] = nil
+	if not ok then
+		warn("[CityGrind] Crew create failed:", okResult)
+		return false, "Something went wrong. Try again."
+	end
+	return okResult, msg
+end
+
+createCrew = function(player: Player, args: any): (boolean, string?)
 	if type(args) ~= "table" then
 		return false, "Fill in the form."
 	end
@@ -19606,8 +20062,20 @@ function Crews.accept(player: Player, crewId: any): (boolean, string?)
 end
 
 function Crews.decline(player: Player, crewId: any): (boolean, string?)
-	if type(crewId) ~= "string" then
+	if type(crewId) ~= "string" or #crewId > 40 then
 		return false, nil
+	end
+	-- [Security] only touch the crew record (a DataStore write) for an invite this player actually holds
+	local section = PlayerData.section(player, "crew")
+	local held = false
+	for _, inv in (section and section.invites) or {} do
+		if inv.crewId == crewId then
+			held = true
+			break
+		end
+	end
+	if not held then
+		return true, "Invite declined."
 	end
 	dropInvite(player, crewId)
 	local key = uidKey(player.UserId)
@@ -22278,6 +22746,7 @@ local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local EmotesConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("EmotesConfig"))
 
@@ -22681,6 +23150,7 @@ function Emotes.playPaired(a: Player, b: Player, name: string): (boolean, string
 
 	for _, entry in { { a, rootA, posA, posA + dir }, { b, rootB, posB, posB - dir } } do
 		local pl, root, pos, look = entry[1], entry[2], entry[3], entry[4]
+		AntiCheat.allowTeleport(pl, 2)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.CFrame = CFrame.lookAt(pos, Vector3.new(look.X, pos.Y, look.Z))
 		if startEmote(pl, emote) then
@@ -22955,6 +23425,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local EventDunk = {}
@@ -23154,6 +23625,7 @@ function EventDunk.init(ctx: any): any
 		activeTurns[p] = turn
 		local character = p.Character
 		if character then
+			AntiCheat.allowTeleport(p, 3)
 			character:PivotTo(CFrame.lookAt(d.start, Vector3.new(d.rim.X, d.start.Y, d.rim.Z)))
 		end
 		ctx.announce({ p }, string.format("YOUR TURN! %d DUNKS", D.ATTEMPTS))
@@ -23613,6 +24085,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local ShopsConfig = require(shared:WaitForChild("ShopsConfig"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local EventKit = require(script.Parent:WaitForChild("EventKit"))
 
 local EventFashion = {}
@@ -23833,6 +24306,7 @@ function EventFashion.init(ctx: any): any
 		end
 		local held = e.player.Character
 		if held then
+			AntiCheat.allowTeleport(e.player, 3)
 			held:PivotTo(CFrame.lookAt(d.venue.startPos, d.venue.startPos + Vector3.new(0, 0, 1)))
 		end
 		local t = now()
@@ -24163,6 +24637,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DistrictsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("DistrictsConfig"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local EventKit = require(script.Parent:WaitForChild("EventKit"))
 
 local EventHunt = {}
@@ -24473,7 +24948,8 @@ function EventHunt.init(ctx: any): any
 				for p in d.hunters do
 					local r = ctx.rootOf(p)
 					local hum = ctx.humanoidOf(p)
-					if r and hum and hum.Health > 0 and p.Parent and ctx.isRegistered(ev, p) then
+					-- [Security] a character that just jumped further than it could run can't claim
+					if r and hum and hum.Health > 0 and p.Parent and ctx.isRegistered(ev, p) and AntiCheat.positionOk(p) then
 						local dist = ctx.flatDist(r.Position, c.pos)
 						if dist <= bestDist and math.abs(r.Position.Y - c.pos.Y) < 9 then
 							best, bestDist = p, dist
@@ -25273,6 +25749,7 @@ put(server, 'ModuleScript', 'EventStreetball', [=====[
 local Players = game:GetService("Players")
 
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local EventStreetball = {}
@@ -25497,6 +25974,7 @@ function EventStreetball.init(ctx: any): any
 					local pos = Vector3.new(lane.rim.X, d.floorY + 3, lane.rim.Z) + lane.dir * dist + side * ((i - (#team.players + 1) / 2) * 6)
 					local character = p.Character
 					if character then
+						AntiCheat.allowTeleport(p, 3)
 						character:PivotTo(CFrame.lookAt(pos, Vector3.new(lane.rim.X, pos.Y, lane.rim.Z)))
 					end
 				end
@@ -26071,6 +26549,7 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local EC = require(shared:WaitForChild("EventsConfig"))
 local VC = require(shared:WaitForChild("VehiclesConfig"))
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local Places = require(script.Parent:WaitForChild("Places"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
@@ -26631,6 +27110,7 @@ local function startTurn(lane: Lane, player: Player)
 	local character = player.Character
 	if first and character then
 		local stand = first.pos + Vector3.new(0, 3, 0)
+		AntiCheat.allowTeleport(player, 3)
 		character:PivotTo(CFrame.lookAt(stand, Vector3.new(lane.rim.X, stand.Y, lane.rim.Z)))
 	end
 	Basketball.announce({ player }, "YOUR TURN! 60 SECONDS")
@@ -27131,7 +27611,8 @@ local function tickRun(ev: Event)
 		local target = ROUTE[racer.nextIndex]
 		if flatDist(pos, target) <= RUN.GATE_RADIUS and math.abs(pos.Y - target.Y) < 14 then
 			local prev = if racer.nextIndex == 1 then #ROUTE else racer.nextIndex - 1
-			local minTime = legDistance(prev, racer.nextIndex) / RUN.MAX_SPEED
+			-- gates count from GATE_RADIUS out at both ends, so a leg can be that much shorter
+			local minTime = math.max(0, legDistance(prev, racer.nextIndex) - 2 * RUN.GATE_RADIUS) / RUN.MAX_SPEED
 			if t - racer.legStart < minTime then
 				knockOut(racer, "That checkpoint was reached impossibly fast. DQ.")
 				active -= 1
@@ -32443,6 +32924,25 @@ local RunService = game:GetService("RunService")
 local Net = require(script.Parent:WaitForChild("Net"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local LC = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("LeaderboardsConfig"))
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local EventsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("EventsConfig"))
+
+-- [Security] The fastest physically possible City 5K: every leg cut short by the
+-- gate radius at both ends, run at the event's speed cap. Anything under it is bogus.
+local MIN_5K_SECONDS = (function(): number
+	local run = EventsConfig.RUN
+	local route = run and run.ROUTE
+	if type(route) ~= "table" or #route < 2 then
+		return 0
+	end
+	local total = 0
+	for i = 1, #route do
+		local a, b = route[i], route[if i == #route then 1 else i + 1]
+		total += math.max(0, Vector3.new(b.X - a.X, 0, b.Z - a.Z).Magnitude - 2 * run.GATE_RADIUS)
+	end
+	return total / run.MAX_SPEED
+end)()
+local rejectedWarned: { [string]: boolean } = {}
 
 local Leaderboards = {}
 
@@ -32858,6 +33358,18 @@ end
 function Leaderboards.submit(statId: string, player: Player, value: number)
 	local s = LC.BY_ID[statId]
 	if not s or s.crew or typeof(player) ~= "Instance" or not player:IsA("Player") or type(value) ~= "number" then
+		return
+	end
+	-- [Security] sane bounds: finite, non-negative, levels within the cap, no impossible 5K
+	local bad = value ~= value or value < 0 or value >= 2 ^ 53
+		or (statId == "level" and value > Config.MAX_LEVEL)
+		or (statId == "fastest5k" and value > 0 and value < MIN_5K_SECONDS)
+	if bad then
+		local warnKey = statId .. ":" .. player.UserId
+		if not rejectedWarned[warnKey] then
+			rejectedWarned[warnKey] = true
+			warn(string.format("[Security] Leaderboards rejected %s=%s for %s", statId, tostring(value), player.Name))
+		end
 		return
 	end
 	local key = tostring(player.UserId)
@@ -35117,8 +35629,8 @@ end
 
 local function sendGroup(sender: Player, gid: string, raw: any): (boolean, string?)
 	local sec = data(sender)
-	local rec = getGroup(gid)
-	if not sec or not rec or not sec.groups[gid] or not rec.members[tostring(sender.UserId)] then
+	local rec = sec and sec.groups[gid] and getGroup(gid) -- [Security] membership before any DataStore read
+	if not sec or not rec or not rec.members[tostring(sender.UserId)] then
 		return false, "You're not in that group."
 	end
 	local text = cleanText(raw, Cfg.MAX_LENGTH)
@@ -35558,8 +36070,9 @@ handlers.Open = function(player, sec, convId)
 		return false, nil, nil
 	end
 	if convId:sub(1, 1) == "g" then
-		local rec = getGroup(convId)
-		if not rec or not sec.groups[convId] then
+		-- [Security] membership first: an arbitrary group id would otherwise cost a DataStore read
+		local rec = sec.groups[convId] and getGroup(convId)
+		if not rec then
 			return false, "That group is gone.", nil
 		end
 		local msgs = {}
@@ -35575,7 +36088,7 @@ handlers.Open = function(player, sec, convId)
 	local convo = sec.convos[convId]
 	if not convo then
 		local id = tonumber(convId:match("^d(%-?%d+)$"))
-		if not id or id == player.UserId then
+		if not id or id == player.UserId or id ~= id or math.abs(id) >= 1e13 then
 			return false, nil, nil
 		end
 		-- new thread: nothing saved until the first message
@@ -35731,8 +36244,8 @@ handlers.Group = function(player, sec, payload)
 	if type(payload) ~= "table" or type(payload.id) ~= "string" then
 		return false, nil, nil
 	end
-	local rec = getGroup(payload.id)
-	if not rec or not sec.groups[payload.id] or not rec.members[tostring(player.UserId)] then
+	local rec = sec.groups[payload.id] and getGroup(payload.id) -- [Security] membership before any DataStore read
+	if not rec or not rec.members[tostring(player.UserId)] then
 		return false, "You're not in that group.", nil
 	end
 	local gid = rec.id
@@ -35979,7 +36492,12 @@ function Messages.start(_city: Instance?)
 		if not sec then
 			return false, "Your phone is still loading.", nil
 		end
-		local ok, message, result = handlers[action](player, sec, payload)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, message, result = pcall(handlers[action], player, sec, payload)
+		if not pok then
+			warn("[Security] MessagesRequest failed:", action, ok)
+			return false, "Something went wrong.", nil
+		end
 		return ok, message, result
 	end
 
@@ -36102,8 +36620,36 @@ function Net.allow(player: Player, key: string, cooldown: number): boolean
 	return true
 end
 
+-- Rolling-window budget: at most `max` calls per `window` seconds (for actions whose cost is
+-- a DataStore read on an id the client picks, where a short cooldown alone still allows a flood).
+local budgets: { [Player]: { [string]: { start: number, count: number } } } = {}
+function Net.budget(player: Player, key: string, max: number, window: number): boolean
+	local now = os.clock()
+	local mine = budgets[player]
+	if not mine then
+		mine = {}
+		budgets[player] = mine
+	end
+	local b = mine[key]
+	if not b or now - b.start >= window then
+		mine[key] = { start = now, count = 1 }
+		return true
+	end
+	if b.count >= max then
+		return false
+	end
+	b.count += 1
+	return true
+end
+
+-- [Security] finite number check for client-sent numbers (rejects NaN and +/-inf).
+function Net.isFiniteNumber(v: any): boolean
+	return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+end
+
 Players.PlayerRemoving:Connect(function(player)
 	lastCall[player] = nil
+	budgets[player] = nil
 end)
 
 local NotifyRemote = Net.remote("RemoteEvent", "Notify") -- server -> client (title, body)
@@ -36616,6 +37162,7 @@ put(server, 'ModuleScript', 'Places', [=====[
 local Players = game:GetService("Players")
 
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 
 local Places = {}
 
@@ -36643,6 +37190,7 @@ function Places.teleport(player: Player, cf: CFrame)
 	if not character or not humanoid then
 		return
 	end
+	AntiCheat.allowTeleport(player, 3)
 	local seat = humanoid.SeatPart
 	if seat then
 		-- Break the seat weld first so a car (or bike) isn't dragged along and flung.
@@ -37008,6 +37556,9 @@ function PlayerData.load(player: Player)
 			local ok, result = retry(3, function()
 				return (store :: DataStore):UpdateAsync(key, function(saved)
 					saved = saved or defaultProfile()
+					if type(saved) ~= "table" then
+						return nil -- corrupt record: leave it alone (load refuses it below)
+					end
 					local lock = saved.sessionLock
 					if lock and lock.server ~= SERVER_ID and os.time() - lock.time < Config.SESSION_LOCK_SECONDS then
 						lockedElsewhere = true
@@ -37039,7 +37590,27 @@ function PlayerData.load(player: Player)
 	end
 
 	if not player.Parent then
+		-- [Security] left while loading: hand our session lock back so their next server
+		-- doesn't have to wait SESSION_LOCK_SECONDS (never touches the data itself).
+		if store then
+			pcall(function()
+				(store :: DataStore):UpdateAsync(key, function(saved)
+					if type(saved) ~= "table" or not saved.sessionLock or saved.sessionLock.server ~= SERVER_ID then
+						return nil
+					end
+					saved.sessionLock = nil
+					return saved
+				end)
+			end)
+		end
 		return -- left while loading
+	end
+	if type(data) ~= "table" then
+		-- [Security] corrupt record: never play on (and later save over) a blank profile.
+		warn("[Security] Save for", player.Name, "is not a table; refusing to load it")
+		loadFailed[player] = true
+		player:Kick("City Grind could not read your save. Please rejoin in a minute.")
+		return
 	end
 	data.sessionLock = nil
 	profiles[player] = reconcile(data)
@@ -37049,27 +37620,51 @@ function PlayerData.load(player: Player)
 	end
 end
 
+-- [Security] One save per player at a time: an autosave still in flight when the player
+-- leaves (or two releases from PlayerRemoving + BindToClose) must not race, or a late
+-- autosave could re-write the lock after the release and strand the player for 3 minutes.
+local saving: { [Player]: boolean } = {}
+local lostLock: { [Player]: boolean } = {}
+local SIZE_WARN_BYTES = 3_500_000 -- DataStore keys hold 4 MB
+
 function PlayerData.save(player: Player, releaseLock: boolean)
+	while saving[player] do
+		task.wait(0.1)
+	end
 	local data = profiles[player]
-	if not data or not store or loadFailed[player] then
+	if not data or not store or loadFailed[player] or lostLock[player] then
 		return
 	end
+	saving[player] = true
+	dirty[player] = nil -- cleared up front so a change made while we yield marks it dirty again
 	local key = "player_" .. player.UserId
+	local stolen = false
 	local ok, err = retry(3, function()
 		return (store :: DataStore):UpdateAsync(key, function(saved)
-			local lock = saved and saved.sessionLock
-			if lock and lock.server ~= SERVER_ID then
-				return nil -- another server took over; never overwrite its data
+			stolen = false
+			local lock = type(saved) == "table" and saved.sessionLock
+			-- Only write while we still hold the lock. A missing lock on an existing record
+			-- means another server took the save over (and released it): never overwrite it.
+			if saved ~= nil and (not lock or lock.server ~= SERVER_ID) then
+				stolen = true
+				return nil
 			end
 			local copy = table.clone(data)
 			copy.sessionLock = if releaseLock then nil else { server = SERVER_ID, time = os.time() }
 			return copy
 		end)
 	end)
-	if ok then
-		dirty[player] = nil
-	else
+	saving[player] = nil
+	if ok and stolen then
+		lostLock[player] = true
+		warn("[Security] Save for", player.Name, "skipped: another server owns this save now")
+	elseif not ok then
+		dirty[player] = true
 		warn("[CityGrind] Save failed for", player.Name, err)
+		local okSize, encoded = pcall(HttpService.JSONEncode, HttpService, data)
+		if okSize and #encoded > SIZE_WARN_BYTES then
+			warn("[Security] Save for", player.Name, "is", #encoded, "bytes (DataStore limit 4 MB)")
+		end
 	end
 end
 
@@ -37078,6 +37673,7 @@ function PlayerData.release(player: Player)
 	profiles[player] = nil
 	dirty[player] = nil
 	loadFailed[player] = nil
+	lostLock[player] = nil
 end
 
 function PlayerData.get(player: Player)
@@ -37134,9 +37730,16 @@ local function addTransaction(data, amount: number, label: string)
 	end
 end
 
+-- [Security] Rewards must be finite positive numbers: NaN / inf would poison the save
+-- (DataStores can't encode them, so every later save of that player would fail).
+local MAX_TOTAL = 1_000_000_000
+local function goodAmount(amount: any): boolean
+	return type(amount) == "number" and amount == amount and amount > 0 and amount < math.huge
+end
+
 function PlayerData.addCash(player: Player, amount: number, label: string): boolean
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return false
 	end
 	amount = math.floor(amount)
@@ -37148,7 +37751,7 @@ end
 
 function PlayerData.spendCash(player: Player, amount: number, label: string): boolean
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return false
 	end
 	amount = math.floor(amount)
@@ -37163,10 +37766,10 @@ end
 
 function PlayerData.addXP(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 then
+	if not data or not goodAmount(amount) then
 		return
 	end
-	data.xp += math.floor(amount)
+	data.xp = math.min(data.xp + math.floor(amount), MAX_TOTAL)
 	while data.level < Config.MAX_LEVEL and data.xp >= Config.xpToNext(data.level) do
 		data.xp -= Config.xpToNext(data.level)
 		data.level += 1
@@ -37180,11 +37783,11 @@ end
 
 function PlayerData.addReputation(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 then
+	if not data or not goodAmount(amount) then
 		return
 	end
 	local before = Config.reputationRank(data.reputation)
-	data.reputation += math.floor(amount)
+	data.reputation = math.min(data.reputation + math.floor(amount), MAX_TOTAL)
 	local after = Config.reputationRank(data.reputation)
 	if after ~= before then
 		PlayerData.onNotify:Fire(player, "NEW RANK", "People around the city now call you " .. after .. ".")
@@ -37194,11 +37797,11 @@ end
 
 function PlayerData.addFame(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return
 	end
 	local before = Config.fameLevel(data.fame)
-	data.fame += math.floor(amount)
+	data.fame = math.min(data.fame + math.floor(amount), MAX_TOTAL)
 	local after = Config.fameLevel(data.fame)
 	if after ~= before then
 		PlayerData.onNotify:Fire(player, "FAME UP", "You're now " .. after .. " around the city.")
@@ -37209,10 +37812,10 @@ end
 -- Training progress toward a stat. Every STAT_XP_PER_POINT raises it by 1 (max 99).
 function PlayerData.addStatXP(player: Player, stat: string, amount: number)
 	local data = profiles[player]
-	if not data or data.stats[stat] == nil or amount <= 0 then
+	if not data or data.stats[stat] == nil or not goodAmount(amount) then
 		return
 	end
-	data.statXP[stat] += amount
+	data.statXP[stat] = math.min(data.statXP[stat] + amount, 99 * Config.STAT_XP_PER_POINT)
 	while data.statXP[stat] >= Config.STAT_XP_PER_POINT and data.stats[stat] < 99 do
 		data.statXP[stat] -= Config.STAT_XP_PER_POINT
 		data.stats[stat] += 1
@@ -37316,7 +37919,10 @@ function PlayerData.start()
 	task.spawn(function()
 		while true do
 			task.wait(Config.AUTOSAVE_SECONDS)
-			for player in dirty do
+			-- [Security] every loaded player, not only dirty ones: the save also refreshes the
+			-- session lock, which would otherwise go stale (SESSION_LOCK_SECONDS) for an idle
+			-- player and let a second server load the same save.
+			for player in profiles do
 				task.spawn(PlayerData.save, player, false)
 			end
 		end
@@ -38304,12 +38910,20 @@ function Quests.start(city: Instance)
 		if type(action) ~= "string" or not Net.allow(player, "QuestsRequest", 0.25) then
 			return false, "Slow down.", nil
 		end
-		local ok, msg = handle(player, action, a, b)
-		if ok and action ~= "Get" then
-			process(player) -- reflect the claim immediately
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, msg, state = pcall(function()
+			local ok, msg = handle(player, action, a, b)
+			if ok and action ~= "Get" then
+				process(player) -- reflect the claim immediately
+			end
+			local state = stateFor(player)
+			return ok, msg, state and withTimers(state)
+		end)
+		if not pok then
+			warn("[Security] QuestsRequest failed:", ok)
+			return false, "Something went wrong.", nil
 		end
-		local state = stateFor(player)
-		return ok, msg, state and withTimers(state)
+		return ok, msg, state
 	end
 
 	-- Every made shot on any court (pickup games or just shooting around).
@@ -38481,7 +39095,8 @@ local lobby: { Player } = {}
 local lobbyStartAt: number? = nil
 local watchers: { [Player]: number } = {}
 local challenges: { [string]: { id: string, from: Player, to: Player, routeId: string, expires: number } } = {}
-local rewardLog: { [Player]: { number } } = {}
+-- [Security] keyed by UserId and kept after leaving, so rejoining doesn't reset the hourly cap.
+local rewardLog: { [number]: { number } } = {}
 local root: Folder
 local liveFolder: Folder
 local raceCounter = 0
@@ -38773,7 +39388,7 @@ end
 -- Rewards + saving
 ---------------------------------------------------------------------------
 local function underCap(player: Player): boolean
-	local log = rewardLog[player] or {}
+	local log = rewardLog[player.UserId] or {}
 	local cutoff = os.time() - 3600
 	local kept = {}
 	for _, t in log do
@@ -38781,7 +39396,7 @@ local function underCap(player: Player): boolean
 			table.insert(kept, t)
 		end
 	end
-	rewardLog[player] = kept
+	rewardLog[player.UserId] = kept
 	if #kept >= RC.REWARD_CAP then
 		return false
 	end
@@ -39050,6 +39665,29 @@ local function finish(race: Race, r: Racer, time: number)
 	Racing.raceFinished:Fire(r.player, r.place, time, race.kind, race.id)
 end
 
+-- Lower bound on the distance a racer must cover: gate-to-gate centre distances
+-- minus both gates' half-widths (laps close on the start/finish line, the last cp).
+local function minDistance(race: Race): number
+	local cps = race.cps
+	local n = #cps
+	local function reach(cp: CP): number
+		return math.max(cp.hw, cp.radius)
+	end
+	local function gap(a: CP, b: CP): number
+		local d = Vector3.new(b.pos.X - a.pos.X, 0, b.pos.Z - a.pos.Z).Magnitude
+		return math.max(0, d - reach(a) - reach(b))
+	end
+	local one = 0
+	for i = 2, n do
+		one += gap(cps[i - 1], cps[i])
+	end
+	if race.kind == "street" or n < 2 then
+		return one
+	end
+	-- circuit / trial: every lap runs line -> cp1 -> ... -> line
+	return (one + gap(cps[n], cps[1])) * race.laps
+end
+
 local function advance(race: Race, r: Racer, p0: Vector3, p1: Vector3, t0: number, t1: number)
 	local n = #race.cps
 	local hit, frac = crossed(race.cps[r.next], p0, p1)
@@ -39064,6 +39702,14 @@ local function advance(race: Race, r: Racer, p0: Vector3, p1: Vector3, t0: numbe
 			if r.lap >= race.laps then
 				if race.laps == 1 then
 					r.bestLap = 0
+				end
+				-- [Security] the shortest possible line through every gate, at a bit
+				-- over the car's top speed, is a hard floor on the finish time
+				local floor = minDistance(race) / (r.spec.topSpeed * 1.15)
+				if tc - race.goT < floor then
+					warn(string.format("[Security] Racing: %s finished in %.2fs (floor %.2fs)", r.player.Name, tc - race.goT, floor))
+					dnf(race, r, "Disqualified: impossible time.")
+					return
 				end
 				finish(race, r, tc - race.goT)
 				return
@@ -39721,7 +40367,7 @@ end
 ---------------------------------------------------------------------------
 -- Remotes
 ---------------------------------------------------------------------------
-RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+local function handleAction(player: Player, action: any, a: any, b: any)
 	if type(action) ~= "string" then
 		return false, "Invalid request."
 	end
@@ -39772,6 +40418,16 @@ RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: a
 		return ok, message
 	end
 	return false, "Unknown action."
+end
+
+-- [Security] a server error must come back as a failure, never as an error thrown into the client.
+RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+	local ok, success, message, data = pcall(handleAction, player, action, a, b)
+	if not ok then
+		warn("[Security] RacingAction failed:", success)
+		return false, "Something went wrong."
+	end
+	return success, message, data
 end
 
 ---------------------------------------------------------------------------
@@ -39934,7 +40590,6 @@ function Racing.start(city: Instance)
 			end
 		end
 		watchers[player] = nil
-		rewardLog[player] = nil
 		-- racerOf is cleared when the race notices (next tick)
 	end)
 
@@ -41257,8 +41912,16 @@ function Ranked.start(city: Instance)
 		if not Net.allow(player, "RankedRequest", 0.25) then
 			return false, "Slow down.", nil
 		end
-		local ok, msg = handle(player, action, arg)
-		return ok, msg, stateFor(player)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, msg, state = pcall(function()
+			local ok, msg = handle(player, action, arg)
+			return ok, msg, stateFor(player)
+		end)
+		if not pok then
+			warn("[Security] RankedRequest failed:", ok)
+			return false, "Something went wrong.", nil
+		end
+		return ok, msg, state
 	end
 
 	PlayerData.onLoaded(function(player)
@@ -43505,6 +44168,10 @@ local function sendRequest(player: Player, targetId: number, nameHint: string?):
 	if count(s.friends) >= SC.MAX_FRIENDS then
 		return false, "Your friends list is full (" .. SC.MAX_FRIENDS .. ")."
 	end
+	-- [Security] outgoing requests never expire on their own: cap them so the save can't grow without bound.
+	if count(s.outgoing) >= SC.MAX_INCOMING then
+		return false, "You have " .. SC.MAX_INCOMING .. " requests waiting. Cancel some first."
+	end
 	if not requestAllowed(player) then
 		return false, "Slow down - you can send " .. SC.REQUESTS_PER_MINUTE .. " requests a minute."
 	end
@@ -45632,6 +46299,8 @@ type Active = {
 	override: boolean,
 	restTime: number,
 	overspeed: number,
+	lastPos: Vector3?, -- chassis position last sanity step (teleport check)
+	travel: number, -- banked distance the chassis may still cover (teleport check)
 }
 
 local active: { [Player]: Active } = {}
@@ -45910,6 +46579,8 @@ local function spawnVehicle(player: Player, id: string): (boolean, string)
 		override = false,
 		restTime = 0,
 		overspeed = 0,
+		lastPos = nil,
+		travel = 0,
 	}
 	VC.setIgnore(sim, ignoreList)
 	active[player] = v
@@ -46047,7 +46718,12 @@ VehicleSpawn.OnServerInvoke = function(player: Player, id: any)
 	if type(id) ~= "string" then
 		return false, "Invalid request."
 	end
-	local ok, message = spawnVehicle(player, id)
+	-- [Security] a spawn error comes back as a failure instead of being thrown into the client
+	local pok, ok, message = pcall(spawnVehicle, player, id)
+	if not pok then
+		warn("[Security] VehicleSpawn failed:", ok)
+		return false, "Couldn't bring that out right now."
+	end
 	Net.notify(player, "GARAGE", message)
 	return ok, message
 end
@@ -46280,11 +46956,38 @@ local function sanityStep(dt: number)
 			Net.notify(owner, "GARAGE", "Your vehicle was towed back to the garage.")
 			continue
 		end
+		if not v.driver or v.override or chassis.Anchored then
+			v.lastPos = nil
+		end
 		if v.driver and not v.override and not chassis.Anchored then
 			local vel = chassis.AssemblyLinearVelocity
 			local flat = Vector3.new(vel.X, 0, vel.Z).Magnitude
-			if flat > v.spec.topSpeed * 1.5 + 8 or math.abs(vel.Y) > 160 then
-				v.overspeed += dt
+			-- The driver's client owns the chassis and could also set its CFrame
+			-- directly (velocity stays sane). Bank the distance the car may cover
+			-- (a few seconds' worth so replication bursts never trip it) and treat
+			-- an overdraft as a teleport: put the car back and stop it.
+			local maxRate = v.spec.topSpeed * 1.5 + 8
+			local cap = maxRate * 3 + 40
+			local last = v.lastPos
+			v.lastPos = pos
+			local teleported = false
+			if last then
+				v.travel = math.min(cap, v.travel + maxRate * dt) - Vector3.new(pos.X - last.X, 0, pos.Z - last.Z).Magnitude
+				if v.travel < 0 then
+					teleported = true
+					v.travel = cap
+					v.lastPos = last
+					if Net.allow(v.driver :: Player, "SecVehicleTeleport", 30) then
+						warn("[Security] Vehicle teleport blocked for " .. (v.driver :: Player).Name)
+					end
+					chassis.AssemblyLinearVelocity = Vector3.zero
+					v.model:PivotTo(v.model:GetPivot() - (pos - last))
+				end
+			else
+				v.travel = cap
+			end
+			if teleported or flat > v.spec.topSpeed * 1.5 + 8 or math.abs(vel.Y) > 160 then
+				v.overspeed += if teleported then 3 else dt
 			else
 				v.overspeed = math.max(0, v.overspeed - dt * 0.5)
 			end
@@ -46411,6 +47114,7 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local WC = require(shared:WaitForChild("WorldConfig"))
 local DC = require(shared:WaitForChild("DistrictsConfig"))
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local World = {}
@@ -46710,8 +47414,8 @@ function World.collect(player: Player, id: string)
 	if not w or w.c[id] then
 		return
 	end
-	if Net.distance(player, item.center) > WC.COLLECT_RANGE then
-		return
+	if Net.distance(player, item.center) > WC.COLLECT_RANGE or not AntiCheat.positionOk(player) then
+		return -- [Security] out of reach, or got there faster than anyone can run
 	end
 	if not Net.allow(player, "WorldCollect:" .. id, 1) then
 		return
@@ -46798,7 +47502,7 @@ local function checkSecrets()
 	for _, player in Players:GetPlayers() do
 		local r = rootPart(player)
 		local w = r and sec(player)
-		if r and w and Net.alive(player) then
+		if r and w and Net.alive(player) and AntiCheat.positionOk(player) then
 			local pos = r.Position
 			for _, part in secretParts do
 				local id = part:GetAttribute("SecretId") :: string

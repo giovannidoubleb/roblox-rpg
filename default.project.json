@@ -94,6 +94,9 @@
     "ServerScriptService": {
       "CityGrindServer": {
         "$path": "src/server/Main.server.luau",
+        "AntiCheat": {
+          "$path": "src/server/AntiCheat.luau"
+        },
         "Apartments": {
           "$path": "src/server/Apartments.luau"
         },
