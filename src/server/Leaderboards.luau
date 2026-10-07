@@ -87,10 +87,11 @@ local function currentSeason(): Season?
 	end
 	if Ranked and not seasonEndHooked and typeof(Ranked.seasonEnded) == "Instance" and Ranked.seasonEnded:IsA("BindableEvent") then
 		seasonEndHooked = true
-		Ranked.seasonEnded.Event:Connect(function(seasonId)
-			if type(seasonId) == "string" then
-				(Leaderboards :: any).archive(seasonId)
-			end
+		-- Ranked itself calls Leaderboards.archive on exactly one server (DataStore guard);
+		-- archiving here too would make every server snapshot the season at once.
+		-- Just drop the cached season so new values stop landing on the ended season's boards.
+		Ranked.seasonEnded.Event:Connect(function()
+			seasonCheckedAt = -math.huge
 		end)
 	end
 	seasonCache = s
@@ -291,7 +292,11 @@ local function flush(onlyBoard: string?, force: boolean?)
 		if not store then
 			return
 		end
-		for key, encoded in q do
+		-- iterate a copy: the writes below yield, and record() / another flush may change q meanwhile
+		for key, encoded in table.clone(q) do
+			if q[key] ~= encoded then
+				continue -- written by a concurrent flush, or replaced by a newer value
+			end
 			if writes >= 12 and not force then
 				return
 			end
@@ -331,7 +336,7 @@ local function flush(onlyBoard: string?, force: boolean?)
 				end
 			end
 		end
-		if next(q) == nil then
+		if next(q) == nil and pending[board] == q then
 			pending[board] = nil
 		end
 	end
@@ -451,7 +456,8 @@ function Leaderboards.submit(statId: string, player: Player, value: number)
 	record(boardName(statId, nil), statId, key, name, value, ruleFor(statId, false))
 	if s.seasonal then
 		local season = currentSeason()
-		if season then
+		-- the cached season may lag the rollover by a few seconds: never write into an ended season
+		if season and not (type(season.endsAt) == "number" and os.time() >= season.endsAt) then
 			local seasonValue = value
 			if statId == "wins" then
 				local sec = sectionOf(player)
@@ -713,11 +719,26 @@ function Leaderboards.archive(seasonId: string)
 	end)
 end
 
+local archiveMissAt: { [string]: number } = {}
+
 local function readArchive(seasonId: string): any
 	local rec = archiveMem[seasonId]
 	if rec then
 		return rec
 	end
+	-- only seasons in the index, and a failed read is not retried for a minute:
+	-- a client can't spend the server's GetAsync budget on made-up ids
+	local listed = false
+	for _, it in archiveIndex do
+		if it.id == seasonId then
+			listed = true
+			break
+		end
+	end
+	if not listed or os.clock() - (archiveMissAt[seasonId] or -math.huge) < 60 then
+		return nil
+	end
+	archiveMissAt[seasonId] = os.clock()
 	if archiveStore and storesOk and budget(Enum.DataStoreRequestType.GetAsync) then
 		local ok, result = pcall(function()
 			return (archiveStore :: DataStore):GetAsync("season_" .. seasonId)
@@ -944,7 +965,8 @@ local function buildWorld(city: Instance)
 	folder.Name = "Leaderboards"
 	folder.Parent = city
 	-- behind the north hoop of the Neighborhood court (court centre 100,0,-110; 76 long)
-	buildWorldBoard(folder, "Court", Vector3.new(100, 0, -162), Vector3.new(0, 0, 1), 12)
+	-- (lifted above the court's own scoreboard, which tops out at y 16 on the north fence at z -152)
+	buildWorldBoard(folder, "Court", Vector3.new(100, 0, -162), Vector3.new(0, 0, 1), 17)
 	-- City Speedway: in the infield, facing the grandstand on the south straight
 	local districts = city:FindFirstChild("Districts")
 	local industrial = districts and districts:FindFirstChild("Industrial")
@@ -994,6 +1016,7 @@ function Leaderboards.start(city: Instance?)
 	task.spawn(function()
 		task.wait(8)
 		loadIndex()
+		local cycle = 0
 		while true do
 			hookRacing()
 			local boards = {}
@@ -1004,7 +1027,12 @@ function Leaderboards.start(city: Instance?)
 					table.insert(boards, boardName(s.id, season.number))
 				end
 			end
-			for _, board in boards do
+			-- start at a different board each cycle so that, when the GetSortedAsync budget is
+			-- tight (small servers), the boards at the end of the list don't starve
+			cycle += 1
+			local offset = cycle % #boards
+			for i = 1, #boards do
+				local board = boards[(i + offset - 1) % #boards + 1]
 				if not storesOk then
 					break
 				end

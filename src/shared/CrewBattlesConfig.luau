@@ -81,7 +81,7 @@ end
 
 CrewBattlesConfig.ACCEPT_SECONDS = 120 -- challenge expires if not accepted
 CrewBattlesConfig.COUNTDOWN_SECONDS = 30 -- after accepting, before scoring starts
-CrewBattlesConfig.FINALIZE_GRACE = 8 -- seconds after the end for other servers' last scores
+CrewBattlesConfig.FINALIZE_GRACE = 20 -- seconds after the end for other servers' last scores (they broadcast every 10 s)
 CrewBattlesConfig.CHALLENGE_COOLDOWN = 60 -- per issuing player
 CrewBattlesConfig.SCORE_BROADCAST_SECONDS = 10 -- cross-server score updates
 
@@ -89,7 +89,14 @@ CrewBattlesConfig.SCORE_BROADCAST_SECONDS = 10 -- cross-server score updates
 CrewBattlesConfig.START_RATING = 1000
 CrewBattlesConfig.K = 32
 
--- Rewards for members of the winning crew who were in the battle (online and / or scored)
+-- Anti-farming: only this many rated battles per pair of crews per 24 h (later ones are
+-- unrated: no rating change, cup points or rewards), and each player collects battle
+-- rewards at most this many times per UTC day. A battle where one side scored nothing
+-- is also unrated (uncontested).
+CrewBattlesConfig.PAIR_RATED_PER_DAY = 2
+CrewBattlesConfig.DAILY_REWARDED_BATTLES = 5
+
+-- Rewards for members of either crew who scored in a rated battle
 CrewBattlesConfig.WIN_REWARD = { cash = 1500, xp = 300, rep = 25, crewRep = 40 }
 CrewBattlesConfig.DRAW_REWARD = { cash = 600, xp = 150, rep = 10, crewRep = 15 }
 CrewBattlesConfig.LOSS_REWARD = { cash = 250, xp = 80, rep = 0, crewRep = 5 } -- only if they scored

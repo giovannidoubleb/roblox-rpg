@@ -461,6 +461,9 @@ local function showResult(r: any)
 	if r.reward then
 		table.insert(lines, "Reward: " .. r.reward)
 	end
+	if r.note then
+		table.insert(lines, tostring(r.note))
+	end
 	UI.label({ Text = table.concat(lines, "\n"), TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 104), Size = UDim2.new(1, 0, 0, 90), Parent = card })
 	local close = UI.button({ Text = "NICE", BackgroundColor3 = accent, TextColor3 = Color3.fromRGB(20, 20, 24), Position = UDim2.new(0, 0, 1, -38), Size = UDim2.new(1, 0, 0, 38), Parent = card })
 	close.Activated:Connect(function()

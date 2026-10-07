@@ -19,7 +19,7 @@
 --          CrewBattleGet (RemoteFunction): () -> snapshot for the phone app
 --          CrewBattleEvent (RemoteEvent, server -> client): ("changed") ("live", chip | nil) ("result", card)
 -- Player attribute: CrewBattle (battle id while their crew is in a countdown / live battle, else nil)
--- Saved section "crewBattles" = { played, wins, mvps, cupWeeks = { ["<week>"] = crewId }, cupClaimed }
+-- Saved section "crewBattles" = { played, wins, mvps, cupWeeks = { ["<week>"] = crewId }, cupClaimed, rewardDay, rewardCount }
 
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
@@ -44,7 +44,7 @@ local CrewBattleGet = Net.remote("RemoteFunction", "CrewBattleGet")
 local CrewBattleEvent = Net.remote("RemoteEvent", "CrewBattleEvent")
 
 PlayerData.registerSection("crewBattles", function()
-	return { played = 0, wins = 0, mvps = 0, cupWeeks = {}, cupClaimed = -1 }
+	return { played = 0, wins = 0, mvps = 0, cupWeeks = {}, cupClaimed = -1, rewardDay = 0, rewardCount = 0 }
 end)
 
 local function now(): number
@@ -141,7 +141,7 @@ local function cupStore(week: number): OrderedDataStore?
 	return result
 end
 
-type RatingRec = { rating: number, wins: number, losses: number, draws: number, name: string? }
+type RatingRec = { rating: number, wins: number, losses: number, draws: number, name: string?, vs: { any }? }
 local ratings: { [string]: RatingRec } = {}
 local ratingLoading: { [string]: boolean } = {}
 local cupMem: { [number]: { [string]: number } } = {} -- week -> crewId -> points (this server's view / fallback)
@@ -173,6 +173,7 @@ local function loadRating(crewId: string, fresh: boolean?): RatingRec
 				rec.losses = tonumber(result.losses) or 0
 				rec.draws = tonumber(result.draws) or 0
 				rec.name = if type(result.name) == "string" then result.name else nil
+				rec.vs = if type(result.vs) == "table" then result.vs else nil
 				if rec.name and not crewNames[crewId] then
 					crewNames[crewId] = rec.name
 				end
@@ -207,7 +208,7 @@ function CrewBattles.ratingOf(crewId: string): number
 end
 
 -- Applies one battle's result to a crew record once (battle id remembered). Returns the new record.
-local function applyResult(crewId: string, battleId: string, delta: number, outcome: string): (RatingRec, boolean)
+local function applyResult(crewId: string, battleId: string, delta: number, outcome: string, opponentId: string): (RatingRec, boolean)
 	local applied = false
 	local function bump(rec: any)
 		rec.rating = math.max(100, math.floor((tonumber(rec.rating) or CB.START_RATING) + delta + 0.5))
@@ -235,6 +236,20 @@ local function applyResult(crewId: string, battleId: string, delta: number, outc
 				while #rec.applied > 30 do
 					table.remove(rec.applied, 1)
 				end
+				-- rated battles of the last 24 h by opponent (anti-farming pair limit)
+				local vs = {}
+				if type(rec.vs) == "table" then
+					for _, e in rec.vs do
+						if type(e) == "table" and type(e.t) == "number" and os.time() - e.t < 86400 then
+							table.insert(vs, e)
+						end
+					end
+				end
+				table.insert(vs, { o = opponentId, t = os.time() })
+				while #vs > 40 do
+					table.remove(vs, 1)
+				end
+				rec.vs = vs
 				return rec
 			end)
 		end)
@@ -246,6 +261,7 @@ local function applyResult(crewId: string, battleId: string, delta: number, outc
 				rec.losses = tonumber(result.losses) or 0
 				rec.draws = tonumber(result.draws) or 0
 				rec.name = result.name
+				rec.vs = if type(result.vs) == "table" then result.vs else nil
 				ratings[crewId] = rec
 			end
 			return ratings[crewId] or blankRating(), applied
@@ -280,12 +296,15 @@ end
 -- Cup standings cache: week -> { {id, points} } (best first)
 local cupTop: { [number]: { { id: string, points: number } } } = {}
 local cupReadAt: { [number]: number } = {}
+local cupFromStore: { [number]: boolean } = {}
 
-local function readCup(week: number, count: number): { { id: string, points: number } }
+-- Returns the standings and whether they came from the DataStore (false = this server's view only).
+local function readCup(week: number, count: number): ({ { id: string, points: number } }, boolean)
 	if os.clock() - (cupReadAt[week] or -math.huge) < 120 and cupTop[week] then
-		return cupTop[week]
+		return cupTop[week], cupFromStore[week] == true
 	end
 	local list = nil
+	local fromStore = false
 	local store = cupStore(week)
 	if store and budget(Enum.DataStoreRequestType.GetSortedAsync) then
 		local ok, page = pcall(function()
@@ -293,6 +312,7 @@ local function readCup(week: number, count: number): { { id: string, points: num
 		end)
 		if ok then
 			list = {}
+			fromStore = true
 			for _, item in page do
 				table.insert(list, { id = tostring(item.key), points = tonumber(item.value) or 0 })
 			end
@@ -328,7 +348,9 @@ local function readCup(week: number, count: number): { { id: string, points: num
 		return a.points > b.points
 	end)
 	cupTop[week] = list
-	cupReadAt[week] = os.clock()
+	cupFromStore[week] = fromStore
+	-- a failed read is retried sooner than a good one
+	cupReadAt[week] = if fromStore or not storesOk then os.clock() else os.clock() - 90
 	-- names for crews we haven't seen
 	for i, e in list do
 		if i > count then
@@ -338,7 +360,7 @@ local function readCup(week: number, count: number): { { id: string, points: num
 			loadRating(e.id)
 		end
 	end
-	return list
+	return list, fromStore
 end
 
 ---------------------------------------------------------------------------
@@ -560,7 +582,7 @@ local function newTracker(p: Player, b: Battle, crewId: string): Tracker
 	return {
 		battleId = b.id,
 		crewId = crewId,
-		carried = if prev then prev.score else 0,
+		carried = if prev and prev.crewId == crewId then prev.score else 0,
 		wins = attrNum(p, "Wins"),
 		shifts = shiftsOf(p),
 		runs = runsOf(p),
@@ -855,20 +877,41 @@ local function handleResult(b: Battle, r: any)
 	for _, p in audience(b) do
 		local crewId = p:GetAttribute("CrewId") :: string
 		local mine = b.contrib[p.UserId]
-		local took = mine ~= nil and mine.crewId == crewId
+		-- only members who actually scored for this crew take part (no AFK rewards, no carried
+		-- score from the rival crew after switching sides)
+		local took = mine ~= nil and mine.crewId == crewId and mine.score > 0
 		local outcome = if r.winner == nil then (if r.noContest then "none" else "draw") elseif r.winner == crewId then "win" else "loss"
+		local rated = outcome ~= "none" and r.unrated == nil
 		local reward = nil
+		local note: string? = nil
+		if r.unrated == "uncontested" then
+			note = "Uncontested (one crew scored nothing): unrated, no rewards."
+		elseif r.unrated == "repeat" then
+			note = "These crews already battled today: unrated, no rewards."
+		end
 		if took and not b.rewarded[p.UserId] then
 			b.rewarded[p.UserId] = true
-			if outcome == "win" then
-				reward = CB.WIN_REWARD
-			elseif outcome == "draw" then
-				reward = CB.DRAW_REWARD
-			elseif outcome == "loss" and mine.score > 0 then
-				reward = CB.LOSS_REWARD
-			end
 			local sec = sectionOf(p)
-			if sec and outcome ~= "none" then
+			if rated and sec then
+				if outcome == "win" then
+					reward = CB.WIN_REWARD
+				elseif outcome == "draw" then
+					reward = CB.DRAW_REWARD
+				elseif outcome == "loss" then
+					reward = CB.LOSS_REWARD
+				end
+				-- daily cap on paid battles per player
+				local day = math.floor(now() / 86400)
+				if sec.rewardDay ~= day then
+					sec.rewardDay = day
+					sec.rewardCount = 0
+				end
+				if reward and (tonumber(sec.rewardCount) or 0) >= CB.DAILY_REWARDED_BATTLES then
+					reward = nil
+					note = "Daily crew battle reward limit reached."
+				elseif reward then
+					sec.rewardCount = (tonumber(sec.rewardCount) or 0) + 1
+				end
 				sec.played += 1
 				if outcome == "win" then
 					sec.wins += 1
@@ -894,14 +937,16 @@ local function handleResult(b: Battle, r: any)
 					pcall(Crews.addCrewRep, p, reward.crewRep)
 				end
 			end
-			if outcome == "win" then
-				unlock(p, "crew_battle_win")
-				if sec and sec.wins >= 10 then
-					unlock(p, "crew_battle_10")
+			if rated then
+				if outcome == "win" then
+					unlock(p, "crew_battle_win")
+					if sec and sec.wins >= 10 then
+						unlock(p, "crew_battle_10")
+					end
 				end
-			end
-			if r.mvp and r.mvp.u == p.UserId and outcome ~= "none" then
-				unlock(p, "crew_battle_mvp")
+				if r.mvp and r.mvp.u == p.UserId then
+					unlock(p, "crew_battle_mvp")
+				end
 			end
 		end
 		local mySide = if r.a.id == crewId then r.a else r.b
@@ -917,12 +962,43 @@ local function handleResult(b: Battle, r: any)
 			mvp = r.mvp and { name = r.mvp.n, score = r.mvp.v } or nil,
 			myScore = if mine then mine.score else 0,
 			reward = if reward then rewardText(reward) else nil,
+			note = note,
 		})
 		local headline = if outcome == "win" then "CREW BATTLE WON!" elseif outcome == "loss" then "CREW BATTLE LOST" elseif outcome == "draw" then "CREW BATTLE DRAW" else "CREW BATTLE OVER"
 		Net.notify(p, headline, string.format("%s %d – %d %s · %s", mySide.name, mySide.score, theirSide.score, theirSide.name, r.formatName))
 		CrewBattleEvent:FireClient(p, "live", nil)
 	end
 	changed(nil)
+end
+
+-- Rated battles between two crews in the last 24 h (saved records + this server's memory).
+local pairMem: { [string]: { number } } = {}
+
+local function pairKey(x: string, y: string): string
+	return if x < y then x .. "|" .. y else y .. "|" .. x
+end
+
+local function recentVs(rec: RatingRec?, opponentId: string): number
+	local n = 0
+	if rec and type(rec.vs) == "table" then
+		for _, e in rec.vs do
+			if type(e) == "table" and e.o == opponentId and type(e.t) == "number" and os.time() - e.t < 86400 then
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
+local function pairCount(aId: string, bId: string, recA: RatingRec?, recB: RatingRec?): number
+	local mem = 0
+	local times: { number } = pairMem[pairKey(aId, bId)] or {}
+	for _, t in times do
+		if os.time() - t < 86400 then
+			mem += 1
+		end
+	end
+	return math.max(mem, recentVs(recA, bId), recentVs(recB, aId))
 end
 
 -- Host (or fallback) decides the result and applies ratings / cup once.
@@ -932,54 +1008,80 @@ local function finalize(b: Battle)
 	end
 	b.finalizing = true
 	task.spawn(function()
-		local sa, sb = total(b, b.a.id), total(b, b.b.id)
-		local winner: string? = if sa > sb then b.a.id elseif sb > sa then b.b.id else nil
-		local noContest = sa == 0 and sb == 0
-		local ra = loadRating(b.a.id, true).rating
-		local rb = loadRating(b.b.id, true).rating
-		local da, db = 0, 0
-		local recA, recB = ratings[b.a.id] or blankRating(), ratings[b.b.id] or blankRating()
-		if not noContest then
-			local scoreA = if winner == b.a.id then 1 elseif winner == nil then 0.5 else 0
-			local ea = CB.expected(ra, rb)
-			da = math.floor(CB.K * (scoreA - ea) + 0.5)
-			db = -da
-			local okA
-			recA, okA = applyResult(b.a.id, b.id, da, if scoreA == 1 then "win" elseif scoreA == 0 then "loss" else "draw")
-			local okB
-			recB, okB = applyResult(b.b.id, b.id, db, if scoreA == 0 then "win" elseif scoreA == 1 then "loss" else "draw")
-			if okA then
-				addCupPoints(b.a.id, if scoreA == 1 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+		local ok, err = pcall(function()
+			local sa, sb = total(b, b.a.id), total(b, b.b.id)
+			local winner: string? = if sa > sb then b.a.id elseif sb > sa then b.b.id else nil
+			local noContest = sa == 0 and sb == 0
+			local loadedA = loadRating(b.a.id, true)
+			local loadedB = loadRating(b.b.id, true)
+			local ra, rb = loadedA.rating, loadedB.rating
+			local da, db = 0, 0
+			local recA, recB = ratings[b.a.id] or blankRating(), ratings[b.b.id] or blankRating()
+			-- anti-farming: a battle one side never played, or one pair of crews battling over
+			-- and over (alt crews), changes no rating, gives no cup points and pays no rewards
+			local unrated: string? = nil
+			if not noContest and (sa == 0 or sb == 0) then
+				unrated = "uncontested"
+			elseif not noContest and pairCount(b.a.id, b.b.id, loadedA, loadedB) >= CB.PAIR_RATED_PER_DAY then
+				unrated = "repeat"
 			end
-			if okB then
-				addCupPoints(b.b.id, if scoreA == 0 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+			if not noContest and not unrated then
+				local pk = pairKey(b.a.id, b.b.id)
+				pairMem[pk] = pairMem[pk] or {}
+				table.insert(pairMem[pk], os.time())
+				local scoreA = if winner == b.a.id then 1 elseif winner == nil then 0.5 else 0
+				local ea = CB.expected(ra, rb)
+				da = math.floor(CB.K * (scoreA - ea) + 0.5)
+				db = -da
+				local okA
+				recA, okA = applyResult(b.a.id, b.id, da, if scoreA == 1 then "win" elseif scoreA == 0 then "loss" else "draw", b.b.id)
+				local okB
+				recB, okB = applyResult(b.b.id, b.id, db, if scoreA == 0 then "win" elseif scoreA == 1 then "loss" else "draw", b.a.id)
+				if okA then
+					addCupPoints(b.a.id, if scoreA == 1 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+				end
+				if okB then
+					addCupPoints(b.b.id, if scoreA == 0 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+				end
+				submitCrew(b.a.id, recA)
+				submitCrew(b.b.id, recB)
 			end
-			submitCrew(b.a.id, recA)
-			submitCrew(b.b.id, recB)
+			local mvp: Top? = nil
+			for _, t in b.tops do
+				if t and (not mvp or t.v > mvp.v) then
+					mvp = t
+				end
+			end
+			local f = CB.BY_ID[b.format]
+			local r = {
+				id = b.id,
+				format = b.format,
+				formatName = CB.formatName(b.format, b.metric),
+				icon = f.icon,
+				unit = CB.unit(b.format, b.metric),
+				at = now(),
+				winner = winner,
+				noContest = noContest,
+				unrated = unrated,
+				a = { id = b.a.id, name = b.a.name, tag = b.a.tag, score = sa, delta = da, rating = recA.rating },
+				b = { id = b.b.id, name = b.b.name, tag = b.b.tag, score = sb, delta = db, rating = recB.rating },
+				mvp = mvp,
+			}
+			publish({ t = "rs", id = b.id, r = r })
+			b.finalizing = false
+			handleResult(b, r)
+		end)
+		if not ok then
+			-- never leave the crews stuck in an "ending" battle
+			warn("[CityGrind] CrewBattles finalize failed:", err)
+			b.finalizing = false
+			if b.state ~= "done" then
+				b.state = "done"
+				b.doneAt = now()
+				setBattleAttr(b)
+				changed(nil)
+			end
 		end
-		local mvp: Top? = nil
-		for _, t in b.tops do
-			if t and (not mvp or t.v > mvp.v) then
-				mvp = t
-			end
-		end
-		local f = CB.BY_ID[b.format]
-		local r = {
-			id = b.id,
-			format = b.format,
-			formatName = CB.formatName(b.format, b.metric),
-			icon = f.icon,
-			unit = CB.unit(b.format, b.metric),
-			at = now(),
-			winner = winner,
-			noContest = noContest,
-			a = { id = b.a.id, name = b.a.name, tag = b.a.tag, score = sa, delta = da, rating = recA.rating },
-			b = { id = b.b.id, name = b.b.name, tag = b.b.tag, score = sb, delta = db, rating = recB.rating },
-			mvp = mvp,
-		}
-		publish({ t = "rs", id = b.id, r = r })
-		b.finalizing = false
-		handleResult(b, r)
 	end)
 end
 
@@ -1280,7 +1382,7 @@ CrewBattleGet.OnServerInvoke = function(player: Player)
 	-- weekly cup
 	local standings = {}
 	local myPoints = 0
-	for i, e in readCup(week, 10) do
+	for i, e in (readCup(week, 10)) do
 		if c and e.id == c.id then
 			myPoints = e.points
 		end
@@ -1289,7 +1391,7 @@ CrewBattleGet.OnServerInvoke = function(player: Player)
 		end
 	end
 	local last = {}
-	for i, e in readCup(week - 1, 3) do
+	for i, e in (readCup(week - 1, 3)) do
 		if i > 3 then
 			break
 		end
@@ -1333,9 +1435,9 @@ local function claimCup(p: Player)
 	if type(crewId) ~= "string" then
 		return
 	end
-	local top = readCup(lastWeek, 3)
-	if #top == 0 then
-		return -- standings not readable right now; try again later
+	local top, fromStore = readCup(lastWeek, 3)
+	if #top == 0 or (storesOk and not fromStore) then
+		return -- global standings not readable right now (this server's view isn't enough); try again later
 	end
 	for place, e in top do
 		if place > 3 then
@@ -1411,7 +1513,14 @@ local function step(dt: number)
 			-- (a battle id is applied to a crew's rating once either way)
 			local grace = if b.host == SERVER_ID then CB.FINALIZE_GRACE else 90
 			if t >= b.endsAt + grace then
-				finalize(b)
+				if b.host ~= SERVER_ID and next(b.contrib) == nil and #audience(b) == 0 then
+					-- an uninvolved server that missed the host's result: just forget the battle
+					-- (finalizing here too would only spend DataStore budget on every server)
+					b.state = "done"
+					b.doneAt = t
+				else
+					finalize(b)
+				end
 			end
 		end
 	end
@@ -1431,7 +1540,9 @@ local function broadcastScores()
 				if b.state == "ending" then
 					b.sentFinal = true
 				end
-				if b.host ~= SERVER_ID or #membersHere(b.a.id) + #membersHere(b.b.id) > 0 then
+				-- only servers with something to report (every server knows every battle; a
+				-- message from each would flood the topic's per-minute receive limit)
+				if #membersHere(b.a.id) + #membersHere(b.b.id) > 0 or next(b.contrib) ~= nil then
 					local top = b.tops[SERVER_ID]
 					publish({ t = "sc", id = b.id, a = sa, b = sb, top = top })
 				end
