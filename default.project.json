@@ -8,6 +8,9 @@
         "ApartmentsConfig": {
           "$path": "src/shared/ApartmentsConfig.luau"
         },
+        "AudioConfig": {
+          "$path": "src/shared/AudioConfig.luau"
+        },
         "BankConfig": {
           "$path": "src/shared/BankConfig.luau"
         },
@@ -28,6 +31,9 @@
         },
         "DistrictsConfig": {
           "$path": "src/shared/DistrictsConfig.luau"
+        },
+        "EffectsConfig": {
+          "$path": "src/shared/EffectsConfig.luau"
         },
         "EmotesConfig": {
           "$path": "src/shared/EmotesConfig.luau"
@@ -205,8 +211,14 @@
       "StarterPlayerScripts": {
         "CityGrindClient": {
           "$path": "src/client/Client.client.luau",
+          "Animation": {
+            "$path": "src/client/Animation.luau"
+          },
           "Apartments": {
             "$path": "src/client/Apartments.luau"
+          },
+          "Audio": {
+            "$path": "src/client/Audio.luau"
           },
           "Bank": {
             "$path": "src/client/Bank.luau"
@@ -228,6 +240,9 @@
           },
           "Crews": {
             "$path": "src/client/Crews.luau"
+          },
+          "Effects": {
+            "$path": "src/client/Effects.luau"
           },
           "Emotes": {
             "$path": "src/client/Emotes.luau"
