@@ -24,9 +24,13 @@ VehiclesConfig.MODS_RANGE = 30
 VehiclesConfig.SPAWN_COOLDOWN = 8
 VehiclesConfig.MOD_PRICES = { paint = 150, rim = 250, glow = 400 }
 
--- Where vehicles may be spawned (inside the city ground, outside interiors).
-VehiclesConfig.CITY_MIN = Vector3.new(-292, -20, -222)
-VehiclesConfig.CITY_MAX = Vector3.new(292, 60, 222)
+-- Where vehicles may be spawned (inside the city ground, outside interiors):
+-- every district on land (see DistrictsConfig), the beach up to the waterline.
+VehiclesConfig.CITY_MIN = Vector3.new(-752, -20, -722)
+VehiclesConfig.CITY_MAX = Vector3.new(892, 60, 515)
+-- A vehicle outside this box (or below KILL_Y) is towed back to the garage.
+VehiclesConfig.WORLD_MIN = Vector3.new(-800, -40, -770)
+VehiclesConfig.WORLD_MAX = Vector3.new(940, 500, 1000)
 
 -- Speed shown on the speedometer = studs/s * this.
 VehiclesConfig.MPH_PER_STUD = 1.1

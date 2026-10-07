@@ -1267,7 +1267,8 @@ local function sanityStep(dt: number)
 			continue
 		end
 		local pos = chassis.Position
-		if pos.Y < -40 or math.abs(pos.X) > 1000 or math.abs(pos.Z) > 1000 or pos.Y > 500 then
+		local wlo, whi = VC.WORLD_MIN, VC.WORLD_MAX
+		if pos.Y < wlo.Y or pos.Y > whi.Y or pos.X < wlo.X or pos.X > whi.X or pos.Z < wlo.Z or pos.Z > whi.Z or (pos.Z > 525 and pos.Y < -6) then
 			despawn(owner)
 			Net.notify(owner, "GARAGE", "Your vehicle was towed back to the garage.")
 			continue

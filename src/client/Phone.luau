@@ -11,12 +11,14 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local UI = require(script.Parent:WaitForChild("UI"))
 local HUD = require(script.Parent:WaitForChild("HUD"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
+local DistrictsConfig = require(shared:WaitForChild("DistrictsConfig"))
 local remotes = shared:WaitForChild("Remotes")
 
 local player = Players.LocalPlayer
@@ -287,31 +289,56 @@ end
 local function buildMap()
 	local _, content = appPage("Map", "Map")
 	local MAP_W = PHONE_W - 2 * SCREEN_INSET - 20
-	local WORLD_X, WORLD_Z = 600, 460
-	local scale = MAP_W / WORLD_X
-	local MAP_H = math.floor(WORLD_Z * scale)
+	local MAP_H = 300
+	-- the whole city (every district), from DistrictsConfig
+	local MIN_X, MIN_Z = DistrictsConfig.MAP_MIN.X, DistrictsConfig.MAP_MIN.Z
+	local WORLD_W = DistrictsConfig.MAP_MAX.X - MIN_X
+	local WORLD_H = DistrictsConfig.MAP_MAX.Z - MIN_Z
+	local BASE_SCALE = MAP_W / WORLD_W -- pixels per stud at zoom 1 (whole city fits)
+	local ZOOMS = { 1, 1.6, 2.5, 4, 6 }
+	local zoomIndex = 3
+	local view = Vector2.new(0, 0) -- world X/Z shown at the canvas centre
+	local follow = true -- keep the player centred until they pan
 
-	local canvas = UI.new("Frame", {
+	-- CanvasGroup so rotated shapes (curves, ramps) are clipped too
+	local canvas = UI.new("CanvasGroup", {
 		Name = "Canvas",
-		BackgroundColor3 = Color3.fromRGB(70, 120, 60),
-		ClipsDescendants = true,
+		BackgroundColor3 = Color3.fromRGB(30, 36, 44),
 		Size = UDim2.fromOffset(MAP_W, MAP_H),
 		LayoutOrder = 1,
 		Parent = content,
 	}, { UI.corner(12) })
+	local world = UI.new("Frame", { Name = "World", BackgroundTransparency = 1, Parent = canvas })
 
-	local function toMap(pos: Vector3): UDim2
-		return UDim2.fromOffset((pos.X + WORLD_X / 2) * scale, (pos.Z + WORLD_Z / 2) * scale)
+	local function frac(pos: Vector3): UDim2
+		return UDim2.fromScale((pos.X - MIN_X) / WORLD_W, (pos.Z - MIN_Z) / WORLD_H)
 	end
 
-	local function rect(cf: CFrame, size: Vector3, color: Color3, z: number)
+	local function applyView()
+		local s = BASE_SCALE * ZOOMS[zoomIndex]
+		view = Vector2.new(math.clamp(view.X, MIN_X, MIN_X + WORLD_W), math.clamp(view.Y, MIN_Z, MIN_Z + WORLD_H))
+		world.Size = UDim2.fromOffset(WORLD_W * s, WORLD_H * s)
+		world.Position = UDim2.fromOffset(MAP_W / 2 - (view.X - MIN_X) * s, MAP_H / 2 - (view.Y - MIN_Z) * s)
+	end
+
+	-- A part's footprint as a (possibly rotated) rectangle.
+	local function rect(part: BasePart, color: Color3, z: number)
+		local cf, size = part.CFrame, part.Size
+		local rv, lv = cf.RightVector, cf.LookVector
+		local w, d, rot = size.X, size.Z, 0
+		if math.abs(rv.Y) < 0.5 then
+			rot = math.deg(math.atan2(rv.Z, rv.X))
+			d = size.Z * Vector2.new(lv.X, lv.Z).Magnitude
+		end
 		UI.new("Frame", {
+			Name = "Shape",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			BackgroundColor3 = color,
-			Position = toMap(cf.Position),
-			Size = UDim2.fromOffset(math.max(2, size.X * scale), math.max(2, size.Z * scale)),
+			Position = frac(cf.Position),
+			Size = UDim2.new(w / WORLD_W, 1, d / WORLD_H, 1),
+			Rotation = rot,
 			ZIndex = z,
-			Parent = canvas,
+			Parent = world,
 		})
 	end
 
@@ -325,42 +352,149 @@ local function buildMap()
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Size = UDim2.fromOffset(16, 16),
 		ZIndex = 10,
-		Parent = canvas,
+		Parent = world,
 	})
 
-	local drawn = false
-	local function drawCity()
-		local city = Workspace:FindFirstChild("City")
-		if drawn or not city then
+	-- district names
+	for _, d in DistrictsConfig.LIST do
+		UI.label({
+			Name = "DistrictLabel",
+			Text = string.upper(d.name),
+			Font = UI.FONT_BLACK,
+			TextSize = 11,
+			TextColor3 = d.color,
+			TextStrokeTransparency = 0.2,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = frac(d.center),
+			Size = UDim2.fromOffset(120, 14),
+			ZIndex = 8,
+			Parent = world,
+		})
+	end
+
+	-- zoom / recentre controls (touch, mouse and gamepad friendly buttons)
+	local controls = UI.new("Frame", { Name = "Controls", BackgroundTransparency = 1, Size = UDim2.fromOffset(MAP_W, 30), LayoutOrder = 2, Parent = content })
+	local whereLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -120, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = controls })
+	local function control(text: string, x: number, fn: () -> ())
+		local b = UI.button({ Text = text, TextSize = 15, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, x, 0, 0), Size = UDim2.fromOffset(36, 30), Parent = controls })
+		b.Activated:Connect(fn)
+	end
+	control("−", -80, function()
+		zoomIndex = math.max(1, zoomIndex - 1)
+		applyView()
+	end)
+	control("+", -40, function()
+		zoomIndex = math.min(#ZOOMS, zoomIndex + 1)
+		applyView()
+	end)
+	control("◎", 0, function()
+		follow = true
+	end)
+
+	-- drag to pan, mouse wheel to zoom
+	local dragInput: InputObject? = nil
+	local dragStart = Vector3.zero
+	local dragView = view
+	canvas.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+			dragStart = input.Position
+			dragView = view
+			content.ScrollingEnabled = false
+		end
+	end)
+	canvas.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseWheel then
+			zoomIndex = math.clamp(zoomIndex + (if input.Position.Z > 0 then 1 else -1), 1, #ZOOMS)
+			applyView()
+		end
+	end)
+	canvas.MouseEnter:Connect(function()
+		content.ScrollingEnabled = false -- the wheel zooms the map instead of scrolling the list
+	end)
+	canvas.MouseLeave:Connect(function()
+		if not dragInput then
+			content.ScrollingEnabled = true
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragInput then
 			return
 		end
-		drawn = true
-		for _, d in city:GetDescendants() do
-			if d:IsA("BasePart") then
-				if d.Name == "MainRoad" or d.Name == "CrossRoad" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(50, 50, 55), 2)
+		local moving = (dragInput.UserInputType == Enum.UserInputType.Touch and input == dragInput)
+			or (dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement)
+		if moving then
+			local delta = input.Position - dragStart
+			if delta.Magnitude > 4 then
+				follow = false
+			end
+			if not follow then
+				local s = BASE_SCALE * ZOOMS[zoomIndex] * (if uiScale then uiScale.Scale else 1)
+				view = dragView - Vector2.new(delta.X, delta.Y) / s
+				applyView()
+			end
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if dragInput and (input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1) then
+			dragInput = nil
+			content.ScrollingEnabled = true
+		end
+	end)
+
+	local drawnParts = -1
+	local function drawCity()
+		local city = Workspace:FindFirstChild("City")
+		if not city then
+			return
+		end
+		-- redraw only when the city changed (e.g. districts finished streaming in)
+		local descendants = city:GetDescendants()
+		if #descendants == drawnParts then
+			return
+		end
+		drawnParts = #descendants
+		for _, child in world:GetChildren() do
+			if child.Name == "Shape" then
+				child:Destroy()
+			end
+		end
+		for _, d in descendants do
+			if d:IsA("BasePart") and d.Position.Y < 400 then
+				local mapColor = d:GetAttribute("MapColor")
+				if typeof(mapColor) == "Color3" then
+					local layer = d:GetAttribute("MapLayer")
+					rect(d, mapColor, if type(layer) == "number" then layer else 2)
+				elseif d.Name == "Ground" and d.Parent and d.Parent.Name == "Streets" then
+					rect(d, Color3.fromRGB(86, 140, 70), 1)
+				elseif d.Name == "MainRoad" or d.Name == "CrossRoad" then
+					rect(d, Color3.fromRGB(50, 50, 55), 2)
 				elseif d.Name == "Sidewalk" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(170, 170, 165), 2)
+					rect(d, Color3.fromRGB(170, 170, 165), 2)
 				elseif d.Name == "Body" and d.Parent and d.Parent.Parent and d.Parent.Parent.Name == "Buildings" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(200, 190, 175), 3)
+					rect(d, Color3.fromRGB(200, 190, 175), 3)
 				elseif d.Name == "CourtFloor" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(40, 90, 150), 3)
+					rect(d, Color3.fromRGB(40, 90, 150), 4)
 				elseif d.Name == "Lot" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(60, 60, 66), 2)
+					rect(d, Color3.fromRGB(60, 60, 66), 2)
 				end
 			end
 		end
 	end
 
-	local listStart = 2
+	local listStart = 3
+	local showAll = false
+	local NEAREST = 30
 	pages.Map.open = function()
 		drawCity()
+		applyView()
 		for _, child in content:GetChildren() do
-			if child:IsA("GuiObject") and child ~= canvas then
+			if child:IsA("GuiObject") and child ~= canvas and child ~= controls then
 				child:Destroy()
 			end
 		end
-		for _, child in canvas:GetChildren() do
+		for _, child in world:GetChildren() do
 			if child.Name == "Dot" then
 				child:Destroy()
 			end
@@ -378,7 +512,12 @@ local function buildMap()
 			return
 		end
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-		local list = points:GetChildren()
+		local list = {}
+		for _, point in points:GetChildren() do
+			if point:IsA("BasePart") then
+				table.insert(list, point)
+			end
+		end
 		table.sort(list, function(a, b)
 			if not root then
 				return a.Name < b.Name
@@ -386,25 +525,35 @@ local function buildMap()
 			return (a.Position - root.Position).Magnitude < (b.Position - root.Position).Magnitude
 		end)
 		for i, point in list do
-			local row = card(content, 44, listStart + i)
-			UI.label({ Text = point.Name, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -70, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
-			local dist = if root then math.floor((point.Position - root.Position).Magnitude / 3.57) .. "m" else ""
-			UI.label({ Text = (point:GetAttribute("Category") or "Place") .. "  ·  " .. dist, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -70, 0, 14), Parent = row })
-			local go = UI.button({ Text = "GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
-			go.Activated:Connect(function()
-				setGPS(point.Name, point.Position)
-				showPage("Map")
-			end)
-			-- dot on the map
+			-- every place gets a dot; the list shows the nearest ones unless expanded
 			UI.new("Frame", {
 				Name = "Dot",
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = colors.accent,
-				Position = toMap(point.Position),
+				BackgroundColor3 = if point:GetAttribute("Category") == "Transit" then Color3.fromRGB(80, 200, 255) else colors.accent,
+				Position = frac(point.Position),
 				Size = UDim2.fromOffset(6, 6),
 				ZIndex = 6,
-				Parent = canvas,
+				Parent = world,
 			}, { UI.corner(3) })
+			if showAll or i <= NEAREST then
+				local row = card(content, 44, listStart + i)
+				UI.label({ Text = point.Name, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -70, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+				local dist = if root then math.floor((point.Position - root.Position).Magnitude / 3.57) .. "m" else ""
+				local district = DistrictsConfig.displayName(DistrictsConfig.at(point.Position))
+				UI.label({ Text = (point:GetAttribute("Category") or "Place") .. "  ·  " .. district .. "  ·  " .. dist, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -70, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+				local go = UI.button({ Text = "GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
+				go.Activated:Connect(function()
+					setGPS(point.Name, point.Position)
+					showPage("Map")
+				end)
+			end
+		end
+		if not showAll and #list > NEAREST then
+			local more = UI.button({ Text = string.format("Show all %d places", #list), TextSize = 13, Size = UDim2.new(1, -20, 0, 34), LayoutOrder = listStart + #list + 1, Parent = content })
+			more.Activated:Connect(function()
+				showAll = true
+				showPage("Map")
+			end)
 		end
 	end
 
@@ -414,9 +563,14 @@ local function buildMap()
 		end
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if root then
-			arrow.Position = toMap(root.Position)
+			arrow.Position = frac(root.Position)
 			local look = root.CFrame.LookVector
 			arrow.Rotation = math.deg(math.atan2(look.X, -look.Z))
+			if follow then
+				view = Vector2.new(root.Position.X, root.Position.Z)
+				applyView()
+			end
+			whereLabel.Text = "📍 " .. DistrictsConfig.displayName(DistrictsConfig.at(root.Position))
 		end
 	end)
 end
@@ -609,7 +763,7 @@ local function buildHome()
 	RunService.Heartbeat:Connect(function()
 		if isOpen and currentPage == "Home" then
 			bigClock.Text = UI.formatClock(Lighting.ClockTime):gsub(" [AP]M", "")
-			subtitle.Text = "The Neighborhood  ·  " .. (if Lighting.ClockTime >= 6 and Lighting.ClockTime < 18 then "Day" else "Night")
+			subtitle.Text = DistrictsConfig.displayName(player:GetAttribute("District")) .. "  ·  " .. (if Lighting.ClockTime >= 6 and Lighting.ClockTime < 18 then "Day" else "Night")
 		end
 	end)
 end
