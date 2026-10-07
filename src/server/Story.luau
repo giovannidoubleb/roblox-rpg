@@ -113,6 +113,22 @@ local function placePosition(player: Player, place: string?): Vector3?
 	if point and point:IsA("BasePart") then
 		return point.Position
 	end
+	-- Districts renames the Neighborhood's "Subway Station" point to
+	-- "Subway · Neighborhood" and adds one per district: use the nearest.
+	if place == "Subway Station" and points then
+		local best, bestDist = nil, math.huge
+		for _, p in points:GetChildren() do
+			if p:IsA("BasePart") and p.Name:sub(1, 6) == "Subway" then
+				local d = Net.distance(player, p.Position)
+				if best == nil or d < bestDist then
+					best, bestDist = p.Position, d
+				end
+			end
+		end
+		if best then
+			return best
+		end
+	end
 	local districts = city and city:FindFirstChild("Districts")
 	local district = districts and districts:FindFirstChild(place)
 	local center = district and district:GetAttribute("Center")
@@ -226,6 +242,12 @@ end
 evaluate = function(player: Player)
 	local s = sec(player)
 	if not s or s.done or not active[player] then
+		return
+	end
+	if (s.introSent or 0) < s.chapter then
+		-- the chapter's briefing (sent on a delay) runs evaluate itself; don't
+		-- complete its missions before the player has even been told about them
+		pushState(player)
 		return
 	end
 	for _ = 1, 64 do -- safety bound

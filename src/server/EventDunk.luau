@@ -356,8 +356,8 @@ function EventDunk.init(ctx: any): any
 		if not court then
 			return "postpone", "Every court is busy with games."
 		end
+		build(ev, court) -- builds first so a failed build never leaves the court claimed
 		ctx.claimCourt(court, ev.name)
-		build(ev, court)
 		ev.venue = court
 		ev.location = ctx.courtLabel(court)
 		ev.pos = ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8)

@@ -244,7 +244,7 @@ type Session = {
 	conns: { RBXScriptConnection },
 	lastTx: any, -- newest transaction table already looked at (false = none)
 	lastFame: number?,
-	lastTok: number?,
+	tokSeen: { [any]: boolean },
 	lastPos: Vector3?,
 	lastAt: number,
 	runStuds: number,
@@ -339,13 +339,18 @@ PlayerData.onPublish(function(player: Player, data: any)
 	end
 	s.lastFame = fame
 
-	-- CityTok posts made (the saved list can shrink when a post is deleted).
+	-- CityTok posts made: count post ids not seen before (the saved list is
+	-- capped and shrinks on delete, so its length alone can't be trusted).
 	local tok = data.sections.citytok
-	local tokCount = if type(tok) == "table" and type(tok.posts) == "table" then #tok.posts else 0
-	if s.lastTok and tokCount > s.lastTok then
-		bump(player, "tokPosts", tokCount - s.lastTok)
+	if type(tok) == "table" and type(tok.posts) == "table" then
+		local seen = s.tokSeen
+		for _, id in tok.posts do
+			if not seen[id] then
+				seen[id] = true
+				bump(player, "tokPosts", 1)
+			end
+		end
 	end
-	s.lastTok = tokCount
 
 	dirty[player] = true
 end)
@@ -792,13 +797,18 @@ local function onLoaded(player: Player)
 		conns = {},
 		lastTx = if data then (data.transactions[1] or false) else nil,
 		lastFame = data and data.fame,
-		lastTok = if type(tok) == "table" and type(tok.posts) == "table" then #tok.posts else 0,
+		tokSeen = {},
 		lastPos = nil,
 		lastAt = os.clock(),
 		runStuds = 0,
 		driveStuds = 0,
 		signature = nil,
 	}
+	if type(tok) == "table" and type(tok.posts) == "table" then
+		for _, id in tok.posts do
+			s.tokSeen[id] = true
+		end
+	end
 	sessions[player] = s
 
 	local function watch(attr: string, fn: (any) -> ())

@@ -288,6 +288,7 @@ function EventStreetball.init(ctx: any): any
 		ctx.announce(matchPlayers(m), string.format("%s +%d  ·  %d-%d", team.name:upper(), points, m.score[m.a], m.score[m.b]))
 		ctx.markDirty()
 		if m.score[team] >= S.TARGET or m.sudden then
+			check(m, other(m, team), 60) -- freeze the ball so nobody scores again before the result
 			task.delay(1, function()
 				finishMatch(m.ev, m, team, nil)
 			end)
@@ -416,7 +417,6 @@ function EventStreetball.init(ctx: any): any
 		if not court then
 			return "postpone", "Every court is busy with games."
 		end
-		ctx.claimCourt(court, ev.name)
 		ev.venue = court
 		ev.location = ctx.courtLabel(court)
 		ev.pos = ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8)
@@ -458,6 +458,7 @@ function EventStreetball.init(ctx: any): any
 			log = {} :: { string },
 			mode = "1v1",
 		}
+		ctx.claimCourt(court, ev.name) -- only once ev.data exists, so cleanup always releases it
 		ev.state = "Checkin"
 		ev.phase = "Check-in: get on the court"
 		ev.phaseEndsAt = now() + S.CHECKIN

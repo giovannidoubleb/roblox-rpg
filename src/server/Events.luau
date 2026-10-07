@@ -73,6 +73,7 @@ type Event = {
 	reminded: boolean,
 	postpones: number,
 	venue: any, -- picked at schedule time by registry kinds (court model, spot...)
+	counted: { [number]: boolean }?, -- userIds whose join already counted toward "joined"
 	data: any,
 }
 
@@ -2202,8 +2203,13 @@ local function join(ev: Event, player: Player): (boolean, string)
 	end
 	table.insert(ev.registered, player)
 	ev.watchers[player] = nil
+	-- leaving and re-joining the same event never counts twice (quests,
+	-- achievements and the story read "joined")
+	local counted = ev.counted or {}
+	ev.counted = counted
 	local sec = section(player)
-	if sec then
+	if sec and not counted[player.UserId] then
+		counted[player.UserId] = true
 		sec.joined += 1
 		PlayerData.markChanged(player)
 	end

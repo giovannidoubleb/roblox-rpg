@@ -353,104 +353,115 @@ local function playCinematic()
 		refreshTracker()
 	end
 	local camera = Workspace.CurrentCamera
-	local shots = gatherShots()
-	if not camera or #shots == 0 then
+	local gathered, shots = pcall(gatherShots)
+	if not camera or not gathered or #shots == 0 then
 		cinematicPlaying = false
 		finishCinematic()
 		return
 	end
-	Phone.setOpen(false)
-	HUD.setVisible(false)
-	controls(false)
+	local root: Frame? = nil
+	-- Anything below may fail (a part removed mid-shot, a missing character):
+	-- the camera, HUD and controls are always restored afterwards.
+	local ok, err = pcall(function()
+		pcall(Phone.setOpen, false)
+		HUD.setVisible(false)
+		controls(false)
 
-	local skipped = false
-	local root = UI.new("Frame", { Name = "Cinematic", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 50, Parent = gui })
-	local top = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = root })
-	UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = root })
-	local fader = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0, Size = UDim2.fromScale(1, 1), ZIndex = 52, Parent = root })
-	local caption = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 34, TextStrokeTransparency = 0.4, TextTransparency = 1, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.78), Size = UDim2.new(1, -40, 0, 44), ZIndex = 53, Parent = root })
-	local logo = UI.label({ Text = "CITY GRIND", Font = UI.FONT_BLACK, TextSize = 18, TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 20, 0.06, -10), Size = UDim2.fromOffset(200, 20), ZIndex = 53, Parent = top })
-	logo.TextTransparency = 0.2
-	local skip = UI.button({ Text = "SKIP  ▶▶", TextSize = 15, BackgroundColor3 = Color3.fromRGB(40, 40, 46), AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -20, 1, -16), Size = UDim2.fromOffset(110, 36), ZIndex = 54, Parent = root })
-	skip.Activated:Connect(function()
-		skipped = true
-	end)
+		local skipped = false
+		local rootFrame = UI.new("Frame", { Name = "Cinematic", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 50, Parent = gui })
+		root = rootFrame
+		local top = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = rootFrame })
+		UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = rootFrame })
+		local fader = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0, Size = UDim2.fromScale(1, 1), ZIndex = 52, Parent = rootFrame })
+		local caption = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 34, TextStrokeTransparency = 0.4, TextTransparency = 1, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.78), Size = UDim2.new(1, -40, 0, 44), ZIndex = 53, Parent = rootFrame })
+		local logo = UI.label({ Text = "CITY GRIND", Font = UI.FONT_BLACK, TextSize = 18, TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 20, 0.06, -10), Size = UDim2.fromOffset(200, 20), ZIndex = 53, Parent = top })
+		logo.TextTransparency = 0.2
+		local skip = UI.button({ Text = "SKIP  ▶▶", TextSize = 15, BackgroundColor3 = Color3.fromRGB(40, 40, 46), AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -20, 1, -16), Size = UDim2.fromOffset(110, 36), ZIndex = 54, Parent = rootFrame })
+		skip.Activated:Connect(function()
+			skipped = true
+		end)
 
-	local function say(text: string)
-		caption.Text = text
-		caption.TextTransparency = 1
-		TweenService:Create(caption, TweenInfo.new(0.8), { TextTransparency = 0 }):Play()
-	end
-	local function unsay()
-		TweenService:Create(caption, TweenInfo.new(0.6), { TextTransparency = 1 }):Play()
-	end
-	-- waits while watching for SKIP
-	local function hold(seconds: number): boolean
-		local deadline = os.clock() + seconds
-		while os.clock() < deadline do
-			if skipped then
-				return false
+		local function say(text: string)
+			caption.Text = text
+			caption.TextTransparency = 1
+			TweenService:Create(caption, TweenInfo.new(0.8), { TextTransparency = 0 }):Play()
+		end
+		local function unsay()
+			TweenService:Create(caption, TweenInfo.new(0.6), { TextTransparency = 1 }):Play()
+		end
+		-- waits while watching for SKIP
+		local function hold(seconds: number): boolean
+			local deadline = os.clock() + seconds
+			while os.clock() < deadline do
+				if skipped then
+					return false
+				end
+				task.wait()
 			end
-			task.wait()
+			return true
 		end
-		return true
-	end
 
-	camera.CameraType = Enum.CameraType.Scriptable
-	local lines = SC.CINEMATIC_LINES
-	local SHOT_TIME = 4.2
-	local lineAt = { [1] = 1, [math.max(2, #shots - 1)] = 2 }
-	for i, shot in shots do
-		if skipped then
-			break
-		end
-		local angle = math.rad(35 + i * 70)
-		local function at(a: number): CFrame
-			local offset = Vector3.new(math.cos(a) * shot.radius, shot.height, math.sin(a) * shot.radius)
-			return CFrame.lookAt(shot.focus + offset, shot.focus)
-		end
-		camera.CFrame = at(angle)
-		local move = TweenService:Create(camera, TweenInfo.new(SHOT_TIME, Enum.EasingStyle.Linear), { CFrame = at(angle + math.rad(38)) })
-		move:Play()
-		TweenService:Create(fader, TweenInfo.new(0.5), { BackgroundTransparency = 1 }):Play()
-		if lineAt[i] and lines[lineAt[i]] then
-			say(lines[lineAt[i]])
-		end
-		if not hold(SHOT_TIME - 0.5) then
+		camera.CameraType = Enum.CameraType.Scriptable
+		local lines = SC.CINEMATIC_LINES
+		local SHOT_TIME = 4.2
+		local lineAt = { [1] = 1, [math.max(2, #shots - 1)] = 2 }
+		for i, shot in shots do
+			if skipped then
+				break
+			end
+			local angle = math.rad(35 + i * 70)
+			local function at(a: number): CFrame
+				local offset = Vector3.new(math.cos(a) * shot.radius, shot.height, math.sin(a) * shot.radius)
+				return CFrame.lookAt(shot.focus + offset, shot.focus)
+			end
+			camera.CFrame = at(angle)
+			local move = TweenService:Create(camera, TweenInfo.new(SHOT_TIME, Enum.EasingStyle.Linear), { CFrame = at(angle + math.rad(38)) })
+			move:Play()
+			TweenService:Create(fader, TweenInfo.new(0.5), { BackgroundTransparency = 1 }):Play()
+			if lineAt[i] and lines[lineAt[i]] then
+				say(lines[lineAt[i]])
+			end
+			if not hold(SHOT_TIME - 0.5) then
+				move:Cancel()
+				break
+			end
+			if lineAt[i] then
+				unsay()
+			end
+			TweenService:Create(fader, TweenInfo.new(0.45), { BackgroundTransparency = 0 }):Play()
+			if not hold(0.5) then
+				move:Cancel()
+				break
+			end
 			move:Cancel()
-			break
 		end
-		if lineAt[i] then
-			unsay()
-		end
-		TweenService:Create(fader, TweenInfo.new(0.45), { BackgroundTransparency = 0 }):Play()
-		if not hold(0.5) then
-			move:Cancel()
-			break
-		end
-		move:Cancel()
-	end
 
-	-- back to the player
+		-- back to the player
+		local character = player.Character
+		local head = character and character:FindFirstChild("Head")
+		if head and head:IsA("BasePart") and not skipped then
+			local target = CFrame.lookAt(head.Position - head.CFrame.LookVector * 12 + Vector3.new(0, 4, 0), head.Position)
+			camera.CFrame = CFrame.lookAt(head.Position + Vector3.new(0, 120, 60), head.Position)
+			TweenService:Create(fader, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+			local back = TweenService:Create(camera, TweenInfo.new(2.2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { CFrame = target })
+			back:Play()
+			hold(2.2)
+			back:Cancel()
+		end
+	end)
+	if not ok then
+		warn("[CityGrind] Story cinematic failed:", err)
+	end
+	local cam = Workspace.CurrentCamera or camera
+	cam.CameraType = Enum.CameraType.Custom
 	local character = player.Character
-	local head = character and character:FindFirstChild("Head")
-	if head and head:IsA("BasePart") and not skipped then
-		local target = CFrame.lookAt(head.Position - head.CFrame.LookVector * 12 + Vector3.new(0, 4, 0), head.Position)
-		camera.CFrame = CFrame.lookAt(head.Position + Vector3.new(0, 120, 60), head.Position)
-		TweenService:Create(fader, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
-		local back = TweenService:Create(camera, TweenInfo.new(2.2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { CFrame = target })
-		back:Play()
-		hold(2.2)
-		back:Cancel()
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		cam.CameraSubject = humanoid
 	end
-	camera.CameraType = Enum.CameraType.Custom
-	if character then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			camera.CameraSubject = humanoid
-		end
+	if root then
+		root:Destroy()
 	end
-	root:Destroy()
 	HUD.setVisible(true)
 	controls(true)
 	cinematicPlaying = false
