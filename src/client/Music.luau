@@ -80,11 +80,29 @@ local function probe(sample: MC.Sample): Sound?
 	return nil
 end
 
+-- The app slider times the Settings "Music volume" (VolMusic), ducked while
+-- you're on a call (InCall ~= 0).
+local function effectiveVolume(): number
+	local setting = player:GetAttribute("VolMusic")
+	local s = if type(setting) == "number" and setting == setting then math.clamp(setting, 0, 1) else 0.6
+	local call = player:GetAttribute("InCall")
+	local duck = if type(call) == "number" and call ~= 0 then 0.35 else 1
+	return volume * s * duck
+end
+
+local function applyGroupVolume()
+	if group then
+		group.Volume = effectiveVolume()
+	end
+end
+
 local function setupInstruments()
 	group = Instance.new("SoundGroup")
 	group.Name = "CityGrindMusic"
-	group.Volume = volume
+	group.Volume = effectiveVolume()
 	group.Parent = SoundService
+	player:GetAttributeChangedSignal("VolMusic"):Connect(applyGroupVolume)
+	player:GetAttributeChangedSignal("InCall"):Connect(applyGroupVolume)
 
 	local pending = 0
 	for role, candidates in MC.SAMPLES do
@@ -359,9 +377,7 @@ end
 
 local function setVolume(v: number)
 	volume = math.clamp(v, 0, 1)
-	if group then
-		group.Volume = volume
-	end
+	applyGroupVolume()
 	changed()
 end
 
