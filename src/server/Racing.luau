@@ -82,6 +82,7 @@ type Racer = {
 	lapStart: number,
 	bestLap: number,
 	reward: { [string]: any }?,
+	grid: CFrame?, -- where freezeAt parked the car for the countdown
 }
 type Race = {
 	id: string,
@@ -326,6 +327,7 @@ end
 ---------------------------------------------------------------------------
 local function freezeAt(r: Racer, groundCF: CFrame)
 	local cf = groundCF * CFrame.new(0, VC.groundOffset(r.spec) + 0.3, 0)
+	r.grid = groundCF
 	r.chassis.Anchored = true
 	r.chassis.AssemblyLinearVelocity = Vector3.zero
 	r.chassis.AssemblyAngularVelocity = Vector3.zero
@@ -751,6 +753,9 @@ local function stepRace(race: Race, t: number)
 		for _, r in race.list do
 			if not r.dnf and not r.player.Parent then
 				dnf(race, r, "Left the game")
+			elseif not r.dnf and r.grid and r.chassis.Parent and not r.chassis.Anchored then
+				-- Vehicles unanchors a car when its driver sits back down: no rolling starts.
+				freezeAt(r, r.grid :: CFrame)
 			end
 		end
 		if t >= race.goT then
@@ -897,7 +902,8 @@ local function lobbyInfo(): { [string]: any }
 	}
 end
 
-local function broadcastLobby()
+-- `left`: players just taken out of the lobby, so their client drops the lobby chip.
+local function broadcastLobby(left: { Player }?)
 	local info = lobbyInfo()
 	local sent: { [Player]: boolean } = {}
 	for _, p in lobby do
@@ -906,6 +912,12 @@ local function broadcastLobby()
 		sent[p] = true
 	end
 	info.inLobby = false
+	for _, p in (left or {}) :: { Player } do
+		if not sent[p] then
+			fire(p, "Lobby", info)
+			sent[p] = true
+		end
+	end
 	local t = os.clock()
 	for p, expires in watchers do
 		if t > expires or not p.Parent then
@@ -931,7 +943,7 @@ local function removeFromLobby(player: Player, reason: string?)
 	if #lobby < RC.MIN_RACERS then
 		lobbyStartAt = nil
 	end
-	broadcastLobby()
+	broadcastLobby({ player })
 end
 
 local function carNear(player: Player, pos: Vector3, range: number): Model?
@@ -954,6 +966,10 @@ local function busyReason(player: Player): string?
 	if inEvent(player) then
 		return "Finish your event first."
 	end
+	local q = player:GetAttribute("RankedQueue")
+	if (type(q) == "string" and q ~= "") or player:GetAttribute("InGame") then
+		return "You're queued for (or playing) a basketball game."
+	end
 	return nil
 end
 
@@ -973,9 +989,9 @@ local function startCircuit()
 	if not t then
 		return
 	end
-	local entrants = {}
+	local entrants: { Player } = {}
 	while #lobby > 0 and #entrants < RC.MAX_RACERS do
-		table.insert(entrants, table.remove(lobby, 1))
+		table.insert(entrants, table.remove(lobby, 1) :: Player)
 	end
 	lobbyStartAt = if #lobby >= RC.MIN_RACERS then now() + RC.LOBBY_WAIT else nil
 	cancelTrials("The track is closing for a race. Try again after it.")
@@ -996,7 +1012,7 @@ local function startCircuit()
 			setRace(r.player, "lobby")
 		end
 		lobbyStartAt = if #lobby >= RC.MIN_RACERS then now() + RC.LOBBY_WAIT else nil
-		broadcastLobby()
+		broadcastLobby(entrants)
 		return
 	end
 	for _, r in race.list do
@@ -1004,7 +1020,7 @@ local function startCircuit()
 	end
 	circuitRace = race
 	announce(race)
-	broadcastLobby()
+	broadcastLobby(entrants)
 end
 
 local function lobbyTick()
@@ -1219,7 +1235,7 @@ local function challenge(from: Player, targetId: any, routeId: any): (boolean, s
 	if busy then
 		return false, busy
 	end
-	if racerOf[to] or table.find(lobby, to) or inEvent(to) then
+	if busyReason(to) or table.find(lobby, to) then
 		return false, to.DisplayName .. " is busy right now."
 	end
 	local mine = Vehicles.drivingVehicle(from)

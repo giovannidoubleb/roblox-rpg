@@ -33,7 +33,13 @@ function Places.teleport(player: Player, cf: CFrame)
 	if not character or not humanoid then
 		return
 	end
-	if humanoid.SeatPart then
+	local seat = humanoid.SeatPart
+	if seat then
+		-- Break the seat weld first so a car (or bike) isn't dragged along and flung.
+		local weld = seat:FindFirstChild("SeatWeld")
+		if weld then
+			weld:Destroy()
+		end
 		humanoid.Sit = false
 		task.wait()
 	end

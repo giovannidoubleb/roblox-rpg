@@ -228,6 +228,17 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 		match.over = true
 	end
 	court.state = "Ended"
+	-- Scheduled first, so the court always reopens even if a payout below errors.
+	task.delay(6, function()
+		if court.state == "Ended" then
+			court.match = nil
+			court.state = "Idle"
+			court.score = { Home = 0, Away = 0 }
+			court.overtime = false
+			setScoreboard(court, "OPEN COURT")
+			publish(court)
+		end
+	end)
 	local duration = os.clock() - court.startedAt
 	local total = court.score.Home + court.score.Away
 	local eligible = not forfeit and duration >= G.MIN_SECONDS_FOR_REWARDS and total >= G.MIN_POINTS_FOR_REWARDS
@@ -290,16 +301,6 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 			end
 		end)
 	end
-	task.delay(6, function()
-		if court.state == "Ended" then
-			court.match = nil
-			court.state = "Idle"
-			court.score = { Home = 0, Away = 0 }
-			court.overtime = false
-			setScoreboard(court, "OPEN COURT")
-			publish(court)
-		end
-	end)
 end
 
 local function startGame(court: Court, home: { Player }, away: { Player })
@@ -333,6 +334,15 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 			player:SetAttribute("InGame", court.name)
 			player:SetAttribute("Team", team)
 			local pos = court.center + Vector3.new((i - (#list + 1) / 2) * 7, 3.5, zSide)
+			local humanoid = court.match and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.SeatPart then
+				-- a summoned ranked player who sat in a car: unweld first so the car isn't dragged along
+				local weld = humanoid.SeatPart:FindFirstChild("SeatWeld")
+				if weld then
+					weld:Destroy()
+				end
+				humanoid.Sit = false
+			end
 			if player.Character then
 				player.Character:PivotTo(CFrame.lookAt(pos, pos + facing))
 			end
@@ -700,12 +710,19 @@ local function setupCourt(model: Model)
 
 	task.spawn(function()
 		while model.Parent do
-			if court.state == "Idle" or court.state == "Countdown" then
-				updateIdle(court)
-			elseif court.state == "Playing" then
-				updatePlaying(court)
-			elseif court.state == "Reserved" then
-				updateReserved(court)
+			-- pcall: one bad tick must never kill the court's loop (a stuck court
+			-- would also hold a ranked match forever).
+			local ok, err = pcall(function()
+				if court.state == "Idle" or court.state == "Countdown" then
+					updateIdle(court)
+				elseif court.state == "Playing" then
+					updatePlaying(court)
+				elseif court.state == "Reserved" then
+					updateReserved(court)
+				end
+			end)
+			if not ok then
+				warn("[CityGrind] Court update failed at " .. court.name .. ":", err)
 			end
 			-- tidy up practice balls nobody has touched for a while
 			for ball in court.freeBalls do

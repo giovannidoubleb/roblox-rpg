@@ -134,6 +134,12 @@ local function inEvent(player: Player): boolean
 	return ev ~= nil and ev ~= ""
 end
 
+-- In a race, a race lobby or a street race (Racing's "Race" attribute).
+local function inRace(player: Player): boolean
+	local race = player:GetAttribute("Race")
+	return race ~= nil and race ~= ""
+end
+
 ---------------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------------
@@ -472,6 +478,9 @@ local function availability(player: Player): (boolean, string?)
 	end
 	if inEvent(player) then
 		return false, "Leave your city event first."
+	end
+	if inRace(player) then
+		return false, "Finish your race first."
 	end
 	return true, nil
 end
@@ -985,6 +994,18 @@ local function summon(player: Player, court: Model, team: string, index: number,
 	local zSide = if team == "Home" then 6 else -6
 	local facing = if team == "Home" then Vector3.new(0, 0, -1) else Vector3.new(0, 0, 1)
 	local pos = center + Vector3.new((index - (count + 1) / 2) * 7, 0.5, zSide)
+	-- Out of any seat first: with the SeatWeld still there, moving the character
+	-- would drag (and fling) the car it sits in.
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	if humanoid and seat then
+		local weld = seat:FindFirstChild("SeatWeld")
+		if weld then
+			weld:Destroy()
+		end
+		humanoid.Sit = false
+	end
 	Places.leave(player, CFrame.lookAt(pos, pos + facing))
 end
 
@@ -1076,7 +1097,7 @@ local function matchmake()
 			if not p.Parent then
 				removeEntry(e, p.DisplayName .. " left the server.")
 				break
-			elseif inEvent(p) or p:GetAttribute("InGame") then
+			elseif inEvent(p) or inRace(p) or p:GetAttribute("InGame") then
 				removeEntry(e, p.DisplayName .. " joined something else, so the ranked queue was cancelled.")
 				break
 			end
