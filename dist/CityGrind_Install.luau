@@ -1200,6 +1200,135 @@ end
 
 return CrewsConfig
 ]=====])
+put(folder, 'ModuleScript', 'DistrictsConfig', [=====[
+-- CITY GRIND: district layout and subway stations (spec sections 4-11).
+-- Shared so the server (Districts.luau), the phone map and the subway UI agree.
+--
+-- Top-down layout (+x east, +z south). Every district is an axis-aligned
+-- rectangle on the XZ plane; they touch but never overlap.
+--
+--                 x -760   -300        300           900
+--      z -730     +--------+-----------+-------------+
+--                 | Luxury | Downtown  |             |
+--                 | Hills  |           | Industrial  |
+--      z -230     +--------+-----------+  (race      |
+--                 | Old    | The       |   track N)  |
+--                 | Town   | Neighbor- |             |
+--      z  230     +--------+-----------+-------------+
+--                 |              Beach               |
+--      z 1000     +----------------------------------+   (ocean from z 520)
+
+local DistrictsConfig = {}
+
+export type District = {
+	id: string,
+	name: string, -- display name (phone subtitle, map labels)
+	center: Vector3, -- footprint centre at ground level
+	size: Vector3, -- footprint size (Y unused)
+	color: Color3, -- label colour on the phone map
+}
+
+DistrictsConfig.LIST = {
+	{ id = "Neighborhood", name = "The Neighborhood", center = Vector3.new(0, 0, 0), size = Vector3.new(600, 0, 460), color = Color3.fromRGB(140, 220, 120) },
+	{ id = "Downtown", name = "Downtown", center = Vector3.new(0, 0, -480), size = Vector3.new(600, 0, 500), color = Color3.fromRGB(120, 190, 255) },
+	{ id = "Industrial", name = "Industrial", center = Vector3.new(600, 0, -250), size = Vector3.new(600, 0, 960), color = Color3.fromRGB(255, 170, 70) },
+	{ id = "Beach", name = "The Beach", center = Vector3.new(70, 0, 615), size = Vector3.new(1660, 0, 770), color = Color3.fromRGB(255, 225, 120) },
+	{ id = "Luxury", name = "Luxury Hills", center = Vector3.new(-530, 0, -480), size = Vector3.new(460, 0, 500), color = Color3.fromRGB(230, 190, 255) },
+	{ id = "OldTown", name = "Old Town", center = Vector3.new(-530, 0, 0), size = Vector3.new(460, 0, 460), color = Color3.fromRGB(230, 140, 110) },
+} :: { District }
+
+-- The whole playable world (used by the phone map and vehicle bounds).
+DistrictsConfig.WORLD_MIN = Vector3.new(-760, 0, -730)
+DistrictsConfig.WORLD_MAX = Vector3.new(900, 0, 1000)
+-- What the phone map shows (the far ocean is left off).
+DistrictsConfig.MAP_MIN = Vector3.new(-760, 0, -730)
+DistrictsConfig.MAP_MAX = Vector3.new(900, 0, 700)
+
+local byId: { [string]: District } = {}
+for _, d in DistrictsConfig.LIST do
+	byId[d.id] = d
+end
+
+function DistrictsConfig.get(id: string): District?
+	return byId[id]
+end
+
+-- District id at a world position ("Outskirts" when outside every district).
+function DistrictsConfig.at(position: Vector3): string
+	for _, d in DistrictsConfig.LIST do
+		local half = d.size / 2
+		if math.abs(position.X - d.center.X) <= half.X and math.abs(position.Z - d.center.Z) <= half.Z then
+			return d.id
+		end
+	end
+	return "Outskirts"
+end
+
+-- Display name for a district id (falls back to the id itself).
+function DistrictsConfig.displayName(id: string?): string
+	local d = id and byId[id]
+	return if d then d.name elseif id == "Outskirts" then "Outskirts" else "The Neighborhood"
+end
+
+---------------------------------------------------------------------------
+-- Subway (section 11)
+---------------------------------------------------------------------------
+export type Station = {
+	id: string, -- same as the district id
+	name: string,
+	entrance: Vector3, -- centre of the street entrance (ground level)
+	exit: CFrame, -- where riders come up, facing the street
+	line: Color3,
+}
+
+DistrictsConfig.SUBWAY_FARE = 2
+DistrictsConfig.SUBWAY_COOLDOWN = 6 -- seconds between rides
+DistrictsConfig.SUBWAY_RIDE_TIME = 2.6 -- seconds of fade-to-black travel
+DistrictsConfig.SUBWAY_RANGE = 14 -- how close to an entrance you must be
+
+local function exitAt(x: number, z: number, faceX: number, faceZ: number): CFrame
+	local p = Vector3.new(x, 0.5, z)
+	return CFrame.lookAt(p, p + Vector3.new(faceX, 0, faceZ))
+end
+
+DistrictsConfig.STATIONS = {
+	{ id = "Neighborhood", name = "Neighborhood", entrance = Vector3.new(40, 0, -45), exit = exitAt(40, -33, 0, 1), line = Color3.fromRGB(30, 140, 70) },
+	{ id = "Downtown", name = "Downtown", entrance = Vector3.new(-40, 0, -300), exit = exitAt(-40, -288, 0, 1), line = Color3.fromRGB(40, 120, 230) },
+	{ id = "Industrial", name = "Industrial", entrance = Vector3.new(340, 0, -45), exit = exitAt(340, -33, 0, 1), line = Color3.fromRGB(230, 130, 30) },
+	{ id = "Beach", name = "Beach", entrance = Vector3.new(-50, 0, 300), exit = exitAt(-50, 312, 0, 1), line = Color3.fromRGB(240, 200, 40) },
+	{ id = "Luxury", name = "Luxury Hills", entrance = Vector3.new(-340, 0, -440), exit = exitAt(-340, -428, 0, 1), line = Color3.fromRGB(170, 90, 230) },
+	{ id = "OldTown", name = "Old Town", entrance = Vector3.new(-380, 0, -45), exit = exitAt(-380, -33, 0, 1), line = Color3.fromRGB(200, 70, 60) },
+} :: { Station }
+
+local stationById: { [string]: Station } = {}
+for _, s in DistrictsConfig.STATIONS do
+	stationById[s.id] = s
+end
+
+function DistrictsConfig.station(id: string): Station?
+	return stationById[id]
+end
+
+-- The station whose entrance is within range of `position`, if any.
+function DistrictsConfig.nearestStation(position: Vector3, range: number?): Station?
+	local best, bestDist = nil, range or DistrictsConfig.SUBWAY_RANGE
+	for _, s in DistrictsConfig.STATIONS do
+		local d = (Vector3.new(position.X, 0, position.Z) - Vector3.new(s.entrance.X, 0, s.entrance.Z)).Magnitude
+		if d <= bestDist and math.abs(position.Y - s.entrance.Y) < 20 then
+			best, bestDist = s, d
+		end
+	end
+	return best
+end
+
+---------------------------------------------------------------------------
+-- Luxury Hills private court (section 9)
+---------------------------------------------------------------------------
+DistrictsConfig.PRIVATE_COURT_REPUTATION = 2500
+DistrictsConfig.PRIVATE_COURT_LEVEL = 40
+
+return DistrictsConfig
+]=====])
 put(folder, 'ModuleScript', 'EmotesConfig', [=====[
 -- CITY GRIND: emote definitions (sections 31, 95), shared by server and client.
 -- Every emote is procedural: a list of keyframes, each one an offset applied to
@@ -1627,9 +1756,186 @@ EventsConfig.KINDS = {
 		},
 		finisher = { cash = 40, xp = 40, rep = 2 },
 	},
+	DunkContest = {
+		id = "DunkContest",
+		name = "Dunk Contest",
+		icon = "💥",
+		color = Color3.fromRGB(255, 70, 70),
+		location = "City court",
+		blurb = "3 dunk attempts each. Made dunks score on approach speed, hang time, take-off distance and variety.",
+		maxPlayers = 8,
+		duration = 6,
+		podium = {
+			{ cash = 260, xp = 210, rep = 10 },
+			{ cash = 160, xp = 130, rep = 6 },
+			{ cash = 100, xp = 85, rep = 4 },
+		},
+		finisher = { cash = 40, xp = 40, rep = 1 },
+	},
+	TreasureHunt = {
+		id = "TreasureHunt",
+		name = "Treasure Hunt",
+		icon = "🗝️",
+		color = Color3.fromRGB(255, 205, 60),
+		location = "All over the city",
+		blurb = "Glowing caches are hidden across the districts. Clues unlock over time. First to touch a cache claims it.",
+		maxPlayers = 16,
+		duration = 7,
+		podium = {
+			{ cash = 280, xp = 230, rep = 10 },
+			{ cash = 170, xp = 140, rep = 6 },
+			{ cash = 100, xp = 90, rep = 4 },
+		},
+		finisher = { cash = 40, xp = 50, rep = 1 },
+	},
+	PhotoChallenge = {
+		id = "PhotoChallenge",
+		name = "Photo Challenge",
+		icon = "📸",
+		color = Color3.fromRGB(80, 200, 255),
+		location = "Anywhere in the city",
+		blurb = "A theme drops when it starts. Snap a matching photo with the Camera app, submit it, then everyone votes.",
+		maxPlayers = 12,
+		duration = 7,
+		podium = {
+			{ cash = 220, xp = 180, rep = 10 },
+			{ cash = 140, xp = 110, rep = 6 },
+			{ cash = 90, xp = 75, rep = 4 },
+		},
+		finisher = { cash = 35, xp = 40, rep = 1 },
+	},
+	FashionShow = {
+		id = "FashionShow",
+		name = "Fashion Show",
+		icon = "👗",
+		color = Color3.fromRGB(255, 110, 200),
+		location = "Pop-up runway",
+		blurb = "Wear your best fit from your closet, walk the runway when it's your turn, then the crowd votes.",
+		maxPlayers = 10,
+		duration = 6,
+		podium = {
+			{ cash = 220, xp = 180, rep = 10 },
+			{ cash = 140, xp = 110, rep = 6 },
+			{ cash = 90, xp = 75, rep = 4 },
+		},
+		finisher = { cash = 35, xp = 40, rep = 1 },
+	},
+	StreetballTournament = {
+		id = "StreetballTournament",
+		name = "Streetball Tournament",
+		icon = "🏆",
+		color = Color3.fromRGB(255, 160, 60),
+		location = "City court",
+		blurb = "Knockout bracket of half-court games (1v1, or 2v2 with a big field). Ones and twos, first to 7.",
+		maxPlayers = 8,
+		duration = 10,
+		podium = {
+			{ cash = 320, xp = 260, rep = 14 },
+			{ cash = 190, xp = 160, rep = 8 },
+			{ cash = 110, xp = 100, rep = 5 },
+		},
+		finisher = { cash = 45, xp = 50, rep = 2 },
+	},
 } :: { [string]: Kind }
 
-EventsConfig.ORDER = { "ThreePoint", "City5K", "CarMeet" }
+EventsConfig.ORDER = { "ThreePoint", "City5K", "CarMeet", "DunkContest", "TreasureHunt", "PhotoChallenge", "FashionShow", "StreetballTournament" }
+
+-- Fewest checked-in entrants a kind needs; below this it is cancelled cleanly.
+EventsConfig.MIN_ENTRANTS = {
+	ThreePoint = 1,
+	City5K = 1,
+	CarMeet = 2,
+	DunkContest = 2,
+	TreasureHunt = 1,
+	PhotoChallenge = 2,
+	FashionShow = 2,
+	StreetballTournament = 2,
+}
+
+-- Dunk contest: every made dunk is scored from what the server saw.
+EventsConfig.DUNK = {
+	CHECKIN = 60,
+	READY = 3,
+	TURN = 40,
+	ATTEMPTS = 3,
+	BASE = 5, -- a made dunk
+	SPEED_FROM = 14, -- studs/s where approach points start
+	SPEED_STEP = 3, -- +1 per this many studs/s above SPEED_FROM
+	SPEED_MAX = 4,
+	AIR_PER_SECOND = 5, -- hang time points per airborne second before the release
+	AIR_MAX = 3,
+	TAKEOFF_FROM = 3, -- take-off distance from the rim where points start
+	TAKEOFF_STEP = 1.2,
+	TAKEOFF_MAX = 2,
+	NEW_ANGLE = 2, -- first dunk from a new approach (baseline / wing / straight)
+	MISS_RETURN = 2.5, -- seconds a missed ball rolls before it's handed back
+	START_DIST = 22, -- where each turn starts, from the rim toward half court
+}
+
+-- Treasure hunt
+EventsConfig.HUNT = {
+	CHECKIN = 30,
+	TIME_LIMIT = 6 * 60,
+	CACHES = 6,
+	CLUE_EVERY = 25, -- a new cache's district clue every N seconds
+	LANDMARK_AFTER = 50, -- then its landmark hint this long after that
+	BEARING_AFTER = 110, -- then a compass bearing + distance
+	TOUCH_RADIUS = 6,
+	MIN_SPACING = 70,
+	-- known open ground used when the districts have no free spot
+	FALLBACK = {
+		Vector3.new(150, 0, 190),
+		Vector3.new(-262, 0, 120),
+		Vector3.new(210, 0, -195),
+		Vector3.new(-170, 0, 205),
+		Vector3.new(-262, 0, -140),
+		Vector3.new(60, 0, 205),
+	},
+}
+
+-- Photo challenge. Themes are checked on the server against the saved
+-- snapshot (where the camera was, the time of day, who / what is in frame).
+EventsConfig.PHOTO = {
+	SHOOT = 4 * 60,
+	VOTE = 60,
+	DAY_SECONDS = 20 * 60, -- one in-game day (Main's DAY_LENGTH_SECONDS); time themes need enough of their window
+	MIN_WINDOW_HOURS = 1.2, -- in-game hours of a time theme's window that must fall inside the shoot
+	MAX_PHOTOS_LISTED = 12,
+	THEMES = {
+		{ id = "sunset", name = "Sunset at the Beach", rule = "Taken at the Beach between 16:30 and 20:00", clockFrom = 16.5, clockTo = 20 },
+		{ id = "crew", name = "Crew Pic", rule = "3 or more people in the photo" },
+		{ id = "neon", name = "Car with Neon", rule = "A car with its neon underglow on, in frame" },
+		{ id = "night", name = "Downtown After Dark", rule = "Taken Downtown at night (19:00-05:30)", clockFrom = 19, clockTo = 5.5 },
+		{ id = "hoops", name = "Court Life", rule = "Someone in frame within 40 studs of a basketball court" },
+	},
+}
+
+-- Fashion show
+EventsConfig.FASHION = {
+	CHECKIN = 90,
+	WALK = 22, -- seconds to reach the end of the runway
+	POSE = 3, -- seconds to hold at the end
+	VOTE = 50,
+	SPECTATOR_RANGE = 90,
+	RUNWAY = Vector3.new(10, 1.4, 54),
+	-- preferred pop-up spots (first open one wins); the last is a known plaza
+	SPOTS = {
+		Vector3.new(0, 0, -430),
+		Vector3.new(-40, 0, 420),
+		Vector3.new(-520, 0, 60),
+		Vector3.new(140, 0, 182),
+	},
+}
+
+-- Streetball tournament: half-court games on a reserved court.
+EventsConfig.STREETBALL = {
+	CHECKIN = 75,
+	TARGET = 7,
+	GAME_TIME = 150,
+	LOOSE_TURNOVER = 5, -- a ball nobody grabs goes to the other side
+	TWO_V_TWO_FROM = 6, -- this many (even) entrants plays 2v2
+	BETWEEN = 4, -- seconds between a game ending and the next one starting
+}
 EventsConfig.FAME_PER_CAR_AWARD = 25
 
 -- 3-point contest
@@ -2461,6 +2767,234 @@ MusicConfig.TRACKS = {
 } :: { Track }
 
 return MusicConfig
+]=====])
+put(folder, 'ModuleScript', 'QuestsConfig', [=====[
+-- CITY GRIND: quests, achievements and daily login tuning (spec 78, 79, 80, 113).
+-- Shared so the phone shows exactly what the server checks. Every goal is a
+-- "metric": a lifetime number the server reads from saved data (see
+-- server/Quests.luau metric()). Daily/weekly quests count the metric's growth
+-- since the quest was handed out; achievements and story missions compare the
+-- lifetime value itself.
+
+local QuestsConfig = {}
+
+QuestsConfig.STUDS_PER_METRE = 3.57 -- same scale as the phone's GPS
+
+-- How each metric is printed.
+QuestsConfig.FORMAT = {
+	earned = "cash",
+	runM = "distance",
+	driveM = "distance",
+}
+
+local function commas(n: number): string
+	local s = tostring(math.floor(math.abs(n)))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return formatted
+end
+QuestsConfig.commas = commas
+
+function QuestsConfig.formatValue(metric: string, n: number): string
+	local kind = QuestsConfig.FORMAT[metric]
+	if kind == "cash" then
+		return "$" .. commas(n)
+	elseif kind == "distance" then
+		if n >= 1000 then
+			return string.format("%.1f km", n / 1000)
+		end
+		return commas(n) .. " m"
+	end
+	return commas(n)
+end
+
+---------------------------------------------------------------------------
+-- Daily / weekly quests (78, 79)
+---------------------------------------------------------------------------
+-- `goal` may be a function of the player's level. `needs` (optional) names a
+-- server-side eligibility check (see Quests.luau ELIGIBLE).
+export type QuestDef = {
+	id: string,
+	metric: string,
+	text: string, -- %s = formatted goal
+	icon: string,
+	goal: number | (level: number) -> number,
+	needs: string?,
+}
+
+local function round(n: number, step: number): number
+	return math.max(step, math.floor(n / step + 0.5) * step)
+end
+
+-- "Earn $5,000 (scaled to level)": $600 at level 1, $5,000 around level 20.
+function QuestsConfig.dailyEarnGoal(level: number): number
+	return math.min(round(400 + level * 230, 100), 40_000)
+end
+
+QuestsConfig.DAILY_POOL = {
+	{ id = "d_points", metric = "points", icon = "🏀", text = "Score %s points in pickup games", goal = 30 },
+	{ id = "d_jobs", metric = "jobs", icon = "💼", text = "Complete %s job shifts", goal = 3 },
+	{ id = "d_run", metric = "runM", icon = "👟", text = "Run %s on foot", goal = 2000 },
+	{ id = "d_earn", metric = "earned", icon = "💵", text = "Earn %s", goal = QuestsConfig.dailyEarnGoal },
+	{ id = "d_gym", metric = "reps", icon = "🏋️", text = "Do %s good reps at the gym", goal = 50 },
+	{ id = "d_wins", metric = "wins", icon = "🏆", text = "Win %s pickup games", goal = 2 },
+	{ id = "d_photos", metric = "photos", icon = "📸", text = "Take %s photos", goal = 3 },
+	{ id = "d_threes", metric = "threes", icon = "🎯", text = "Hit %s threes in games", goal = 5 },
+	{ id = "d_shots", metric = "shots", icon = "🗑️", text = "Make %s shots on any court", goal = 20 },
+	{ id = "d_drive", metric = "driveM", icon = "🚗", text = "Drive %s", goal = 3000, needs = "vehicle" },
+	{ id = "d_post", metric = "posts", icon = "🖼️", text = "Post %s photo to CityGram", goal = 1 },
+	{ id = "d_event", metric = "events", icon = "🎉", text = "Take part in %s city event", goal = 1 },
+} :: { QuestDef }
+
+QuestsConfig.WEEKLY_POOL = {
+	{ id = "w_wins", metric = "wins", icon = "🏆", text = "Win %s pickup games", goal = 10 },
+	{ id = "w_earn", metric = "earned", icon = "💰", text = "Earn %s", goal = function(level: number)
+		return QuestsConfig.dailyEarnGoal(level) * 10
+	end },
+	{ id = "w_jobs", metric = "jobs", icon = "💼", text = "Complete %s job shifts", goal = 20 },
+	{ id = "w_events", metric = "events", icon = "🎉", text = "Take part in %s city events", goal = 3 },
+	{ id = "w_rank", metric = "rankIndex", icon = "⭐", text = "Reach a new reputation rank", goal = 1, needs = "notLegend" },
+	{ id = "w_gym", metric = "reps", icon = "🏋️", text = "Do %s good reps at the gym", goal = 300 },
+	{ id = "w_run", metric = "runM", icon = "👟", text = "Run %s on foot", goal = 10000 },
+	{ id = "w_points", metric = "points", icon = "🏀", text = "Score %s points in pickup games", goal = 150 },
+} :: { QuestDef }
+
+QuestsConfig.DAILY_COUNT = 3
+QuestsConfig.WEEKLY_COUNT = 3
+
+-- Rewards scale gently with level so they stay worth claiming.
+function QuestsConfig.dailyReward(level: number): { cash: number, xp: number, rep: number }
+	return { cash = round(150 + level * 25, 10), xp = 60 + level * 8, rep = 5 }
+end
+
+function QuestsConfig.weeklyReward(level: number): { cash: number, xp: number, rep: number }
+	return { cash = round(1000 + level * 150, 50), xp = 400 + level * 40, rep = 30 }
+end
+
+---------------------------------------------------------------------------
+-- Achievements (80)
+---------------------------------------------------------------------------
+export type Achievement = {
+	id: string,
+	name: string,
+	desc: string,
+	icon: string,
+	tier: string, -- Bronze | Silver | Gold | Platinum
+	metric: string?, -- nil = only unlocked by code (Quests.unlock)
+	goal: number?,
+	cash: number,
+	xp: number,
+	title: string?,
+	needs: string?, -- "districts": only listed when the districts exist
+}
+
+QuestsConfig.TIER_COLORS = {
+	Bronze = Color3.fromRGB(205, 127, 50),
+	Silver = Color3.fromRGB(200, 205, 215),
+	Gold = Color3.fromRGB(255, 200, 60),
+	Platinum = Color3.fromRGB(150, 230, 255),
+}
+
+local function A(id, name, desc, icon, tier, metric, goal, cash, xp, title): Achievement
+	return { id = id, name = name, desc = desc, icon = icon, tier = tier, metric = metric, goal = goal, cash = cash, xp = xp, title = title }
+end
+
+QuestsConfig.ACHIEVEMENTS = {
+	-- Basketball
+	A("first_bucket", "First Bucket", "Make your first shot on any court.", "🏀", "Bronze", "shots", 1, 50, 25),
+	A("first_win", "First W", "Win a pickup game.", "✌️", "Bronze", "wins", 1, 100, 50),
+	A("first_dunk", "First Dunk", "Throw down a dunk in a game.", "💥", "Bronze", "dunks", 1, 100, 50),
+	A("points_1000", "1,000 Points", "Score 1,000 points in pickup games.", "🔥", "Silver", "points", 1000, 2000, 800, "Bucket Machine"),
+	A("points_10000", "Walking Bucket", "Score 10,000 points in pickup games.", "🌋", "Platinum", "points", 10000, 20000, 6000, "Walking Bucket"),
+	A("wins_10", "Run It Back", "Win 10 pickup games.", "🥉", "Bronze", "wins", 10, 500, 200),
+	A("wins_100", "100 Wins", "Win 100 pickup games.", "👑", "Gold", "wins", 100, 10000, 3000, "Centurion"),
+	A("threes_50", "Splash Zone", "Hit 50 threes in games.", "🎯", "Silver", "threes", 50, 1500, 600, "Sniper"),
+	A("ankle_breaker", "Ankle Breaker", "Get 10 steals in games.", "🦶", "Silver", "steals", 10, 800, 300, "Ankle Breaker"),
+	A("rim_protector", "Rim Protector", "Block 25 shots in games.", "🧱", "Silver", "blocks", 25, 1200, 400, "Rim Protector"),
+	A("dunks_100", "Posterizer", "Dunk 100 times in games.", "🦅", "Gold", "dunks", 100, 6000, 2000, "Posterizer"),
+	-- Work and money
+	A("first_paycheck", "First Paycheck", "Finish your first job shift.", "💼", "Bronze", "jobs", 1, 100, 50),
+	A("shifts_50", "Working Class", "Finish 50 job shifts.", "🧰", "Silver", "jobs", 50, 3000, 1000),
+	A("shifts_250", "Workaholic", "Finish 250 job shifts.", "⏰", "Gold", "jobs", 250, 15000, 5000, "Workaholic"),
+	A("job_level_10", "Career Climber", "Reach job level 10 in any job.", "📈", "Silver", "jobLevel", 10, 2500, 800),
+	A("earned_10k", "Pocket Money", "Earn $10,000 in total.", "💵", "Bronze", "earned", 10000, 500, 300),
+	A("earned_100k", "Six Figures", "Earn $100,000 in total.", "💰", "Silver", "earned", 100000, 5000, 2000, "Six Figures"),
+	A("earned_1m", "$1 Million", "Earn $1,000,000 in total.", "🤑", "Platinum", "earned", 1000000, 50000, 10000, "Millionaire"),
+	-- Rides and homes
+	A("first_vehicle", "First Vehicle", "Buy your first vehicle.", "🚲", "Bronze", "vehicles", 1, 150, 100),
+	A("vehicles_5", "Collector", "Own 5 vehicles.", "🚘", "Gold", "vehicles", 5, 8000, 2500, "Collector"),
+	A("road_trip", "Road Trip", "Drive 50 km.", "🛣️", "Silver", "driveM", 50000, 3000, 1500, "Road Warrior"),
+	A("marathon", "Marathoner", "Run 42 km on foot.", "🏃", "Silver", "runM", 42195, 3000, 1500, "Marathoner"),
+	A("home_apartment", "First Apartment Upgrade", "Move up from the Studio.", "🏠", "Bronze", "homeTier", 2, 1000, 500),
+	A("home_luxury", "Home Owner: Luxury", "Own a Luxury Apartment.", "🏙️", "Silver", "homeTier", 3, 5000, 2000),
+	A("home_penthouse", "Home Owner: Penthouse", "Own a Penthouse.", "🌆", "Gold", "homeTier", 4, 15000, 5000, "Penthouse Life"),
+	A("home_mansion", "Home Owner: Mansion", "Own a Mansion.", "🏰", "Platinum", "homeTier", 5, 50000, 10000, "Mogul"),
+	-- Body
+	A("gym_100", "First Pump", "Do 100 good reps at the gym.", "💪", "Bronze", "reps", 100, 200, 100),
+	A("gym_rat", "Gym Rat", "Do 1,000 good reps at the gym.", "🏋️", "Gold", "reps", 1000, 4000, 1500, "Gym Rat"),
+	-- Progress
+	A("level_10", "Getting Started", "Reach level 10.", "🔟", "Bronze", "level", 10, 1000, 0),
+	A("level_25", "Veteran", "Reach level 25.", "🎖️", "Silver", "level", 25, 5000, 0),
+	A("level_50", "Halfway Up", "Reach level 50.", "🏅", "Gold", "level", 50, 20000, 0),
+	A("level_100", "Max Level", "Reach level 100.", "💎", "Platinum", "level", 100, 100000, 0, "Maxed Out"),
+	A("rep_local_star", "Local Star", "Reach 1,000 reputation.", "🌟", "Silver", "rep", 1000, 2000, 800),
+	A("legend_rank", "Legend Rank", "Reach 10,000 reputation and the Legend rank.", "🐐", "Platinum", "rep", 10000, 25000, 8000, "The Legend"),
+	-- Social
+	A("first_friend", "New Face", "Make your first friend.", "🤝", "Bronze", "friends", 1, 100, 50),
+	A("socialite", "Socialite", "Have 10 friends.", "🥂", "Silver", "friends", 10, 1500, 600, "Socialite"),
+	A("crew_up", "Crew Up", "Join or start a crew.", "🛡️", "Bronze", "crew", 1, 500, 200),
+	A("influencer", "Influencer", "Reach 100 followers on CityGram.", "📱", "Gold", "followers", 100, 8000, 3000, "Influencer"),
+	A("viral", "Viral", "Have a CityTok video go viral.", "🚀", "Gold", "viral", 1, 5000, 2000, "Viral"),
+	A("photographer", "Photographer", "Take 25 photos.", "📸", "Silver", "photos", 25, 1000, 400, "Photographer"),
+	A("first_post", "Say Cheese", "Post your first photo to CityGram.", "🖼️", "Bronze", "posts", 1, 100, 50),
+	A("fashionista", "Fashionista", "Own 25 clothing items.", "🧥", "Gold", "items", 25, 3000, 1000, "Fashionista"),
+	-- City life
+	A("first_event", "Show Up", "Take part in a city event.", "🎉", "Bronze", "events", 1, 200, 100),
+	A("first_podium", "On the Podium", "Finish top 3 in a city event.", "🥇", "Silver", "podiums", 1, 1000, 400),
+	A("event_champ", "Event Champion", "Win 5 city events.", "🏆", "Gold", "eventWins", 5, 6000, 2000, "Champion"),
+	A("explorer", "Explorer", "Visit every district of the city.", "🗺️", "Silver", "districts", 6, 2000, 800, "Explorer"),
+	A("dedicated", "Dedicated", "Claim all 7 daily login rewards in a row.", "📅", "Silver", "loginCycles", 1, 1000, 500),
+	A("quest_master", "Quest Master", "Complete 50 daily or weekly quests.", "📜", "Gold", "questsDone", 50, 5000, 2000, "Quest Master"),
+	A("collect_first", "Finders Keepers", "Find your first collectible.", "🔎", "Bronze", nil, nil, 100, 50),
+	A("collect_set", "Set Complete", "Complete a collectible set.", "🧩", "Silver", nil, nil, 1000, 400),
+	A("collect_all", "Master Collector", "Find every collectible in the city.", "🏆", "Platinum", nil, nil, 10000, 3000, "Master Collector"),
+	A("secret_first", "Off the Map", "Discover a secret place.", "🗝️", "Bronze", nil, nil, 200, 100),
+	A("secret_all", "City Secrets", "Discover every secret place.", "🕳️", "Gold", nil, nil, 5000, 1500, "Urban Explorer"),
+	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
+} :: { Achievement }
+
+QuestsConfig.ACHIEVEMENT_BY_ID = {} :: { [string]: Achievement }
+for _, a in QuestsConfig.ACHIEVEMENTS do
+	QuestsConfig.ACHIEVEMENT_BY_ID[a.id] = a
+end
+QuestsConfig.ACHIEVEMENT_BY_ID.explorer.needs = "districts"
+
+---------------------------------------------------------------------------
+-- Daily login (113): 7-day cycle, resets when a UTC day is missed.
+---------------------------------------------------------------------------
+-- Labels only; the server decides the real reward in Quests.luau.
+QuestsConfig.LOGIN_DAYS = {
+	{ day = 1, icon = "💵", label = "Cash", kind = "cash", cash = 300 },
+	{ day = 2, icon = "⭐", label = "XP Boost", kind = "xp", xp = 250 },
+	{ day = 3, icon = "👕", label = "Free Clothing", kind = "cosmetic", cash = 150 },
+	{ day = 4, icon = "💰", label = "More Cash", kind = "cash", cash = 600 },
+	-- Every emote in the game is already free, so Day 5 grants XP instead of an emote.
+	{ day = 5, icon = "🌟", label = "Big XP", kind = "xp", xp = 500 },
+	{ day = 6, icon = "🎨", label = "Car Mod Voucher", kind = "voucher" },
+	{ day = 7, icon = "💎", label = "Rare Reward", kind = "rare", cash = 2500, xp = 1000, rep = 25, title = "Day One" },
+}
+
+-- Free clothing for Day 3: the first one the player doesn't own yet.
+QuestsConfig.LOGIN_ITEMS = { "st_graphic", "st_cap", "ath_headband", "ath_wristband", "vin_beanie", "cas_backcap", "st_bucket", "ath_tank" }
+
+-- Cash scales a little with level so later days still matter.
+function QuestsConfig.loginCash(base: number, level: number): number
+	return math.floor(base * (1 + (level - 1) / 25) / 10 + 0.5) * 10
+end
+
+return QuestsConfig
 ]=====])
 put(folder, 'ModuleScript', 'Replay', [=====[
 -- CITY GRIND: replay clips (spec 23, 24, 34). A clip is compact replay data, never video:
@@ -5702,6 +6236,152 @@ SocialConfig.EMOTES = {
 
 return SocialConfig
 ]=====])
+put(folder, 'ModuleScript', 'StoryConfig', [=====[
+-- CITY GRIND: the story (spec 83, 109, 110). Eight chapters of real missions
+-- that walk a new player through the city's systems in first-hour order.
+--
+-- A mission is done when the server-side lifetime metric `metric` reaches
+-- `goal` (see server/Quests.luau metric()). `alt` is a second way to finish
+-- missions that normally need other players, so a solo player is never stuck.
+-- `place` is a GPS target the server resolves at runtime: a City.MapPoints
+-- name, "court" (nearest court) or a district id. `needs` = "districts" skips
+-- the mission when the districts / subway aren't built in this place.
+
+local StoryConfig = {}
+
+export type Mission = {
+	text: string,
+	metric: string,
+	goal: number,
+	alt: { metric: string, goal: number, text: string }?,
+	place: string?,
+	needs: string?,
+	hint: string?,
+}
+
+export type Chapter = {
+	name: string,
+	intro: string, -- Coach Ray's text when the chapter starts
+	outro: string, -- Coach Ray's text when it's done
+	missions: { Mission },
+	cash: number,
+	xp: number,
+	rep: number,
+	title: string?,
+}
+
+StoryConfig.COACH = "Coach Ray"
+StoryConfig.FIRST_MOVE = "MAKE YOUR FIRST MOVE"
+
+-- Per-mission reward = base * chapter number.
+StoryConfig.MISSION_CASH = 75
+StoryConfig.MISSION_XP = 60
+
+StoryConfig.CHAPTERS = {
+	{
+		name = "The New Kid",
+		intro = "Alright, rookie. Step one: pull out your phone (press P or tap Phone). Everything in this city runs through it.",
+		outro = "Not bad for day one. You've got a roof, a jumper and a drink in your hand. Now let's make some noise.",
+		cash = 300, xp = 200, rep = 10,
+		missions = {
+			{ text = "Open your phone", metric = "phone", goal = 1, hint = "Press P, DPad-Up, or tap the Phone button." },
+			{ text = "Enter your apartment at Maple Court", metric = "apartment", goal = 1, place = "Starter Apartments" },
+			{ text = "Grab a ball at a court and make a shot", metric = "shots", goal = 1, place = "court" },
+			{ text = "Buy a drink at Corner Mart", metric = "drinks", goal = 1, place = "Corner Mart", hint = "Inside the Mart or at the vending machine out front." },
+		},
+	},
+	{
+		name = "Make Your Name",
+		intro = "Respect is earned with sweat and a paycheck. Hit Iron Box Gym, then pick up a shift at the Job Center.",
+		outro = "Body's working, wallet's working. People are starting to notice you on the court.",
+		cash = 600, xp = 400, rep = 20,
+		missions = {
+			{ text = "Train at Iron Box Gym (10 good reps)", metric = "reps", goal = 10, place = "Iron Box Gym" },
+			{ text = "Finish your first job shift", metric = "jobs", goal = 1, place = "Job Center" },
+			{ text = "Make your first purchase at Threads Clothing", metric = "threads", goal = 1, place = "Threads Clothing" },
+			{ text = "Win a pickup game", metric = "wins", goal = 1, place = "court", alt = { metric = "shots", goal = 25, text = "or make 25 shots if the courts are empty" } },
+		},
+	},
+	{
+		name = "Earn Respect",
+		intro = "Time to get around. Get yourself some wheels, see Downtown, and let the city see you.",
+		outro = "You're Known now. That's the first rung. Don't get comfortable.",
+		cash = 1200, xp = 800, rep = 30,
+		missions = {
+			{ text = "Buy a vehicle at Budget Wheels", metric = "vehicles", goal = 1, place = "Budget Wheels" },
+			{ text = "Ride the subway to Downtown", metric = "subwayDowntown", goal = 1, place = "Subway Station", needs = "districts" },
+			{ text = "Take a photo and post it on CityGram", metric = "posts", goal = 1, hint = "Snap one with the Camera app, then post it from CityGram." },
+			{ text = "Reach 100 reputation", metric = "rep", goal = 100 },
+		},
+	},
+	{
+		name = "The First Tournament",
+		intro = "The city runs events all day: contests, races, car meets. Sign up, compete, and get on that podium.",
+		outro = "Podium finish. Folks are saying your name at the courts now.",
+		cash = 2500, xp = 1500, rep = 50,
+		missions = {
+			{ text = "Take part in a city event", metric = "events", goal = 1, hint = "Check the Events app for what's next." },
+			{ text = "Score 50 points in pickup games", metric = "points", goal = 50, place = "court", alt = { metric = "shots", goal = 100, text = "or make 100 shots in total" } },
+			{ text = "Reach Level 10", metric = "level", goal = 10 },
+			{ text = "Finish top 3 in a city event", metric = "podiums", goal = 1, alt = { metric = "events", goal = 3, text = "or take part in 3 events" } },
+		},
+	},
+	{
+		name = "Moving Up",
+		intro = "That Studio served you well. Time to move up: a bigger place, a better job title, a fatter bank account.",
+		outro = "New address, new level. You're not the new kid anymore.",
+		cash = 6000, xp = 3000, rep = 80,
+		missions = {
+			{ text = "Upgrade your home at Maple Realty", metric = "homeTier", goal = 2, place = "Maple Realty" },
+			{ text = "Reach job level 5 in any job", metric = "jobLevel", goal = 5, place = "Job Center" },
+			{ text = "Earn $25,000 in total", metric = "earned", goal = 25000 },
+			{ text = "Reach Level 15", metric = "level", goal = 15 },
+		},
+	},
+	{
+		name = "City Famous",
+		intro = "Skills pay bills, but fame opens doors. Post, film, run with a crew. Make the city talk.",
+		outro = "Local Star. Your face is on phones all over town.",
+		cash = 15000, xp = 6000, rep = 120,
+		missions = {
+			{ text = "Post 5 photos on CityGram", metric = "posts", goal = 5 },
+			{ text = "Post a highlight on CityTok", metric = "tokPosts", goal = 1, hint = "Make a play, then POST it from the highlight popup." },
+			{ text = "Join or start a crew", metric = "crew", goal = 1, hint = "Crew app on your phone." },
+			{ text = "Reach Local Star (1,000 reputation)", metric = "rep", goal = 1000 },
+		},
+	},
+	{
+		name = "The Big League",
+		intro = "This is where most people stop. Luxury living, big money, a real winning record. Keep climbing.",
+		outro = "Celebrity status. One chapter left. The top is in sight.",
+		cash = 40000, xp = 15000, rep = 200,
+		missions = {
+			{ text = "Reach Level 35", metric = "level", goal = 35 },
+			{ text = "Win 25 pickup games", metric = "wins", goal = 25, place = "court", alt = { metric = "points", goal = 750, text = "or score 750 points in games" } },
+			{ text = "Own a Luxury Apartment", metric = "homeTier", goal = 3, place = "Maple Realty" },
+			{ text = "Earn $250,000 in total", metric = "earned", goal = 250000 },
+			{ text = "Reach Celebrity (5,000 reputation)", metric = "rep", goal = 5000 },
+		},
+	},
+	{
+		name = "Rise to the Top",
+		intro = "Last chapter, kid. Legends aren't born, they grind. Show this city who runs it.",
+		outro = "You did it. From nobody to the top of the city. I always knew you had it. Now go defend it.",
+		cash = 150000, xp = 40000, rep = 500, title = "Top of the City",
+		missions = {
+			{ text = "Reach Level 75", metric = "level", goal = 75 },
+			{ text = "Reach the Legend rank (10,000 reputation)", metric = "rep", goal = 10000 },
+			{ text = "Win 3 city event podiums", metric = "podiums", goal = 3, alt = { metric = "events", goal = 25, text = "or take part in 25 events" } },
+			{ text = "Earn $1,000,000 in total", metric = "earned", goal = 1000000 },
+		},
+	},
+} :: { Chapter }
+
+-- Cinematic captions (109).
+StoryConfig.CINEMATIC_LINES = { "Every city has a hierarchy.", "Nobody starts at the top." }
+
+return StoryConfig
+]=====])
 put(folder, 'ModuleScript', 'VehiclesConfig', [=====[
 -- CITY GRIND: vehicle catalog, paint/mod options and the shared arcade physics.
 -- Lives in ReplicatedStorage.CityGrind.VehiclesConfig. The server builds the
@@ -5729,9 +6409,13 @@ VehiclesConfig.MODS_RANGE = 30
 VehiclesConfig.SPAWN_COOLDOWN = 8
 VehiclesConfig.MOD_PRICES = { paint = 150, rim = 250, glow = 400 }
 
--- Where vehicles may be spawned (inside the city ground, outside interiors).
-VehiclesConfig.CITY_MIN = Vector3.new(-292, -20, -222)
-VehiclesConfig.CITY_MAX = Vector3.new(292, 60, 222)
+-- Where vehicles may be spawned (inside the city ground, outside interiors):
+-- every district on land (see DistrictsConfig), the beach up to the waterline.
+VehiclesConfig.CITY_MIN = Vector3.new(-752, -20, -722)
+VehiclesConfig.CITY_MAX = Vector3.new(892, 60, 515)
+-- A vehicle outside this box (or below KILL_Y) is towed back to the garage.
+VehiclesConfig.WORLD_MIN = Vector3.new(-800, -40, -770)
+VehiclesConfig.WORLD_MAX = Vector3.new(940, 500, 1000)
 
 -- Speed shown on the speedometer = studs/s * this.
 VehiclesConfig.MPH_PER_STUD = 1.1
@@ -6101,7 +6785,10 @@ function VehiclesConfig.step(sim: Sim, dt: number, throttle: number, steer: numb
 
 		-- tyres cancel sideways sliding up to the grip limit (lets you drift at speed)
 		local slideLimit = math.abs(vr) / dt
-		local aLat = math.clamp(-vr * s.gripRate, -s.grip, s.grip)
+		-- Rain/storm lowers grip (World sets workspace WeatherGrip, 1 = dry).
+		local wet = workspace:GetAttribute("WeatherGrip")
+		wet = if type(wet) == "number" then math.clamp(wet, 0.5, 1) else 1
+		local aLat = math.clamp(-vr * s.gripRate * wet, -s.grip * wet, s.grip * wet)
 		aLat = math.clamp(aLat, -slideLimit, slideLimit)
 		force += (look * a + right * aLat) * (mass * gf)
 
@@ -6161,6 +6848,228 @@ end
 
 return VehiclesConfig
 ]=====])
+put(folder, 'ModuleScript', 'WorldConfig', [=====[
+-- CITY GRIND: the living world (spec 65, 66, 81, 82, 89). Shared tuning for
+-- server/World.luau and client/World.luau: collectible sets and candidate
+-- spots, secret rewards, weather states and NPC recognition lines.
+
+local WorldConfig = {}
+
+---------------------------------------------------------------------------
+-- Collectibles (81)
+---------------------------------------------------------------------------
+export type CollectibleSet = {
+	id: string,
+	name: string,
+	icon: string,
+	color: Color3,
+	blurb: string,
+}
+
+WorldConfig.SETS = {
+	{ id = "Balls", name = "Golden Basketballs", icon = "🏀", color = Color3.fromRGB(255, 200, 60), blurb = "Lost near courts, tracks and anywhere people hoop." },
+	{ id = "Tags", name = "Graffiti Tags", icon = "🎨", color = Color3.fromRGB(255, 90, 200), blurb = "Fresh pieces in alleys, back lots and tunnels." },
+	{ id = "Sneakers", name = "Vintage Sneakers", icon = "👟", color = Color3.fromRGB(90, 200, 255), blurb = "Classic pairs left up high and off the beaten path." },
+	{ id = "Tapes", name = "Lost Mixtapes", icon = "📼", color = Color3.fromRGB(150, 255, 140), blurb = "Hangout spots, hideouts and places under things." },
+} :: { CollectibleSet }
+
+WorldConfig.SET_BY_ID = {} :: { [string]: CollectibleSet }
+for _, s in WorldConfig.SETS do
+	WorldConfig.SET_BY_ID[s.id] = s
+end
+
+-- Rewards (server decides; shown in the Collection app).
+WorldConfig.ITEM_REWARD = { cash = 60, xp = 40 }
+WorldConfig.SET_REWARD = { cash = 1500, xp = 600, rep = 50, fame = 25 }
+WorldConfig.ALL_SETS_REWARD = { cash = 5000, xp = 2000, rep = 150, fame = 100 }
+WorldConfig.COLLECT_RANGE = 9 -- studs from the item's centre the server accepts
+
+export type Spot = {
+	id: string, -- stable save key (never reuse an id for a different place)
+	set: string,
+	pos: Vector3, -- the server raycasts DOWN from here (<= 30 studs) to find the floor
+}
+
+local function S(id: string, set: string, x: number, y: number, z: number): Spot
+	return { id = id, set = set, pos = Vector3.new(x, y, z) }
+end
+
+-- Hand-picked, reachable candidate spots. The server checks each one at build
+-- time (floor below, nothing solid where the item would float) and skips any
+-- that a later map change made bad, so set sizes are whatever survives.
+WorldConfig.SPOTS = {
+	-- The Neighborhood
+	S("n01", "Balls", 100, 5, -160), -- behind the court baseline
+	S("n02", "Balls", -173, 10, -80), -- top of the playground slide tower
+	S("n03", "Tags", -70, 5, 88), -- alley behind Corner Mart
+	S("n04", "Tags", -185, 5, 90), -- behind Threads
+	S("n05", "Tags", -100, 5, -115), -- behind Maple Court
+	S("n06", "Sneakers", 205, 5, -105), -- behind Iron Box
+	S("n07", "Tapes", -200, 5, -107), -- by the park fountain
+	S("n08", "Tapes", 70, 5, 90), -- behind Mama's Kitchen
+	S("n09", "Sneakers", 150, 5, 126), -- back of the car lot
+	S("n10", "Balls", -250, 5, 180), -- south field
+	S("n11", "Tags", 280, 5, -200), -- north-east corner
+	S("n12", "Sneakers", -280, 5, 205), -- south-west corner
+	-- Downtown
+	S("d01", "Sneakers", 46, 64, -706), -- Summit Tower roof
+	S("d02", "Sneakers", 114, 64, -706), -- Summit Tower roof
+	S("d03", "Balls", -160, 5, -300), -- the plaza
+	S("d04", "Tags", -90, 5, -402), -- behind City Bank
+	S("d05", "Tags", -134, 5, -428), -- alley between the bank and the bistro
+	S("d06", "Tapes", 70, 5, -395), -- behind Skyline Diner
+	S("d07", "Tapes", 255, 5, -515), -- parking lot
+	S("d08", "Balls", 262, 5, -270), -- by the arena
+	S("d09", "Tags", -195, 5, -582), -- behind the luxury stores
+	S("d10", "Tapes", -30, 5, -705), -- north end of the avenue
+	-- Industrial
+	S("i01", "Tapes", 850, -10, -250), -- the Underground den
+	S("i02", "Tags", 500, -10, -215), -- the old tunnel
+	S("i03", "Tags", 100, -10, -215), -- the old tunnel
+	S("i04", "Balls", 720, 5, 120), -- container yard aisle
+	S("i05", "Sneakers", 395, 5, -115), -- behind Warehouse A
+	S("i06", "Tapes", 395, 5, 150), -- between the smokestacks
+	S("i07", "Balls", 350, 5, -480), -- race paddock
+	S("i08", "Tags", 735, 5, -102), -- behind Rusty's Garage
+	S("i09", "Sneakers", 615, 5, -192), -- behind the truck depot
+	S("i10", "Tapes", 865, 5, -110), -- by the service tunnel gate
+	-- The Beach
+	S("b01", "Tapes", 150, -1.5, 548), -- under the pier
+	S("b02", "Sneakers", -285, 12, 290), -- skate park deck
+	S("b03", "Balls", 300, 5, 352), -- beach court
+	S("b04", "Balls", 560, 5, 320), -- running track infield
+	S("b05", "Tapes", -30, 5, 494), -- bonfire circle
+	S("b06", "Sneakers", 160, 4, 648), -- end of the pier
+	S("b07", "Tags", 40, 5, 428), -- behind the Tiki Shack
+	S("b08", "Balls", 430, 5, 458), -- Muscle Beach
+	S("b09", "Tapes", -120, 5, 472), -- ferris wheel
+	S("b10", "Tags", -440, 3, 396), -- west boardwalk
+	S("b11", "Sneakers", 860, 5, 420), -- far east sand
+	S("b12", "Balls", -330, 6, 282), -- skate park fun box
+	-- Luxury Hills
+	S("l01", "Sneakers", -375, 114, -345), -- Sky Lounge
+	S("l02", "Balls", -360, 5, -572), -- behind Prestige Motors
+	S("l03", "Tapes", -476, 20, -623), -- Aurelia pool deck
+	S("l04", "Tags", -720, 20, -650), -- hilltop woods
+	S("l05", "Sneakers", -476, 20, -357), -- Vireo pool deck
+	S("l06", "Tapes", -430, 20, -700), -- hill edge
+	S("l07", "Balls", -320, 5, -660), -- foot of Penthouse One
+	S("l08", "Tags", -410, 5, -300), -- below the hill
+	-- Old Town
+	S("o01", "Sneakers", -385, 36, 145), -- Clocktower roof
+	S("o02", "Tapes", -370, 36, 160), -- Clocktower roof
+	S("o03", "Tags", -715, -10, -190), -- catacombs
+	S("o04", "Tapes", -698, 6, -115), -- Forgotten Cellar
+	S("o05", "Tags", -380, 5, -95), -- behind the main street, by Town Hall
+	S("o06", "Balls", -498, 5, 130), -- old court sideline
+	S("o07", "Sneakers", -660, 5, 75), -- behind the Grand Theatre
+	S("o08", "Tags", -690, 5, 200), -- behind Warehouse Lofts
+	S("o09", "Tapes", -580, 5, -75), -- behind Hotel Bellmont
+	S("o10", "Balls", -610, 5, -200), -- south end of the side street
+	S("o11", "Tags", -500, -10, -215), -- the old tunnel
+	S("o12", "Sneakers", -740, 5, 100), -- western edge
+	S("o13", "Balls", -450, 5, 200), -- side street, south
+	S("o14", "Balls", 20, 5, -560), -- Downtown avenue east sidewalk
+} :: { Spot }
+
+---------------------------------------------------------------------------
+-- Secrets (82). Areas are parts tagged "SecretArea" (built by Districts).
+---------------------------------------------------------------------------
+WorldConfig.SECRET_IDS = { "CityTunnel", "IndustrialUnderground", "OldTownRooftop", "OldTownCellar", "OldTownCatacombs" }
+WorldConfig.SECRET_REWARD = { cash = 400, xp = 250, rep = 25 }
+
+---------------------------------------------------------------------------
+-- Weather (66)
+---------------------------------------------------------------------------
+export type Weather = {
+	id: string,
+	label: string,
+	icon: string,
+	weight: number, -- chance of being picked next
+	minMinutes: number,
+	maxMinutes: number,
+	grip: number, -- vehicle grip multiplier (Workspace attribute WeatherGrip)
+	dayOnly: boolean?,
+}
+
+WorldConfig.WEATHER = {
+	{ id = "Clear", label = "Clear", icon = "☀️", weight = 5, minMinutes = 4, maxMinutes = 7, grip = 1 },
+	{ id = "Cloudy", label = "Cloudy", icon = "☁️", weight = 3, minMinutes = 3, maxMinutes = 6, grip = 1 },
+	{ id = "Rain", label = "Rain", icon = "🌧️", weight = 2.5, minMinutes = 3, maxMinutes = 5, grip = 0.82 },
+	{ id = "Storm", label = "Thunderstorm", icon = "⛈️", weight = 1, minMinutes = 2, maxMinutes = 4, grip = 0.75 },
+	{ id = "Fog", label = "Fog", icon = "🌫️", weight = 1.5, minMinutes = 3, maxMinutes = 5, grip = 1 },
+	{ id = "Heatwave", label = "Heatwave", icon = "🔥", weight = 1, minMinutes = 3, maxMinutes = 5, grip = 1, dayOnly = true },
+} :: { Weather }
+
+WorldConfig.WEATHER_BY_ID = {} :: { [string]: Weather }
+for _, w in WorldConfig.WEATHER do
+	WorldConfig.WEATHER_BY_ID[w.id] = w
+end
+
+---------------------------------------------------------------------------
+-- NPC pedestrians (65) and recognition (89)
+---------------------------------------------------------------------------
+WorldConfig.NPC_COUNT = 24
+WorldConfig.NPC_TICK = 1 / 3 -- seconds between NPC updates (3 Hz)
+WorldConfig.NPC_WAKE_RANGE = 250 -- NPCs sleep (anchored, idle) with no player this close
+WorldConfig.RECOGNIZE_RANGE = 14
+WorldConfig.NPC_COOLDOWN = 40 -- seconds before the same NPC reacts to anyone again
+WorldConfig.PLAYER_COOLDOWN = 25 -- seconds before any NPC reacts to the same player again
+WorldConfig.PAIR_COOLDOWN = 300 -- seconds before the same NPC reacts to the same player again
+
+-- Schedules: district per time slot (morning 5-11, afternoon 11-17, evening 17-21, night 21-5).
+WorldConfig.SCHEDULES = {
+	Commuter = { "Downtown", "Downtown", "Neighborhood", "OldTown" },
+	Beachgoer = { "Neighborhood", "Beach", "Beach", "OldTown" },
+	NightOwl = { "Neighborhood", "Industrial", "OldTown", "OldTown" },
+	Local = { "Neighborhood", "Neighborhood", "Neighborhood", "OldTown" },
+	Worker = { "Industrial", "Industrial", "Downtown", "OldTown" },
+	Uptown = { "Luxury", "Beach", "Luxury", "OldTown" },
+}
+-- How many NPCs follow each schedule (sums to NPC_COUNT).
+WorldConfig.SCHEDULE_MIX = { Commuter = 6, Beachgoer = 5, NightOwl = 3, Local = 4, Worker = 3, Uptown = 3 }
+
+function WorldConfig.timeSlot(clockTime: number): number
+	if clockTime >= 5 and clockTime < 11 then
+		return 1
+	elseif clockTime >= 11 and clockTime < 17 then
+		return 2
+	elseif clockTime >= 17 and clockTime < 21 then
+		return 3
+	end
+	return 4
+end
+
+-- Recognition tier from reputation and fame (0 = nobody knows you yet).
+function WorldConfig.recognitionTier(reputation: number, fame: number): number
+	local tier = 0
+	if reputation >= 100 or fame >= 50 then
+		tier = 1
+	end
+	if reputation >= 500 or fame >= 250 then
+		tier = 2
+	end
+	if reputation >= 2500 or fame >= 2000 then
+		tier = 3
+	end
+	if reputation >= 10000 or fame >= 12000 then
+		tier = 4
+	end
+	return tier
+end
+
+-- Chance an NPC reacts when you pass, per tier.
+WorldConfig.RECOGNIZE_CHANCE = { 0.2, 0.4, 0.65, 0.9 }
+-- "%s" is the player's display name.
+WorldConfig.RECOGNIZE_LINES = {
+	{ "Hey... aren't you %s?", "Wait, I've seen you around. %s, right?", "Oh, %s! Nice." },
+	{ "Yo, that's %s!", "%s! Saw your highlights.", "Big fan, %s!" },
+	{ "No way, it's %s! Can I get a pic?", "%s!! You're famous out here!", "Everybody look, it's %s!" },
+	{ "IT'S %s! THE LEGEND!", "I can't believe it... %s!", "%s! The whole city knows you!" },
+}
+
+return WorldConfig
+]=====])
 local server = put(SSS, 'Script', 'CityGrindServer', [=====[
 -- CITY GRIND: server entry point (ServerScriptService.CityGrindServer).
 -- Builds the city, owns player data, and validates every remote.
@@ -6200,6 +7109,31 @@ end)
 -- City
 ---------------------------------------------------------------------------
 local city = CityBuilder.build()
+
+-- The rest of the city (Downtown, Beach, Industrial, Old Town, Luxury, subway).
+local districtsModule = script:FindFirstChild("Districts")
+if districtsModule then
+	-- A City saved into the place (the shipped rbxlx never has one) may carry an old
+	-- Districts folder. Its parts have no runtime wiring (subway prompts, ferris wheel,
+	-- leaderboard, District attribute loop), so rebuild the districts from scratch.
+	local stale = city.city:FindFirstChild("Districts")
+	if stale then
+		stale:Destroy()
+	end
+	local ok, err = pcall(function()
+		require(districtsModule).build(city.city)
+	end)
+	if not ok then
+		warn("[CityGrind] Districts failed to build:", err)
+	end
+	-- street lamps in the new districts follow day/night too
+	table.clear(city.lamps)
+	for _, d in city.city:GetDescendants() do
+		if d:IsA("SpotLight") then
+			table.insert(city.lamps, d)
+		end
+	end
+end
 
 ---------------------------------------------------------------------------
 -- Phone: profile, bank and settings data
@@ -6440,7 +7374,7 @@ CourtGames.start()
 ---------------------------------------------------------------------------
 -- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -10356,6 +11290,21 @@ end
 
 CityBuilder.RUN_ROUTE = RUN_ROUTE
 
+-- Building helpers for other districts (valid after CityBuilder.build() ran).
+CityBuilder.helpers = {
+	part = part,
+	sign = sign,
+	folder = folder,
+	mapPoint = mapPoint,
+	building = building,
+	tree = tree,
+	bench = bench,
+	buildCourt = buildCourt,
+	buildVendingMachine = buildVendingMachine,
+	buildBusStop = buildBusStop,
+	buildSubwayEntrance = buildSubwayEntrance,
+}
+
 return CityBuilder
 ]=====])
 put(server, 'ModuleScript', 'CityGram', [=====[
@@ -10602,6 +11551,10 @@ local function filterBroadcast(text: string, userId: number): string?
 	end)
 	if ok and type(result) == "string" then
 		return result
+	end
+	-- Studio test players (negative ids) can't be filtered; their text passes in Studio only.
+	if userId <= 0 and game:GetService("RunService"):IsStudio() then
+		return text
 	end
 	return nil
 end
@@ -11531,7 +12484,10 @@ local function countView(player: Player, id: any)
 		table.remove(s.seen, 1)
 	end
 	PlayerData.markChanged(player)
-	pendingViews[id] = (pendingViews[id] or 0) + 1
+	if postStore.ds then
+		-- (in memory mode `m` IS the stored record, so the line below already counts it)
+		pendingViews[id] = (pendingViews[id] or 0) + 1
+	end
 	m.views = (m.views or 0) + 1 -- show it right away here; flushed to the store in batches
 end
 
@@ -11902,6 +12858,21 @@ function CityGram.start(_city: Instance?)
 		return if ok then data else nil
 	end
 
+	-- Studio without API access: GetDataStore works but every request fails, so
+	-- fall back to this server's memory instead of retrying (and failing) every action.
+	if postStore.ds and game:GetService("RunService"):IsStudio() then
+		task.spawn(function()
+			local ok = pcall(function()
+				(postStore.ds :: DataStore):GetAsync("probe")
+			end)
+			if not ok then
+				postStore.ds = nil
+				followStore.ds = nil
+				table.clear(followCache)
+			end
+		end)
+	end
+
 	PlayerData.onLoaded(function(player: Player)
 		local s = sec(player)
 		if s then
@@ -11959,7 +12930,10 @@ function CityGram.start(_city: Instance?)
 			refreshRecent()
 		end
 	end)
-	game:BindToClose(flushViews)
+	game:BindToClose(function()
+		flushViews()
+		task.wait(2) -- let the batched view writes go out
+	end)
 end
 
 return CityGram
@@ -14749,7 +15723,12 @@ end)
 ---------------------------------------------------------------------------
 -- Setup
 ---------------------------------------------------------------------------
+local setUp: { [Model]: boolean } = {}
 local function setupCourt(model: Model)
+	if setUp[model] then
+		return
+	end
+	setUp[model] = true
 	local hoops = {}
 	for _, side in { "North", "South" } do
 		local hoopModel = model:FindFirstChild("Hoop" .. side)
@@ -14863,6 +15842,13 @@ function CourtGames.start()
 			setupCourt(model)
 		end
 	end
+	-- Courts built later (other districts) join automatically.
+	-- The tag is added before the court is finished building, so wait a frame.
+	CollectionService:GetInstanceAddedSignal("Court"):Connect(function(model)
+		if model:IsA("Model") then
+			task.defer(setupCourt, model)
+		end
+	end)
 	Players.PlayerRemoving:Connect(leaveGame)
 end
 
@@ -16251,6 +17237,2194 @@ end
 
 return Crews
 ]=====])
+put(server, 'ModuleScript', 'Districts', [=====[
+-- CITY GRIND: the rest of the city (spec sections 4-11, 32, 49, 51, 94).
+-- Districts.build(cityModel) runs once, right after CityBuilder.build(), and
+-- builds Downtown, Industrial, the Beach, Luxury Hills and Old Town around the
+-- Neighborhood, the highways between them, a working subway and the moving or
+-- interactive bits (ferris wheel, elevators, private court gate, leaderboard,
+-- digital billboards, night windows). Layout lives in DistrictsConfig.
+--
+-- Everything is under City.Districts.<Id> (Folders with DisplayName / Center /
+-- Size attributes). Courts are real CityBuilder courts (tag "Court").
+-- Tags: "SecretArea" (invisible zones, attribute SecretId + DisplayName),
+-- "RaceStart" (start/finish line; checkpoints in Industrial.RaceTrack.Checkpoints
+-- with attribute Index). Player attributes: District, SubwayRides, LastSubwayStation.
+
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local DC = require(shared:WaitForChild("DistrictsConfig"))
+local CityBuilder = require(script.Parent:WaitForChild("CityBuilder"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local Places = require(script.Parent:WaitForChild("Places"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local Districts = {}
+
+-- Fires (player, fromStationId, toStationId) after every completed subway ride.
+Districts.subwayRide = Instance.new("BindableEvent")
+
+local V = Vector3.new
+local CF = CFrame.new
+local M = Enum.Material
+
+local ROAD_W = 32
+local WALK_W = 8
+
+local H: any -- CityBuilder.helpers, set in build()
+local city: Model
+local root: Folder
+local current: Instance -- default parent for new parts
+
+local C = {
+	asphalt = Color3.fromRGB(45, 45, 50),
+	lane = Color3.fromRGB(240, 200, 60),
+	walk = Color3.fromRGB(175, 175, 170),
+	dark = Color3.fromRGB(35, 35, 40),
+	metal = Color3.fromRGB(70, 72, 78),
+	white = Color3.new(1, 1, 1),
+	signBg = Color3.fromRGB(20, 20, 24),
+	windowWarm = Color3.fromRGB(255, 214, 140),
+	windowCool = Color3.fromRGB(170, 215, 255),
+	wood = Color3.fromRGB(130, 90, 55),
+	sand = Color3.fromRGB(226, 205, 150),
+	mapRoad = Color3.fromRGB(50, 50, 55),
+	mapWalk = Color3.fromRGB(170, 170, 165),
+	mapBuilding = Color3.fromRGB(200, 190, 175),
+}
+
+---------------------------------------------------------------------------
+-- Small building blocks
+---------------------------------------------------------------------------
+type PartSpec = {
+	name: string?,
+	size: Vector3,
+	cf: CFrame,
+	color: Color3?,
+	mat: Enum.Material?,
+	transp: number?,
+	collide: boolean?,
+	shape: Enum.PartType?,
+	parent: Instance?,
+	map: Color3?, -- drawn on the phone map in this colour
+	layer: number?, -- phone map z-order
+}
+
+local function P(s: PartSpec): BasePart
+	local b: BasePart = H.part({
+		name = s.name,
+		size = s.size,
+		cframe = s.cf,
+		color = s.color,
+		material = s.mat,
+		transparency = s.transp,
+		collide = s.collide,
+		shape = s.shape,
+		parent = s.parent or current,
+	})
+	if s.map then
+		b:SetAttribute("MapColor", s.map)
+		b:SetAttribute("MapLayer", s.layer or 2)
+	end
+	if s.collide == false then
+		b.CanQuery = false
+		b.CanTouch = false
+	end
+	return b
+end
+
+-- A vertical cylinder (Roblox cylinders run along X, so turn it upright).
+local function cylinder(name: string, base: Vector3, height: number, diameter: number, color: Color3, mat: Enum.Material?, parent: Instance?): BasePart
+	return P({
+		name = name,
+		size = V(height, diameter, diameter),
+		cf = CF(base + V(0, height / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2),
+		color = color,
+		mat = mat or M.SmoothPlastic,
+		shape = Enum.PartType.Cylinder,
+		parent = parent,
+	})
+end
+
+local function model(name: string, parent: Instance?): Model
+	local m = Instance.new("Model")
+	m.Name = name
+	m.Parent = parent or current
+	return m
+end
+
+-- A sloped slab whose TOP surface runs from a to b.
+local function ramp(name: string, a: Vector3, b: Vector3, width: number, color: Color3, mat: Enum.Material, thickness: number?, parent: Instance?): BasePart
+	local t = thickness or 1
+	local mid = (a + b) / 2
+	return P({
+		name = name,
+		size = V(width, t, (b - a).Magnitude + 0.4),
+		cf = CFrame.lookAt(mid, b) * CF(0, -t / 2, 0),
+		color = color,
+		mat = mat,
+		parent = parent,
+	})
+end
+
+-- A board whose Front face (and sign) points along `dir`.
+local function signBoard(name: string, pos: Vector3, size: Vector3, dir: Vector3, text: string, textColor: Color3, bg: Color3?, parent: Instance?): (BasePart, SurfaceGui)
+	local b = P({ name = name, size = size, cf = CFrame.lookAt(pos, pos + dir), color = C.signBg, parent = parent })
+	local gui = H.sign(b, Enum.NormalId.Front, text, textColor, bg)
+	return b, gui
+end
+
+local function addPrompt(parent: Instance, name: string, action: string, object: string, distance: number?, hold: number?): ProximityPrompt
+	local p = Instance.new("ProximityPrompt")
+	p.Name = name
+	p.ActionText = action
+	p.ObjectText = object
+	p.KeyboardKeyCode = Enum.KeyCode.E
+	p.MaxActivationDistance = distance or 10
+	p.HoldDuration = hold or 0
+	p.RequiresLineOfSight = false
+	p.Parent = parent
+	return p
+end
+
+local function seat(pos: Vector3, facing: Vector3, color: Color3?, parent: Instance?): Seat
+	local s = Instance.new("Seat")
+	s.Name = "Seat"
+	s.Anchored = true
+	s.Size = V(2.4, 0.5, 2.4)
+	s.CFrame = CFrame.lookAt(pos, pos + facing)
+	s.Color = color or Color3.fromRGB(180, 40, 50)
+	s.Material = M.SmoothPlastic
+	s.TopSurface = Enum.SurfaceType.Smooth
+	s.BottomSurface = Enum.SurfaceType.Smooth
+	s.Parent = parent or current
+	return s
+end
+
+-- Invisible zone that quests/achievements can detect. Never on the map.
+local function secretArea(id: string, displayName: string, center: Vector3, size: Vector3)
+	local a = P({ name = "SecretArea", size = size, cf = CF(center), transp = 1, collide = false })
+	a.CanTouch = true
+	a:SetAttribute("SecretId", id)
+	a:SetAttribute("DisplayName", displayName)
+	CollectionService:AddTag(a, "SecretArea")
+end
+
+local function mapPoint(name: string, category: string, pos: Vector3)
+	H.mapPoint(name, category, pos + V(0, 3, 0))
+end
+
+---------------------------------------------------------------------------
+-- Night lighting: lit windows and lamps owned by this module.
+-- (SpotLights are collected and switched by Main like the Neighborhood's.)
+---------------------------------------------------------------------------
+type Glow = { part: BasePart, day: Color3, mat: Enum.Material, transp: number, night: Color3 }
+local glows: { Glow } = {}
+local nightLights: { Light } = {}
+
+local function glowAtNight(part: BasePart, nightColor: Color3)
+	table.insert(glows, { part = part, day = part.Color, mat = part.Material, transp = part.Transparency, night = nightColor })
+end
+
+local function pointLight(parent: Instance, range: number, brightness: number, color: Color3, alwaysOn: boolean?): PointLight
+	local l = Instance.new("PointLight")
+	l.Range = range
+	l.Brightness = brightness
+	l.Color = color
+	l.Shadows = false
+	l.Parent = parent
+	if not alwaysOn then
+		l.Enabled = false
+		table.insert(nightLights, l)
+	end
+	return l
+end
+
+local function applyNight(night: boolean)
+	for _, g in glows do
+		if g.part.Parent then
+			g.part.Material = if night then M.Neon else g.mat
+			g.part.Color = if night then g.night else g.day
+			g.part.Transparency = if night then 0 else g.transp
+		end
+	end
+	for _, l in nightLights do
+		l.Enabled = night
+	end
+end
+
+-- A lantern on a post: glowing globe + PointLight at night.
+local function lantern(pos: Vector3, color: Color3?, height: number?)
+	local h = height or 10
+	local m = model("Lantern")
+	P({ name = "Post", size = V(0.5, h, 0.5), cf = CF(pos + V(0, h / 2, 0)), color = C.dark, mat = M.Metal, parent = m })
+	local globe = P({ name = "Globe", size = V(1.6, 1.6, 1.6), cf = CF(pos + V(0, h + 0.6, 0)), color = Color3.fromRGB(240, 235, 220), shape = Enum.PartType.Ball, parent = m })
+	glowAtNight(globe, color or Color3.fromRGB(255, 220, 160))
+	pointLight(globe, 28, 1.6, color or Color3.fromRGB(255, 210, 150))
+end
+
+-- A street lamp like the Neighborhood's (SpotLight, switched by Main).
+local function streetLamp(pos: Vector3, towardRoad: Vector3)
+	local m = model("StreetLamp")
+	P({ name = "Pole", size = V(0.6, 16, 0.6), cf = CF(pos + V(0, 8, 0)), color = C.dark, mat = M.Metal, parent = m })
+	local headPos = pos + V(0, 16, 0) + towardRoad * 1.2
+	local head = P({ name = "Head", size = V(1.6, 0.6, 3), cf = CFrame.lookAt(headPos, headPos + towardRoad), color = Color3.fromRGB(255, 240, 200), parent = m })
+	local light = Instance.new("SpotLight")
+	light.Face = Enum.NormalId.Bottom
+	light.Range = 40
+	light.Angle = 110
+	light.Brightness = 3
+	light.Color = Color3.fromRGB(255, 225, 170)
+	light.Parent = head
+end
+
+-- A floodlight tower aimed down at a point (SpotLight, switched by Main).
+local function floodlight(base: Vector3, height: number, target: Vector3)
+	local m = model("Floodlight")
+	P({ name = "Mast", size = V(1, height, 1), cf = CF(base + V(0, height / 2, 0)), color = C.metal, mat = M.Metal, parent = m })
+	local top = base + V(0, height, 0)
+	local head = P({ name = "Head", size = V(5, 3, 1), cf = CFrame.lookAt(top, target), color = Color3.fromRGB(250, 250, 240), parent = m })
+	local light = Instance.new("SpotLight")
+	light.Face = Enum.NormalId.Front
+	light.Range = 60
+	light.Angle = 70
+	light.Brightness = 4
+	light.Color = Color3.fromRGB(240, 245, 255)
+	light.Parent = head
+end
+
+---------------------------------------------------------------------------
+-- Ground, roads and sidewalks
+---------------------------------------------------------------------------
+-- Ground slab over [x0,x1] x [z0,z1] (top at y 0.05) with rectangular holes {x0,x1,z0,z1}.
+local function ground(x0: number, x1: number, z0: number, z1: number, color: Color3, mat: Enum.Material, mapColor: Color3, holes: { { number } }?)
+	local cuts = { x0, x1 }
+	for _, h in (holes or {}) :: { { number } } do
+		table.insert(cuts, h[1])
+		table.insert(cuts, h[2])
+	end
+	table.sort(cuts)
+	for i = 1, #cuts - 1 do
+		local a, b = cuts[i], cuts[i + 1]
+		if b - a > 0.01 then
+			local mid = (a + b) / 2
+			local runs = { { z0, z1 } }
+			for _, h in (holes or {}) :: { { number } } do
+				if mid > h[1] and mid < h[2] then
+					local nextRuns = {}
+					for _, r in runs do
+						if h[4] <= r[1] or h[3] >= r[2] then
+							table.insert(nextRuns, r)
+						else
+							if h[3] > r[1] then
+								table.insert(nextRuns, { r[1], h[3] })
+							end
+							if h[4] < r[2] then
+								table.insert(nextRuns, { h[4], r[2] })
+							end
+						end
+					end
+					runs = nextRuns
+				end
+			end
+			for _, r in runs do
+				P({ name = "Ground", size = V(b - a, 2, r[2] - r[1]), cf = CF(mid, -0.95, (r[1] + r[2]) / 2), color = color, mat = mat, map = mapColor, layer = 1 })
+			end
+		end
+	end
+end
+
+-- [a,b] minus the gaps, as a list of {from, to}.
+local function segments(a: number, b: number, gaps: { { number } }?): { { number } }
+	local out = { { a, b } }
+	for _, g in (gaps or {}) :: { { number } } do
+		local nextOut = {}
+		for _, s in out do
+			if g[2] <= s[1] or g[1] >= s[2] then
+				table.insert(nextOut, s)
+			else
+				if g[1] > s[1] then
+					table.insert(nextOut, { s[1], g[1] })
+				end
+				if g[2] < s[2] then
+					table.insert(nextOut, { g[2], s[2] })
+				end
+			end
+		end
+		out = nextOut
+	end
+	return out
+end
+
+type RoadOpts = {
+	y: number?,
+	name: string?,
+	color: Color3?,
+	mat: Enum.Material?,
+	walks: boolean?,
+	walkGaps: { { number } }?,
+	walkColor: Color3?,
+	walkMat: Enum.Material?,
+	lamps: boolean?,
+	lampEvery: number?,
+}
+
+-- A road along the X axis at z, with sidewalks and lamps. axis "z" builds along Z at x = `at`.
+local function road(axis: string, from: number, to: number, at: number, o: RoadOpts?)
+	local opts: RoadOpts = o or {}
+	local y = opts.y or 0
+	local alongX = axis == "x"
+	local len, mid = to - from, (from + to) / 2
+	local function place(along: number, across: number, h: number): Vector3
+		return if alongX then V(along, h, at + across) else V(at + across, h, along)
+	end
+	local function size(along: number, across: number, h: number): Vector3
+		return if alongX then V(along, h, across) else V(across, h, along)
+	end
+	P({ name = opts.name or (if alongX then "MainRoad" else "CrossRoad"), size = size(len, ROAD_W, 0.2), cf = CF(place(mid, 0, y + 0.1)), color = opts.color or C.asphalt, mat = opts.mat or M.Asphalt, map = C.mapRoad, layer = 2 })
+	for d = from + 15, to - 10, 30 do
+		P({ name = "LaneMark", size = size(8, 0.6, 0.05), cf = CF(place(d, 0, y + 0.23)), color = C.lane, collide = false })
+	end
+	if opts.walks ~= false then
+		for _, side in { -1, 1 } do
+			for _, seg in segments(from, to, opts.walkGaps) do
+				P({
+					name = "Sidewalk",
+					size = size(seg[2] - seg[1], WALK_W, 0.5),
+					cf = CF(place((seg[1] + seg[2]) / 2, side * (ROAD_W / 2 + WALK_W / 2), y + 0.25)),
+					color = opts.walkColor or C.walk,
+					mat = opts.walkMat or M.Concrete,
+					map = C.mapWalk,
+					layer = 2,
+				})
+			end
+		end
+	end
+	if opts.lamps ~= false then
+		local every = opts.lampEvery or 80
+		local i = 0
+		for d = from + every / 2, to - 10, every do
+			i += 1
+			local side = if i % 2 == 0 then 1 else -1
+			local inGap = false
+			for _, g in (opts.walkGaps or {}) :: { { number } } do
+				if d > g[1] - 4 and d < g[2] + 4 then
+					inGap = true
+				end
+			end
+			if not inGap then
+				local pos = place(d, side * (ROAD_W / 2 + WALK_W - 0.6), y)
+				streetLamp(pos, if alongX then V(0, 0, -side) else V(-side, 0, 0))
+			end
+		end
+	end
+end
+
+-- A flat asphalt lot (vehicles treat "Lot" like a road).
+local function lot(x0: number, x1: number, z0: number, z1: number, y: number?, name: string?): BasePart
+	return P({ name = name or "Lot", size = V(x1 - x0, 0.3, z1 - z0), cf = CF((x0 + x1) / 2, (y or 0) + 0.15, (z0 + z1) / 2), color = Color3.fromRGB(55, 55, 60), mat = M.Asphalt, map = Color3.fromRGB(60, 60, 66), layer = 2 })
+end
+
+---------------------------------------------------------------------------
+-- Buildings
+---------------------------------------------------------------------------
+local FACE_YAW = { S = 0, N = math.pi, E = math.pi / 2, W = -math.pi / 2 }
+
+-- A CityBuilder storefront turned to face N/S/E/W (S = +z).
+-- size = (front width, height, depth). category nil = no map point.
+local function shop(o: {
+	name: string,
+	center: Vector3,
+	size: Vector3,
+	color: Color3,
+	material: Enum.Material?,
+	face: string,
+	signText: string,
+	signColor: Color3,
+	category: string?,
+	floorHeight: number?,
+}): Model
+	local m: Model = H.building({
+		name = o.name,
+		center = o.center,
+		size = o.size,
+		color = o.color,
+		material = o.material,
+		facing = 1,
+		signText = o.signText,
+		signColor = o.signColor,
+		category = o.category or "Landmark",
+		floorHeight = o.floorHeight,
+	})
+	m.Parent = current
+	local body = m:FindFirstChild("Body")
+	if body then
+		body:SetAttribute("MapColor", C.mapBuilding)
+		body:SetAttribute("MapLayer", 3)
+	end
+	local points = city:FindFirstChild("MapPoints")
+	local point = points and points:FindFirstChild(o.name) :: BasePart?
+	local yaw = FACE_YAW[o.face] or 0
+	if yaw ~= 0 then
+		local pivot = CF(o.center)
+		local rotated = pivot * CFrame.Angles(0, yaw, 0)
+		m.WorldPivot = pivot
+		m:PivotTo(rotated)
+		if point then
+			point.CFrame = rotated * pivot:ToObjectSpace(point.CFrame)
+		end
+	end
+	if point and not o.category then
+		point:Destroy()
+	end
+	return m
+end
+
+type TowerOpts = {
+	name: string,
+	center: Vector3,
+	w: number,
+	d: number,
+	h: number,
+	color: Color3,
+	glass: Color3,
+	trim: Color3?,
+	lit: number, -- fraction of window strips that light up at night
+	nightColor: Color3?,
+	mat: Enum.Material?,
+	front: Vector3?, -- entrance side (default +z)
+	spire: number?,
+	flatRoof: boolean?,
+}
+
+-- A skyscraper: one body, full-height window strips per face (one part each),
+-- floor bands, a lobby, a crown. ~25 parts no matter how tall.
+local function tower(o: TowerOpts): Model
+	local m = model(o.name)
+	local c = o.center
+	P({ name = "Body", size = V(o.w, o.h, o.d), cf = CF(c + V(0, o.h / 2, 0)), color = o.color, mat = o.mat or M.Concrete, parent = m, map = C.mapBuilding, layer = 3 })
+	local rng = Random.new(math.floor(math.abs(c.X) * 7 + math.abs(c.Z) * 13))
+	local stripH = o.h - 16
+	for _, face in { V(1, 0, 0), V(-1, 0, 0), V(0, 0, 1), V(0, 0, -1) } do
+		local len = if face.X ~= 0 then o.d else o.w
+		local depth = if face.X ~= 0 then o.w else o.d
+		local along = V(face.Z, 0, -face.X)
+		local n = math.max(2, math.floor(len / 12))
+		local pitch = len / n
+		for i = 1, n do
+			local pos = c + face * (depth / 2 + 0.15) + along * (-len / 2 + (i - 0.5) * pitch) + V(0, 12 + stripH / 2, 0)
+			local strip = P({ name = "Windows", size = V(pitch - 3, stripH, 0.4), cf = CFrame.lookAt(pos, pos + face), color = o.glass, mat = M.Glass, transp = 0.1, parent = m })
+			if rng:NextNumber() < o.lit then
+				glowAtNight(strip, o.nightColor or (if rng:NextNumber() < 0.7 then C.windowWarm else C.windowCool))
+			end
+		end
+	end
+	local trim = o.trim or Color3.fromRGB(60, 62, 70)
+	for y = 34, o.h - 12, 34 do
+		P({ name = "Band", size = V(o.w + 0.9, 1.6, o.d + 0.9), cf = CF(c + V(0, y, 0)), color = trim, mat = M.Metal, parent = m })
+	end
+	P({ name = "Lobby", size = V(o.w + 0.6, 10, o.d + 0.6), cf = CF(c + V(0, 5, 0)), color = Color3.fromRGB(40, 55, 70), mat = M.Glass, transp = 0.25, parent = m })
+	local front = o.front or V(0, 0, 1)
+	local frontDepth = if front.X ~= 0 then o.w else o.d
+	local canopyPos = c + front * (frontDepth / 2 + 3) + V(0, 10.5, 0)
+	P({ name = "Canopy", size = V(16, 0.6, 6), cf = CFrame.lookAt(canopyPos, canopyPos + front), color = trim, mat = M.Metal, parent = m })
+	local doorPos = c + front * (frontDepth / 2 + 0.35) + V(0, 4.5, 0)
+	P({ name = "Door", size = V(8, 9, 0.4), cf = CFrame.lookAt(doorPos, doorPos + front), color = Color3.fromRGB(25, 30, 36), mat = M.Glass, transp = 0.1, parent = m })
+	if not o.flatRoof then
+		P({ name = "Crown", size = V(o.w + 1.5, 2, o.d + 1.5), cf = CF(c + V(0, o.h + 1, 0)), color = trim, mat = M.Metal, parent = m })
+		P({ name = "RoofBox", size = V(o.w * 0.5, 6, o.d * 0.5), cf = CF(c + V(0, o.h + 5, 0)), color = Color3.fromRGB(90, 92, 98), mat = M.Concrete, parent = m })
+		if o.spire then
+			cylinder("Spire", c + V(0, o.h + 8, 0), o.spire, 1.4, Color3.fromRGB(200, 200, 210), M.Metal, m)
+			local beacon = P({ name = "Beacon", size = V(2, 2, 2), cf = CF(c + V(0, o.h + 8 + o.spire + 1, 0)), color = Color3.fromRGB(255, 40, 40), mat = M.Neon, shape = Enum.PartType.Ball, parent = m })
+			pointLight(beacon, 30, 2, Color3.fromRGB(255, 60, 60))
+		end
+	end
+	return m
+end
+
+---------------------------------------------------------------------------
+-- Interactions: elevators (section 49)
+---------------------------------------------------------------------------
+local function canMove(player: Player): (boolean, string?)
+	if not Net.alive(player) then
+		return false, nil
+	end
+	local driving = player:GetAttribute("Driving")
+	if type(driving) == "string" and driving ~= "" then
+		return false, "Park your vehicle first."
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" then
+		return false, nil
+	end
+	return true, nil
+end
+
+-- Two linked doors: ground floor <-> roof.
+local function elevator(name: string, groundDoor: Vector3, groundFace: Vector3, roofDoor: Vector3, roofFace: Vector3)
+	local m = model(name .. "Elevator")
+	local function door(pos: Vector3, face: Vector3, label: string): BasePart
+		local p = pos + V(0, 4.5, 0)
+		local d = P({ name = "ElevatorDoor", size = V(6, 9, 0.6), cf = CFrame.lookAt(p, p + face), color = Color3.fromRGB(190, 190, 200), mat = M.Metal, parent = m })
+		local framePos = p + V(0, 5.5, 0) + face * 0.1
+		local frame = P({ name = "ElevatorSign", size = V(6, 1.6, 0.4), cf = CFrame.lookAt(framePos, framePos + face), color = C.signBg, parent = m })
+		H.sign(frame, Enum.NormalId.Front, label, Color3.fromRGB(255, 200, 80))
+		return d
+	end
+	local lower = door(groundDoor, groundFace, "ELEVATOR  ▲ ROOF")
+	local upper = door(roofDoor, roofFace, "ELEVATOR  ▼ STREET")
+	-- a little booth on the roof so the door isn't floating
+	local booth = roofDoor - roofFace * 3.4 + V(0, 5, 0)
+	P({ name = "ElevatorBooth", size = V(7, 10, 6), cf = CFrame.lookAt(booth, booth + roofFace), color = Color3.fromRGB(80, 82, 90), mat = M.Concrete, parent = m })
+	local up = addPrompt(lower, "RideUp", "Ride up", name .. " elevator", 9)
+	local down = addPrompt(upper, "RideDown", "Ride down", name .. " elevator", 9)
+	local function ride(player: Player, from: BasePart, to: Vector3, face: Vector3)
+		if not Net.allow(player, "Elevator", 1.5) then
+			return
+		end
+		local ok, reason = canMove(player)
+		if not ok then
+			if reason then
+				Net.notify(player, "ELEVATOR", reason)
+			end
+			return
+		end
+		if Net.distance(player, from.Position) > 14 then
+			return
+		end
+		local spot = to + face * 5
+		Places.teleport(player, CFrame.lookAt(spot, spot + face))
+	end
+	up.Triggered:Connect(function(player)
+		ride(player, lower, roofDoor, roofFace)
+	end)
+	down.Triggered:Connect(function(player)
+		ride(player, upper, groundDoor, groundFace)
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Subway stations (section 11)
+---------------------------------------------------------------------------
+local stationPrompts: { [string]: ProximityPrompt } = {}
+
+local function buildStation(st: DC.Station)
+	local m = model("SubwayEntrance")
+	local p = st.entrance
+	P({ name = "Base", size = V(14, 1, 12), cf = CF(p + V(0, 0.5, 0)), color = Color3.fromRGB(90, 90, 95), mat = M.Concrete, parent = m })
+	local well = P({ name = "Stairwell", size = V(8, 1.1, 8), cf = CF(p + V(0, 0.55, 0)), color = Color3.fromRGB(10, 10, 12), parent = m })
+	for _, x in { -5, 5 } do
+		P({ name = "Rail", size = V(0.4, 3, 9), cf = CF(p + V(x, 2.5, 0)), color = st.line, mat = M.Metal, parent = m })
+	end
+	signBoard("Sign", p + V(0, 6, 5.8), V(12, 2.4, 0.4), V(0, 0, 1), "SUBWAY  " .. string.upper(st.name), C.white, st.line, m)
+	for _, x in { -5.8, 5.8 } do
+		P({ name = "SignPost", size = V(0.4, 6, 0.4), cf = CF(p + V(x, 3, 5.8)), color = C.dark, mat = M.Metal, parent = m })
+	end
+	local globe = P({ name = "Globe", size = V(1.4, 1.4, 1.4), cf = CF(p + V(0, 7.9, 5.8)), color = st.line, shape = Enum.PartType.Ball, parent = m })
+	glowAtNight(globe, st.line)
+	stationPrompts[st.id] = addPrompt(well, "TakeSubway", "Take Subway", "Subway · " .. st.name, 10)
+	mapPoint("Subway · " .. st.name, "Transit", p + V(0, 0, 9))
+end
+
+---------------------------------------------------------------------------
+-- Ferris wheel (moving rides, section 8)
+---------------------------------------------------------------------------
+local WHEEL_RADIUS = 38
+local WHEEL_SPEED = math.pi * 2 / 100 -- one turn every 100 s
+type Gondola = { parts: { BasePart }, offsets: { CFrame }, phase: number, seat: Seat, seatOffset: CFrame }
+local wheel = {
+	axle = Vector3.zero,
+	parts = {} :: { BasePart },
+	offsets = {} :: { CFrame },
+	gondolas = {} :: { Gondola },
+	angle = 0,
+	active = false,
+}
+
+local function buildFerrisWheel(axle: Vector3)
+	local m = model("FerrisWheel")
+	wheel.axle = axle
+	local R = WHEEL_RADIUS
+	local function wheelPart(spec: any, offset: CFrame)
+		spec.parent = m
+		spec.collide = false
+		spec.cf = CF(axle) * offset
+		local part = P(spec)
+		table.insert(wheel.parts, part)
+		table.insert(wheel.offsets, offset)
+	end
+	local segs = 20
+	local segLen = 2 * math.pi * R / segs + 0.4
+	for _, z in { -2.8, 2.8 } do
+		for i = 0, segs - 1 do
+			local a = i / segs * math.pi * 2
+			wheelPart({ name = "Rim", size = V(1, segLen, 1), color = if i % 2 == 0 then Color3.fromRGB(255, 80, 170) else Color3.fromRGB(80, 220, 255), mat = M.Neon }, CF(math.cos(a) * R, math.sin(a) * R, z) * CFrame.Angles(0, 0, a))
+		end
+		for i = 0, 9 do
+			local a = i / 10 * math.pi * 2
+			wheelPart({ name = "Spoke", size = V(0.5, R, 0.5), color = C.white, mat = M.Metal }, CF(0, 0, z) * CFrame.Angles(0, 0, a - math.pi / 2) * CF(0, R / 2, 0))
+		end
+	end
+	wheelPart({ name = "Hub", size = V(7, 4, 4), color = Color3.fromRGB(230, 230, 235), mat = M.Metal, shape = Enum.PartType.Cylinder }, CFrame.Angles(0, math.pi / 2, 0))
+
+	-- A-frame legs (static)
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			local foot = axle + V(sx * 22, -axle.Y, sz * 7)
+			local top = axle + V(0, 0, sz * 4.5)
+			P({ name = "Leg", size = V(1.4, 1.4, (top - foot).Magnitude), cf = CFrame.lookAt((foot + top) / 2, top), color = C.white, mat = M.Metal, parent = m })
+		end
+	end
+	P({ name = "BoardingDeck", size = V(16, 1, 12), cf = CF(axle.X, 0.5, axle.Z), color = C.wood, mat = M.WoodPlanks, parent = m })
+
+	-- Gondolas hang upright from the rim; each has a real Seat.
+	for i = 0, 9 do
+		local g: Gondola = { parts = {}, offsets = {}, phase = i / 10 * math.pi * 2, seat = nil :: any, seatOffset = CF(0, -4.1, 0.4) }
+		local color = Color3.fromHSV(i / 10, 0.65, 0.95)
+		local function gp(spec: any, offset: CFrame)
+			spec.parent = m
+			spec.collide = false
+			spec.cf = CF(axle) * offset
+			local part = P(spec)
+			table.insert(g.parts, part)
+			table.insert(g.offsets, offset)
+		end
+		gp({ name = "Hanger", size = V(0.3, 1.2, 0.3), color = C.metal, mat = M.Metal }, CF(0, -0.6, 0))
+		gp({ name = "Roof", size = V(4.6, 0.4, 3.6), color = color }, CF(0, -1.3, 0))
+		gp({ name = "Back", size = V(4.2, 3.6, 0.3), color = color }, CF(0, -3.2, 1.45))
+		gp({ name = "Floor", size = V(4.2, 0.3, 3.2), color = Color3.fromRGB(60, 60, 66) }, CF(0, -5.1, 0))
+		local s = seat(axle, V(0, 0, -1), Color3.fromRGB(240, 240, 245), m)
+		s.Name = "GondolaSeat"
+		s.Size = V(3.4, 0.5, 1.6)
+		s.CanCollide = false
+		g.seat = s
+		table.insert(wheel.gondolas, g)
+	end
+	signBoard("WheelSign", V(axle.X, 3, axle.Z - 10), V(16, 3, 0.4), V(0, 0, -1), "FERRIS WHEEL · WALK INTO A CAR TO RIDE", Color3.fromRGB(255, 120, 200), nil, m)
+	pointLight(m:FindFirstChild("Hub") :: BasePart, 40, 2, Color3.fromRGB(255, 120, 220))
+end
+
+-- Moves every wheel part and gondola to the wheel's current angle.
+local wheelMoveParts: { BasePart } = {}
+local wheelMoveCFrames: { CFrame } = {}
+local function poseWheel()
+	local axleCF = CF(wheel.axle)
+	local rot = axleCF * CFrame.Angles(0, 0, wheel.angle)
+	local n = 0
+	for i, part in wheel.parts do
+		n += 1
+		wheelMoveParts[n] = part
+		wheelMoveCFrames[n] = rot * wheel.offsets[i]
+	end
+	for _, g in wheel.gondolas do
+		local a = wheel.angle + g.phase
+		local pivot = CF(wheel.axle + V(math.cos(a) * WHEEL_RADIUS, math.sin(a) * WHEEL_RADIUS, 0))
+		for j, part in g.parts do
+			n += 1
+			wheelMoveParts[n] = part
+			wheelMoveCFrames[n] = pivot * g.offsets[j]
+		end
+		-- the seat moves with a plain CFrame write so seated riders (welded) come along
+		g.seat.CFrame = pivot * g.seatOffset
+	end
+	workspace:BulkMoveTo(wheelMoveParts, wheelMoveCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+end
+
+---------------------------------------------------------------------------
+-- Downtown (section 6)
+---------------------------------------------------------------------------
+local leaderboardRows: { [string]: { TextLabel } } = {}
+local billboardTitles: { TextLabel } = {}
+local billboardBodies: { TextLabel } = {}
+
+local function buildLeaderboard(pos: Vector3, dir: Vector3)
+	local m = model("Leaderboard")
+	for _, x in { -14, 14 } do
+		local right = V(-dir.Z, 0, dir.X)
+		P({ name = "Leg", size = V(1, 8, 1), cf = CF(pos + right * x - dir * 0.5 + V(0, 4, 0)), color = C.dark, mat = M.Metal, parent = m })
+	end
+	local center = pos + V(0, 17, 0)
+	local board = P({ name = "Board", size = V(36, 18, 1), cf = CFrame.lookAt(center, center + dir), color = Color3.fromRGB(14, 14, 20), parent = m })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 30
+	gui.LightInfluence = 0
+	gui.Parent = board
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
+	bg.BorderSizePixel = 0
+	bg.Parent = gui
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Size = UDim2.new(1, 0, 0.16, 0)
+	title.Font = Enum.Font.GothamBlack
+	title.TextScaled = true
+	title.TextColor3 = Color3.fromRGB(255, 200, 60)
+	title.Text = "CITY LEADERS · THIS SERVER"
+	title.Parent = bg
+	local stats = { { "Level", "LEVEL", Color3.fromRGB(90, 170, 255) }, { "Reputation", "REPUTATION", Color3.fromRGB(255, 120, 60) }, { "Fame", "FAME", Color3.fromRGB(255, 90, 200) } }
+	for i, stat in stats do
+		local col = Instance.new("Frame")
+		col.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+		col.BorderSizePixel = 0
+		col.Position = UDim2.new((i - 1) / 3, 8, 0.18, 0)
+		col.Size = UDim2.new(1 / 3, -16, 0.8, -8)
+		col.Parent = bg
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 16)
+		corner.Parent = col
+		local head = Instance.new("TextLabel")
+		head.BackgroundTransparency = 1
+		head.Size = UDim2.new(1, 0, 0.16, 0)
+		head.Font = Enum.Font.GothamBlack
+		head.TextScaled = true
+		head.TextColor3 = stat[3]
+		head.Text = stat[2]
+		head.Parent = col
+		local rows = {}
+		for r = 1, 5 do
+			local row = Instance.new("TextLabel")
+			row.BackgroundTransparency = 1
+			row.Position = UDim2.new(0, 12, 0.18 + (r - 1) * 0.16, 0)
+			row.Size = UDim2.new(1, -24, 0.15, 0)
+			row.Font = Enum.Font.GothamBold
+			row.TextScaled = true
+			row.TextXAlignment = Enum.TextXAlignment.Left
+			row.TextColor3 = Color3.fromRGB(235, 235, 245)
+			row.Text = ""
+			row.Parent = col
+			table.insert(rows, row)
+		end
+		leaderboardRows[stat[1]] = rows
+	end
+end
+
+local function refreshLeaderboard()
+	local players = Players:GetPlayers()
+	for stat, rows in leaderboardRows do
+		local list = {}
+		for _, p in players do
+			local v = p:GetAttribute(stat)
+			table.insert(list, { name = p.DisplayName, value = if type(v) == "number" then v else 0 })
+		end
+		table.sort(list, function(a, b)
+			if a.value ~= b.value then
+				return a.value > b.value
+			end
+			return a.name < b.name
+		end)
+		for r, row in rows do
+			local e = list[r]
+			row.Text = if e then string.format("%d. %s  ·  %d", r, e.name, e.value) else (if r == 1 then "Waiting for players" else "")
+		end
+	end
+end
+
+-- A digital billboard screen (title + body) that cycles real city info.
+local function billboard(pos: Vector3, size: Vector3, dir: Vector3, parent: Instance?)
+	local board = P({ name = "Billboard", size = size, cf = CFrame.lookAt(pos, pos + dir), color = Color3.fromRGB(10, 10, 14), parent = parent })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 24
+	gui.LightInfluence = 0
+	gui.Brightness = 1.5
+	gui.Parent = board
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BorderSizePixel = 0
+	bg.BackgroundColor3 = Color3.fromRGB(16, 18, 40)
+	bg.Parent = gui
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new(Color3.fromRGB(40, 60, 160), Color3.fromRGB(140, 40, 140))
+	grad.Rotation = 30
+	grad.Parent = bg
+	local t = Instance.new("TextLabel")
+	t.BackgroundTransparency = 1
+	t.Position = UDim2.fromScale(0.05, 0.08)
+	t.Size = UDim2.fromScale(0.9, 0.4)
+	t.Font = Enum.Font.GothamBlack
+	t.TextScaled = true
+	t.TextColor3 = Color3.fromRGB(255, 220, 90)
+	t.Text = "CITY GRIND"
+	t.Parent = bg
+	local b = Instance.new("TextLabel")
+	b.BackgroundTransparency = 1
+	b.Position = UDim2.fromScale(0.05, 0.52)
+	b.Size = UDim2.fromScale(0.9, 0.38)
+	b.Font = Enum.Font.GothamBold
+	b.TextScaled = true
+	b.TextWrapped = true
+	b.TextColor3 = C.white
+	b.Text = ""
+	b.Parent = bg
+	table.insert(billboardTitles, t)
+	table.insert(billboardBodies, b)
+	return board
+end
+
+local function clockText(): string
+	local t = Lighting.ClockTime
+	local h = math.floor(t)
+	local mins = math.floor((t - h) * 60)
+	local h12 = h % 12
+	return string.format("%d:%02d %s", if h12 == 0 then 12 else h12, mins, if h >= 12 then "PM" else "AM")
+end
+
+local function billboardMessages(): { { string } }
+	local list = {}
+	local players = Players:GetPlayers()
+	table.insert(list, { "CITY GRIND", string.format("%d %s in the city right now", #players, if #players == 1 then "player" else "players") })
+	local total, live = 0, 0
+	for _, court in CollectionService:GetTagged("Court") do
+		total += 1
+		local state = court:GetAttribute("State")
+		if state ~= nil and state ~= "Idle" then
+			live += 1
+		end
+	end
+	table.insert(list, { "PICKUP GAMES", string.format("%d of %d courts in play · stand on a team pad to join", live, total) })
+	table.insert(list, { "SUBWAY", string.format("$%d to any district · entrances in every district", DC.SUBWAY_FARE) })
+	local best, bestLevel = nil, -1
+	for _, p in players do
+		local lv = p:GetAttribute("Level")
+		if type(lv) == "number" and lv > bestLevel then
+			best, bestLevel = p, lv
+		end
+	end
+	if best then
+		table.insert(list, { "TOP PLAYER", string.format("%s · Level %d", best.DisplayName, bestLevel) })
+	end
+	table.insert(list, { "ROOFTOP COURT", "Summit Tower · take the elevator to the roof" })
+	table.insert(list, { "LUXURY HILLS", string.format("Private court: Reputation %d+ or Level %d+", DC.PRIVATE_COURT_REPUTATION, DC.PRIVATE_COURT_LEVEL) })
+	table.insert(list, { "RACE TRACK", "Industrial District · grandstand open to everyone" })
+	local night = Lighting.ClockTime < 6.3 or Lighting.ClockTime > 17.7
+	table.insert(list, { "CITY TIME", clockText() .. (if night then " · the city never sleeps" else " · get your grind on") })
+	return list
+end
+
+local billboardIndex = 0
+local function cycleBillboards()
+	local msgs = billboardMessages()
+	billboardIndex += 1
+	for i, t in billboardTitles do
+		local msg = msgs[(billboardIndex + i - 2) % #msgs + 1]
+		t.Text = msg[1]
+		billboardBodies[i].Text = msg[2]
+	end
+end
+
+-- Multi-level parking garage cars can drive up (two decks, two ramps).
+local function parkingGarage(x0: number, z0: number)
+	local m = model("ParkingGarage")
+	local concrete = Color3.fromRGB(150, 150, 150)
+	local W, D, E = x0, x0 + 14, x0 + 56 -- west strip | deck | east strip
+	local z1 = z0 + 110
+	local function slab(name: string, ax: number, bx: number, az: number, bz: number, top: number)
+		P({ name = name, size = V(bx - ax, 1, bz - az), cf = CF((ax + bx) / 2, top - 0.5, (az + bz) / 2), color = concrete, mat = M.Concrete, parent = m, map = Color3.fromRGB(120, 120, 125), layer = 3 })
+	end
+	local function wall(ax: number, bx: number, az: number, bz: number, top: number)
+		P({ name = "Parapet", size = V(math.max(1, bx - ax), 3, math.max(1, bz - az)), cf = CF((ax + bx) / 2, top + 1.5, (az + bz) / 2), color = Color3.fromRGB(180, 180, 175), mat = M.Concrete, parent = m })
+	end
+	-- level 1 (y 10) and level 2 (y 20) decks
+	slab("Deck", D, E, z0, z1, 10)
+	slab("Deck", D, E, z0, z1, 20)
+	slab("Landing", E, E + 14, z0, z0 + 20, 10)
+	slab("Landing", W, D, z0, z0 + 20, 10)
+	slab("Landing", W, D, z1 - 10, z1, 20)
+	-- ramp 1: ground -> L1 (east strip, northward); ramp 2: L1 -> L2 (west strip, southward)
+	ramp("Ramp", V(E + 7, 0.3, z1 - 10), V(E + 7, 10, z0 + 20), 14, concrete, M.Concrete, 1, m)
+	ramp("Ramp", V(W + 7, 10, z0 + 20), V(W + 7, 20, z1 - 10), 14, concrete, M.Concrete, 1, m)
+	for _, x in { D + 1, E - 1 } do
+		for _, z in { z0 + 2, (z0 + z1) / 2, z1 - 2 } do
+			P({ name = "Pillar", size = V(1.5, 20, 1.5), cf = CF(x, 10, z), color = concrete, mat = M.Concrete, parent = m })
+		end
+	end
+	-- parapets
+	wall(W, E + 14, z0, z0 + 1, 10)
+	wall(D, E, z1 - 1, z1, 10)
+	wall(D, D + 1, z0 + 20, z1, 10)
+	wall(E - 1, E, z0 + 20, z1, 10)
+	wall(E + 13, E + 14, z0, z0 + 20, 10)
+	wall(W, W + 1, z0, z0 + 20, 10)
+	wall(D, E, z0, z0 + 1, 20)
+	wall(W, E, z1 - 1, z1, 20)
+	wall(D, D + 1, z0, z1 - 10, 20)
+	wall(E - 1, E, z0, z1, 20)
+	wall(W, W + 1, z1 - 10, z1, 20)
+	signBoard("GarageSign", V(E + 7, 8, z1 + 0.5), V(14, 3, 0.4), V(0, 0, 1), "PARKING  ▲", C.white, Color3.fromRGB(30, 90, 200), m)
+	for _, z in { z0 + 30, z1 - 30 } do
+		local lamp = P({ name = "DeckLight", size = V(3, 0.3, 3), cf = CF((D + E) / 2, 19.3, z), color = Color3.fromRGB(255, 250, 230), mat = M.Neon, collide = false, parent = m })
+		pointLight(lamp, 30, 1.2, Color3.fromRGB(255, 245, 225))
+	end
+end
+
+-- Indoor-style arena: court + stands (Seats) + open-roof shell + floodlights.
+local function arena(c: Vector3)
+	local m = model("GrandArena")
+	P({ name = "Concourse", size = V(100, 0.2, 112), cf = CF(c + V(0, 0.05, 0)), color = Color3.fromRGB(45, 45, 52), mat = M.Concrete, parent = m, map = Color3.fromRGB(90, 90, 110), layer = 3 })
+	local court = H.buildCourt("GrandArena", c, Color3.fromRGB(150, 105, 60), Color3.fromRGB(30, 60, 140))
+	court.Parent = current
+	local floor = court:FindFirstChild("CourtFloor")
+	if floor and floor:IsA("BasePart") then
+		floor.Material = M.WoodPlanks
+	end
+	-- stands on both long sides, three tiers, seats facing the court
+	local standColor = Color3.fromRGB(70, 70, 82)
+	for _, side in { -1, 1 } do
+		for k = 1, 3 do
+			local inner = 30 + (k - 1) * 5
+			local width = 46 - inner
+			P({ name = "Stand", size = V(width, 3 * k, 84), cf = CF(c + V(side * (inner + width / 2), 1.5 * k, 0)), color = standColor, mat = M.Concrete, parent = m })
+			for z = -36, 36, 9 do
+				seat(c + V(side * (inner + 2.5), 3 * k + 0.25, z), V(-side, 0, 0), if side == 1 then Color3.fromRGB(200, 40, 50) else Color3.fromRGB(40, 90, 200), m)
+			end
+		end
+	end
+	-- shell walls with the entrance on the south side
+	local wallColor = Color3.fromRGB(205, 205, 215)
+	local h = 26
+	for _, side in { -1, 1 } do
+		P({ name = "ArenaWall", size = V(2, h, 114), cf = CF(c + V(side * 50, h / 2, 0)), color = wallColor, mat = M.Concrete, parent = m, map = Color3.fromRGB(150, 150, 170), layer = 3 })
+		P({ name = "ArenaWall", size = V(40, h, 2), cf = CF(c + V(side * 30, h / 2, 56)), color = wallColor, mat = M.Concrete, parent = m })
+	end
+	P({ name = "ArenaWall", size = V(102, h, 2), cf = CF(c + V(0, h / 2, -56)), color = wallColor, mat = M.Concrete, parent = m })
+	P({ name = "Lintel", size = V(20, h - 14, 2), cf = CF(c + V(0, 14 + (h - 14) / 2, 56)), color = wallColor, mat = M.Concrete, parent = m })
+	signBoard("ArenaSign", c + V(0, 20, 57.3), V(40, 6, 0.5), V(0, 0, 1), "GRAND ARENA", Color3.fromRGB(255, 200, 60), nil, m)
+	-- roof trusses over the open roof
+	for _, z in { -30, 30 } do
+		P({ name = "Truss", size = V(102, 2, 2.5), cf = CF(c + V(0, h + 1, z)), color = C.metal, mat = M.Metal, parent = m })
+	end
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			floodlight(c + V(sx * 47, 0, sz * 52), h + 4, c + V(sx * 8, 0, sz * 14))
+		end
+	end
+	billboard(c + V(-51.3, 18, 0), V(40, 12, 0.6), V(-1, 0, 0), m)
+end
+
+local function plaza(x0: number, x1: number, z0: number, z1: number)
+	local m = model("DowntownPlaza")
+	local cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+	P({ name = "Plaza", size = V(x1 - x0, 0.2, z1 - z0), cf = CF(cx, 0.15, cz), color = Color3.fromRGB(196, 186, 170), mat = M.Slate, parent = m, map = Color3.fromRGB(190, 180, 160), layer = 2 })
+	-- fountain
+	local fc = V(cx, 0, cz + 10)
+	cylinder("FountainBasin", fc, 2.4, 26, Color3.fromRGB(210, 210, 215), M.Marble, m)
+	local water = cylinder("FountainWater", fc + V(0, 2.4, 0), 0.3, 23, Color3.fromRGB(80, 170, 230), M.Glass, m)
+	water.Transparency = 0.25
+	water.CanCollide = false
+	cylinder("FountainColumn", fc, 9, 3, Color3.fromRGB(220, 220, 225), M.Marble, m)
+	local jet = P({ name = "FountainTop", size = V(4, 4, 4), cf = CF(fc + V(0, 9.5, 0)), color = Color3.fromRGB(120, 200, 255), mat = M.Glass, transp = 0.3, shape = Enum.PartType.Ball, parent = m })
+	pointLight(jet, 30, 2, Color3.fromRGB(120, 200, 255))
+	-- benches around the fountain, trees and lanterns around the edge
+	for i = 0, 7 do
+		local a = i / 8 * math.pi * 2
+		local p = fc + V(math.cos(a) * 22, 0, math.sin(a) * 22)
+		H.bench(CFrame.lookAt(p, V(fc.X, p.Y, fc.Z)), m)
+	end
+	for _, off in { V(-80, 0, -50), V(-80, 0, 50), V(80, 0, -50), V(80, 0, 50), V(-40, 0, 60), V(40, 0, 60) } do
+		H.tree(V(cx, 0, cz) + off, m)
+	end
+	for _, off in { V(-50, 0, -30), V(50, 0, -30), V(-50, 0, 40), V(50, 0, 40) } do
+		lantern(V(cx, 0, cz) + off)
+	end
+	buildLeaderboard(V(cx, 0, z0 + 6), V(0, 0, 1))
+	-- big screen on the west side of the plaza
+	for _, z in { -10, 10 } do
+		P({ name = "ScreenLeg", size = V(1, 10, 1), cf = CF(x0 + 6, 5, cz + z), color = C.dark, mat = M.Metal, parent = m })
+	end
+	billboard(V(x0 + 6.6, 16, cz), V(28, 14, 0.8), V(1, 0, 0), m)
+	mapPoint("Downtown Plaza", "Social", V(cx, 0, z1 - 4))
+end
+
+local function buildDowntown()
+	-- ground + roads: cross road north from the Neighborhood, avenue along z = -480
+	ground(-300, 300, -730, -230, Color3.fromRGB(128, 128, 132), M.Concrete, Color3.fromRGB(110, 110, 116))
+	road("z", -730, -230, 0, { walkGaps = { { -504, -456 } }, lampEvery = 70 })
+	road("x", -300, 300, -480, { walkGaps = { { -16, 16 } }, lampEvery = 70 })
+	-- the cross road's asphalt must not overlap the avenue: cover the junction with the avenue only
+	for _, d in current:GetChildren() do
+		if d.Name == "CrossRoad" and d:IsA("BasePart") then
+			d:Destroy()
+		end
+	end
+	for _, seg in { { -730, -496 }, { -464, -230 } } do
+		P({ name = "CrossRoad", size = V(ROAD_W, 0.2, seg[2] - seg[1]), cf = CF(0, 0.1, (seg[1] + seg[2]) / 2), color = C.asphalt, mat = M.Asphalt, map = C.mapRoad, layer = 2 })
+	end
+
+	-- SW block: bank, bistro, Lumen Tower, the social plaza
+	shop({ name = "City Bank", center = V(-90, 0, -425), size = V(56, 30, 30), color = Color3.fromRGB(225, 220, 205), material = M.Marble, face = "N", signText = "CITY BANK", signColor = Color3.fromRGB(255, 215, 90), category = "Landmark", floorHeight = 15 })
+	shop({ name = "Cielo Bistro", center = V(-170, 0, -428), size = V(40, 16, 26), color = Color3.fromRGB(120, 40, 45), face = "N", signText = "CIELO BISTRO", signColor = Color3.fromRGB(255, 230, 190), category = "Landmark" })
+	tower({ name = "Lumen Tower", center = V(-255, 0, -425), w = 40, d = 40, h = 80, color = Color3.fromRGB(70, 80, 95), glass = Color3.fromRGB(100, 150, 190), lit = 0.6, front = V(0, 0, -1) })
+	plaza(-262, -60, -395, -240)
+
+	-- SE block: arena, diner, Vista Tower with a billboard facing the cross road
+	arena(V(190, 0, -343))
+	shop({ name = "Skyline Diner", center = V(70, 0, -428), size = V(40, 16, 26), color = Color3.fromRGB(200, 200, 210), material = M.Concrete, face = "N", signText = "SKYLINE DINER", signColor = Color3.fromRGB(255, 90, 90), category = "Landmark" })
+	tower({ name = "Vista Tower", center = V(70, 0, -330), w = 44, d = 44, h = 72, color = Color3.fromRGB(180, 180, 190), glass = Color3.fromRGB(90, 140, 200), lit = 0.5, front = V(-1, 0, 0) })
+	billboard(V(47.4, 46, -330), V(30, 16, 0.6), V(-1, 0, 0))
+
+	-- NW block: luxury storefronts on the avenue, towers behind
+	shop({ name = "Maison Or", center = V(-250, 0, -530), size = V(40, 18, 30), color = Color3.fromRGB(30, 30, 34), material = M.Marble, face = "S", signText = "MAISON OR", signColor = Color3.fromRGB(230, 190, 90), category = "Landmark" })
+	shop({ name = "Gem & Co Jewelers", center = V(-195, 0, -530), size = V(36, 18, 30), color = Color3.fromRGB(235, 235, 240), material = M.Marble, face = "S", signText = "GEM & CO", signColor = Color3.fromRGB(80, 200, 230), category = "Landmark" })
+	shop({ name = "Velvet Watches", center = V(-145, 0, -530), size = V(36, 18, 30), color = Color3.fromRGB(90, 30, 60), material = M.Concrete, face = "S", signText = "VELVET WATCHES", signColor = Color3.fromRGB(255, 200, 230) })
+	shop({ name = "Cafe Lumiere", center = V(-90, 0, -530), size = V(34, 16, 30), color = Color3.fromRGB(240, 225, 200), material = M.Concrete, face = "S", signText = "CAFÉ LUMIÈRE", signColor = Color3.fromRGB(120, 70, 40) })
+	tower({ name = "Crown Plaza", center = V(-240, 0, -640), w = 60, d = 60, h = 120, color = Color3.fromRGB(50, 55, 65), glass = Color3.fromRGB(80, 120, 160), lit = 0.55, trim = Color3.fromRGB(190, 160, 90) })
+	tower({ name = "Harbor Trust", center = V(-140, 0, -650), w = 50, d = 50, h = 90, color = Color3.fromRGB(200, 195, 185), glass = Color3.fromRGB(110, 160, 190), lit = 0.45 })
+	tower({ name = "Nova Tower", center = V(-60, 0, -630), w = 44, d = 44, h = 170, color = Color3.fromRGB(30, 34, 44), glass = Color3.fromRGB(60, 110, 170), lit = 0.7, spire = 30, nightColor = C.windowCool })
+
+	-- NE block: Summit Tower (rooftop court), Apex HQ, Meridian, noodle bar, parking garage
+	local summit = V(80, 0, -660)
+	tower({ name = "Summit Tower", center = summit, w = 80, d = 104, h = 60, color = Color3.fromRGB(150, 155, 165), glass = Color3.fromRGB(90, 140, 190), lit = 0.6, flatRoof = true })
+	local roofY = 60
+	local rooftop = H.buildCourt("SummitRooftopCourt", summit + V(0, roofY, 0), Color3.fromRGB(40, 40, 48), Color3.fromRGB(200, 60, 70))
+	rooftop.Parent = current
+	-- tall glass railing so players and balls stay on the roof
+	for _, side in { -1, 1 } do
+		P({ name = "RoofGlass", size = V(0.6, 16, 104), cf = CF(summit + V(side * 40, roofY + 8, 0)), color = Color3.fromRGB(180, 220, 255), mat = M.Glass, transp = 0.7 })
+		P({ name = "RoofGlass", size = V(80, 16, 0.6), cf = CF(summit + V(0, roofY + 8, side * 52)), color = Color3.fromRGB(180, 220, 255), mat = M.Glass, transp = 0.7 })
+	end
+	floodlight(summit + V(-38, roofY, -50), 14, summit + V(0, roofY, -20))
+	floodlight(summit + V(38, roofY, 50), 14, summit + V(0, roofY, 20))
+	elevator("Summit Tower", summit + V(20, 0, 52.2), V(0, 0, 1), summit + V(33, roofY, 48), V(-1, 0, 0))
+	mapPoint("Summit Tower Elevator", "Court", summit + V(20, 0, 58))
+
+	tower({ name = "Apex Corp HQ", center = V(170, 0, -670), w = 56, d = 56, h = 140, color = Color3.fromRGB(20, 22, 28), glass = Color3.fromRGB(40, 80, 130), lit = 0.65, spire = 18, nightColor = C.windowCool, front = V(0, 0, 1) })
+	tower({ name = "Meridian", center = V(170, 0, -575), w = 50, d = 50, h = 100, color = Color3.fromRGB(210, 205, 195), glass = Color3.fromRGB(110, 170, 200), lit = 0.5 })
+	billboard(V(170, 44, -549.4), V(34, 18, 0.6), V(0, 0, 1))
+	shop({ name = "Golden Noodle", center = V(75, 0, -560), size = V(40, 16, 26), color = Color3.fromRGB(170, 40, 40), face = "S", signText = "GOLDEN NOODLE", signColor = Color3.fromRGB(255, 215, 90) })
+	lot(220, 290, -720, -504)
+	parkingGarage(220, -720)
+	mapPoint("Downtown Parking", "Transit", V(255, 0, -508))
+end
+
+---------------------------------------------------------------------------
+-- Underground pieces shared by Industrial and Old Town (secret tunnels)
+---------------------------------------------------------------------------
+-- A wall along X (axis "x", at z = fixed) or Z, from y0 to y1, with an optional opening.
+local function wallWithOpening(axis: string, fixed: number, from: number, to: number, y0: number, y1: number, color: Color3, opening: { number }?)
+	local function piece(a: number, b: number, ya: number, yb: number)
+		if b - a < 0.05 or yb - ya < 0.05 then
+			return
+		end
+		local mid, my = (a + b) / 2, (ya + yb) / 2
+		P({
+			name = "Wall",
+			size = if axis == "x" then V(b - a, yb - ya, 1) else V(1, yb - ya, b - a),
+			cf = if axis == "x" then CF(mid, my, fixed) else CF(fixed, my, mid),
+			color = color,
+			mat = M.Brick,
+		})
+	end
+	if opening then
+		piece(from, opening[1], y0, y1)
+		piece(opening[2], to, y0, y1)
+		piece(opening[1], opening[2], opening[3], y1)
+	else
+		piece(from, to, y0, y1)
+	end
+end
+
+type Openings = { N: { number }?, S: { number }?, E: { number }?, W: { number }? }
+local function undergroundRoom(x0: number, x1: number, z0: number, z1: number, floorY: number, ceilY: number, color: Color3, openings: Openings)
+	P({ name = "Floor", size = V(x1 - x0 + 2, 1, z1 - z0 + 2), cf = CF((x0 + x1) / 2, floorY - 0.5, (z0 + z1) / 2), color = Color3.fromRGB(70, 66, 60), mat = M.Slate })
+	P({ name = "Ceiling", size = V(x1 - x0 + 2, 1, z1 - z0 + 2), cf = CF((x0 + x1) / 2, ceilY + 0.5, (z0 + z1) / 2), color = Color3.fromRGB(50, 48, 46), mat = M.Concrete })
+	wallWithOpening("x", z0 - 0.5, x0 - 1, x1 + 1, floorY, ceilY, color, openings.N)
+	wallWithOpening("x", z1 + 0.5, x0 - 1, x1 + 1, floorY, ceilY, color, openings.S)
+	wallWithOpening("z", x0 - 0.5, z0, z1, floorY, ceilY, color, openings.W)
+	wallWithOpening("z", x1 + 0.5, z0, z1, floorY, ceilY, color, openings.E)
+end
+
+-- A ramp going down from street level through a hole in the ground.
+-- Hole spans x [hx0,hx1]; the ramp runs from zTop (y 0.05) to zBottom (y floorY).
+local function downRamp(hx0: number, hx1: number, zTop: number, zBottom: number, floorY: number, color: Color3)
+	local cx = (hx0 + hx1) / 2
+	local rampW = hx1 - hx0 - 6
+	ramp("TunnelRamp", V(cx, 0.05, zTop), V(cx, floorY, zBottom), rampW, Color3.fromRGB(90, 86, 80), M.Concrete, 1)
+	local dz = zBottom - zTop
+	for _, x in { hx0 + 1.5, hx1 - 1.5 } do
+		P({ name = "RampWall", size = V(3, -floorY + 2.05, math.abs(dz)), cf = CF(x, (floorY - 2 + 0.05) / 2, (zTop + zBottom) / 2), color = color, mat = M.Brick })
+	end
+	-- lintel where the ramp dives under the ground into the room
+	P({ name = "Lintel", size = V(hx1 - hx0, 8.05, 1), cf = CF(cx, -3.975, zBottom + (if dz < 0 then 0.5 else -0.5)), color = color, mat = M.Brick })
+end
+
+local TUNNEL_Z = -215
+local UNDER_FLOOR = -20
+
+local function buildSecretTunnel()
+	-- runs under the Neighborhood from Old Town's catacombs to the Industrial underground
+	local x0, x1 = -640, 800
+	local len = x1 - x0
+	local cx = (x0 + x1) / 2
+	local wallColor = Color3.fromRGB(85, 75, 70)
+	P({ name = "TunnelFloor", size = V(len, 1, 12), cf = CF(cx, UNDER_FLOOR - 0.5, TUNNEL_Z), color = Color3.fromRGB(60, 58, 55), mat = M.Slate })
+	P({ name = "TunnelCeiling", size = V(len, 1, 14), cf = CF(cx, UNDER_FLOOR + 12.5, TUNNEL_Z), color = Color3.fromRGB(50, 48, 46), mat = M.Concrete })
+	for _, side in { -1, 1 } do
+		P({ name = "TunnelWall", size = V(len, 13, 1), cf = CF(cx, UNDER_FLOOR + 6, TUNNEL_Z + side * 6.5), color = wallColor, mat = M.Brick })
+	end
+	for x = x0 + 120, x1 - 60, 240 do
+		local bulb = P({ name = "TunnelLight", size = V(1, 0.6, 1), cf = CF(x, UNDER_FLOOR + 11.6, TUNNEL_Z), color = Color3.fromRGB(255, 200, 120), mat = M.Neon, collide = false })
+		pointLight(bulb, 40, 1.4, Color3.fromRGB(255, 190, 120), true)
+	end
+	secretArea("CityTunnel", "The Old Tunnel", V(cx, UNDER_FLOOR + 6, TUNNEL_Z), V(len, 12, 12))
+end
+
+---------------------------------------------------------------------------
+-- Industrial (section 7)
+---------------------------------------------------------------------------
+local function truck(pos: Vector3, dir: Vector3, color: Color3)
+	local m = model("Truck")
+	local cab = pos + dir * 17 + V(0, 5, 0)
+	P({ name = "Cab", size = V(8, 8, 8), cf = CFrame.lookAt(cab, cab + dir), color = color, mat = M.Metal, parent = m })
+	local trailer = pos + V(0, 6, 0)
+	P({ name = "Trailer", size = V(8.4, 9, 28), cf = CFrame.lookAt(trailer, trailer + dir), color = Color3.fromRGB(225, 225, 230), mat = M.Metal, parent = m })
+	for _, d in { -9, 9, 17 } do
+		local axle = pos + dir * d + V(0, 1.6, 0)
+		P({ name = "Wheels", size = V(9, 3.2, 3.2), cf = CFrame.lookAt(axle, axle + dir), color = C.dark, mat = M.Rubber, shape = Enum.PartType.Cylinder, parent = m })
+	end
+end
+
+local function container(pos: Vector3, color: Color3, parent: Instance)
+	P({ name = "Container", size = V(8, 8.5, 40), cf = CF(pos + V(0, 4.25, 0)), color = color, mat = M.CorrodedMetal, parent = parent, map = Color3.fromRGB(150, 110, 80), layer = 3 })
+end
+
+local function raceTrack(center: Vector3, folder: Instance)
+	local m = model("RaceTrack", folder)
+	local checkpoints = Instance.new("Folder")
+	checkpoints.Name = "Checkpoints"
+	checkpoints.Parent = m
+	local R, W, half = 90, 30, 130 -- curve radius, track width, half straight length
+	local trackColor = Color3.fromRGB(38, 38, 42)
+	local trackMap = Color3.fromRGB(40, 40, 46)
+	local ends = { { x = center.X + half, from = -90, to = 90 }, { x = center.X - half, from = 90, to = 270 } }
+	-- infield
+	P({ name = "Infield", size = V(half * 2, 0.15, (R - W / 2) * 2), cf = CF(center + V(0, 0.08, 0)), color = Color3.fromRGB(80, 140, 70), mat = M.Grass, parent = m, map = Color3.fromRGB(80, 140, 70), layer = 2 })
+	for _, e in ends do
+		P({ name = "Infield", size = V(0.15, (R - W / 2) * 2, (R - W / 2) * 2), cf = CF(e.x, 0.08, center.Z) * CFrame.Angles(0, 0, math.pi / 2), color = Color3.fromRGB(80, 140, 70), mat = M.Grass, shape = Enum.PartType.Cylinder, parent = m })
+	end
+	-- straights
+	for _, sz in { -1, 1 } do
+		local z = center.Z + sz * R
+		P({ name = "TrackStraight", size = V(half * 2, 0.3, W), cf = CF(center.X, 0.15, z), color = trackColor, mat = M.Asphalt, parent = m, map = trackMap, layer = 3 })
+		for i = 0, 9 do
+			local x = center.X - half + (i + 0.5) * (half * 2 / 10)
+			for _, edge in { -1, 1 } do
+				P({ name = "Curb", size = V(half * 2 / 10, 0.4, 2), cf = CF(x, 0.2, z + edge * (W / 2 + 1)), color = if i % 2 == 0 then Color3.fromRGB(220, 40, 40) else C.white, parent = m })
+			end
+		end
+	end
+	-- curves
+	local segs = 12
+	for _, e in ends do
+		local c = V(e.x, 0, center.Z)
+		for i = 0, segs - 1 do
+			local a = math.rad(e.from + (i + 0.5) * (e.to - e.from) / segs)
+			local radial = V(math.cos(a), 0, math.sin(a))
+			local tangent = V(-math.sin(a), 0, math.cos(a))
+			local pos = c + radial * R + V(0, 0.15, 0)
+			local arc = math.rad(180 / segs) * (R + W / 2) + 1
+			P({ name = "TrackCurve", size = V(W, 0.3, arc), cf = CFrame.lookAt(pos, pos + tangent), color = trackColor, mat = M.Asphalt, parent = m, map = trackMap, layer = 3 })
+			for _, edge in { -1, 1 } do
+				local cp = c + radial * (R + edge * (W / 2 + 1)) + V(0, 0.2, 0)
+				local clen = math.rad(180 / segs) * (R + edge * (W / 2 + 1)) + 0.3
+				P({ name = "Curb", size = V(2, 0.4, clen), cf = CFrame.lookAt(cp, cp + tangent), color = if i % 2 == 0 then Color3.fromRGB(220, 40, 40) else C.white, parent = m })
+			end
+		end
+	end
+	-- start / finish on the south straight (travel direction: +x, counter-clockwise seen from above)
+	local south = center.Z + R
+	local startPos = V(center.X, 0.32, south)
+	local line = P({ name = "StartLine", size = V(4, 0.06, W), cf = CF(startPos), color = C.white, collide = false, parent = m })
+	line.CanTouch = true
+	line.CanQuery = true
+	line:SetAttribute("Forward", V(1, 0, 0))
+	line:SetAttribute("TrackWidth", W)
+	CollectionService:AddTag(line, "RaceStart")
+	local checker = Instance.new("SurfaceGui")
+	checker.Face = Enum.NormalId.Top
+	checker.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	checker.PixelsPerStud = 10
+	checker.Parent = line
+	local grid = Instance.new("UIGridLayout")
+	grid.CellSize = UDim2.fromOffset(20, 20)
+	grid.CellPadding = UDim2.fromOffset(0, 0)
+	grid.Parent = checker
+	for i = 0, 29 do
+		local sq = Instance.new("Frame")
+		sq.BorderSizePixel = 0
+		sq.BackgroundColor3 = if (i + math.floor(i / 2)) % 2 == 0 then Color3.new(0, 0, 0) else C.white
+		sq.Parent = checker
+	end
+	for _, edge in { -1, 1 } do
+		P({ name = "GantryPost", size = V(1.5, 18, 1.5), cf = CF(center.X, 9, south + edge * (W / 2 + 3)), color = C.metal, mat = M.Metal, parent = m })
+	end
+	local banner = P({ name = "Gantry", size = V(2, 4, W + 8), cf = CF(center.X, 17, south), color = C.signBg, parent = m })
+	H.sign(banner, Enum.NormalId.Left, "START / FINISH", Color3.fromRGB(255, 220, 60))
+	H.sign(banner, Enum.NormalId.Right, "START / FINISH", Color3.fromRGB(255, 220, 60))
+	-- ordered checkpoints, one lap = 1..6 then the start line
+	local eastC, westC = center.X + half, center.X - half
+	local cps = {
+		{ V(center.X + 100, 0, south), V(1, 0, 0) },
+		{ V(eastC + R, 0, center.Z), V(0, 0, -1) },
+		{ V(center.X + 60, 0, center.Z - R), V(-1, 0, 0) },
+		{ V(center.X - 60, 0, center.Z - R), V(-1, 0, 0) },
+		{ V(westC - R, 0, center.Z), V(0, 0, 1) },
+		{ V(center.X - 100, 0, south), V(1, 0, 0) },
+	}
+	for i, cp in cps do
+		local pos = cp[1] + V(0, 10, 0)
+		local part = P({ name = "Checkpoint" .. i, size = V(W + 4, 20, 4), cf = CFrame.lookAt(pos, pos + cp[2]), transp = 1, collide = false, parent = checkpoints })
+		part.CanTouch = true
+		part:SetAttribute("Index", i)
+	end
+	m:SetAttribute("Checkpoints", #cps)
+	m:SetAttribute("Center", center)
+	-- grandstand with real seats on the outside of the south straight
+	local gz = south + W / 2 + 10
+	for k = 1, 3 do
+		local front = gz + (k - 1) * 6
+		local depth = 18 - (k - 1) * 6
+		P({ name = "Grandstand", size = V(120, 2.5 * k, depth), cf = CF(center.X, 1.25 * k, front + depth / 2), color = Color3.fromRGB(80, 80, 92), mat = M.Concrete, parent = m, map = Color3.fromRGB(120, 120, 135), layer = 3 })
+		for x = -55, 55, 10 do
+			seat(V(center.X + x, 2.5 * k + 0.25, front + 2.5), V(0, 0, -1), Color3.fromRGB(240, 180, 30), m)
+		end
+	end
+	P({ name = "GrandstandRoof", size = V(124, 1, 22), cf = CF(center.X, 20, gz + 9), color = C.white, mat = M.Metal, parent = m })
+	for _, x in { -60, 60 } do
+		P({ name = "RoofPost", size = V(1.2, 20, 1.2), cf = CF(center.X + x, 10, gz + 18), color = C.metal, mat = M.Metal, parent = m })
+	end
+	signBoard("TrackSign", V(center.X, 24, gz + 0.5), V(40, 5, 0.5), V(0, 0, -1), "CITY SPEEDWAY", Color3.fromRGB(255, 80, 60), nil, m)
+	for _, off in { V(-half, 0, -R - W / 2 - 6), V(half, 0, -R - W / 2 - 6), V(-half - R - W / 2 - 6, 0, 0), V(half + R + W / 2 - 6 + 12, 0, 0) } do
+		floodlight(center + off, 30, center + off * 0.6)
+	end
+end
+
+local function buildIndustrial()
+	local hole = { 830, 850, -200, -120 }
+	ground(300, 900, -730, 230, Color3.fromRGB(122, 120, 112), M.Concrete, Color3.fromRGB(125, 120, 108), { hole })
+	road("x", 300, 900, 0, { walkGaps = { { 300, 324 } } })
+	-- service road from the main road up to the race paddock
+	P({ name = "CrossRoad", size = V(24, 0.2, 406), cf = CF(312, 0.1, -227), color = C.asphalt, mat = M.Asphalt, map = C.mapRoad, layer = 2 })
+
+	-- warehouses + depot + mechanic north of the main road
+	for i, x in { 395, 485 } do
+		local wh = shop({ name = "Warehouse " .. string.char(64 + i), center = V(x, 0, -75), size = V(70, 24, 60), color = Color3.fromRGB(150, 140, 120), material = M.CorrodedMetal, face = "S", signText = "WAREHOUSE " .. string.char(64 + i), signColor = Color3.fromRGB(255, 200, 80), floorHeight = 24 })
+		P({ name = "RollerDoor", size = V(20, 14, 0.4), cf = CF(x + 18, 7, -44.6), color = Color3.fromRGB(110, 110, 115), mat = M.DiamondPlate, parent = wh })
+		local lamp = P({ name = "DockLight", size = V(2, 1, 1), cf = CF(x + 18, 16, -44.4), color = Color3.fromRGB(255, 230, 180), collide = false, parent = wh })
+		glowAtNight(lamp, Color3.fromRGB(255, 230, 180))
+		pointLight(lamp, 24, 1.4, Color3.fromRGB(255, 220, 170))
+	end
+	lot(540, 660, -150, -40)
+	for i = 0, 2 do
+		truck(V(565 + i * 35, 0.3, -100), V(0, 0, 1), ({ Color3.fromRGB(200, 50, 40), Color3.fromRGB(40, 90, 200), Color3.fromRGB(230, 170, 30) })[i + 1])
+	end
+	shop({ name = "Truck Depot", center = V(615, 0, -170), size = V(40, 12, 20), color = Color3.fromRGB(90, 100, 110), material = M.Concrete, face = "S", signText = "TRUCK DEPOT", signColor = Color3.fromRGB(255, 160, 60), category = "Landmark" })
+	local garage = shop({ name = "Rusty's Garage", center = V(735, 0, -70), size = V(50, 18, 40), color = Color3.fromRGB(110, 60, 45), material = M.CorrodedMetal, face = "S", signText = "RUSTY'S GARAGE", signColor = Color3.fromRGB(255, 120, 40), category = "Landmark" })
+	P({ name = "Bay", size = V(16, 12, 0.4), cf = CF(752, 6, -49.6), color = C.dark, parent = garage })
+	P({ name = "Lift", size = V(10, 0.6, 18), cf = CF(752, 3, -40), color = Color3.fromRGB(200, 60, 40), mat = M.Metal, parent = garage })
+	P({ name = "Toolbox", size = V(4, 4, 2), cf = CF(722, 2, -48), color = Color3.fromRGB(200, 40, 40), mat = M.Metal, parent = garage })
+
+	-- factory with smokestacks, warehouse C, containers and cranes south of the road
+	local factory = shop({ name = "Ironworks Factory", center = V(420, 0, 100), size = V(110, 30, 70), color = Color3.fromRGB(120, 100, 90), material = M.Brick, face = "N", signText = "IRONWORKS", signColor = Color3.fromRGB(255, 140, 40), category = "Landmark", floorHeight = 30 })
+	for i = 0, 3 do
+		local x = 375 + i * 27
+		ramp("Sawtooth", V(x - 13, 30, 100), V(x + 13, 38, 100), 70, Color3.fromRGB(100, 100, 108), M.CorrodedMetal, 1, factory)
+	end
+	for _, x in { 380, 410 } do
+		cylinder("Smokestack", V(x, 0, 150), 72, 9, Color3.fromRGB(150, 70, 60), M.Brick, factory)
+		cylinder("StackBand", V(x, 58, 150), 4, 9.4, C.white, M.SmoothPlastic, factory)
+		local smoke = Instance.new("Smoke")
+		smoke.Color = Color3.fromRGB(170, 170, 175)
+		smoke.Opacity = 0.35
+		smoke.RiseVelocity = 8
+		smoke.Size = 6
+		local top = P({ name = "StackTop", size = V(4, 1, 4), cf = CF(x, 72.5, 150), transp = 1, collide = false, parent = factory })
+		smoke.Parent = top
+		P({ name = "AirLight", size = V(1.2, 1.2, 1.2), cf = CF(x, 73, 150), color = Color3.fromRGB(255, 40, 40), mat = M.Neon, shape = Enum.PartType.Ball, collide = false, parent = factory })
+	end
+	shop({ name = "Warehouse C", center = V(560, 0, 90), size = V(70, 22, 60), color = Color3.fromRGB(140, 150, 155), material = M.CorrodedMetal, face = "N", signText = "WAREHOUSE C", signColor = Color3.fromRGB(255, 200, 80), floorHeight = 22 })
+	local yard = model("ContainerYard")
+	local rng = Random.new(42)
+	local palette = { Color3.fromRGB(190, 60, 40), Color3.fromRGB(40, 100, 170), Color3.fromRGB(40, 140, 90), Color3.fromRGB(220, 160, 40), Color3.fromRGB(120, 120, 130), Color3.fromRGB(150, 60, 120) }
+	for i = 0, 13 do
+		for _, z in { 90, 150 } do
+			local stack = rng:NextInteger(1, 3)
+			for s = 0, stack - 1 do
+				container(V(650 + i * 10, s * 8.6, z), palette[rng:NextInteger(1, #palette)], yard)
+			end
+		end
+	end
+	-- gantry crane over the yard
+	local crane = Color3.fromRGB(240, 190, 30)
+	for _, x in { 640, 800 } do
+		for _, z in { 62, 178 } do
+			P({ name = "CraneLeg", size = V(2, 38, 2), cf = CF(x, 19, z), color = crane, mat = M.Metal, parent = yard })
+		end
+		P({ name = "CraneRail", size = V(2.5, 3, 120), cf = CF(x, 39, 120), color = crane, mat = M.Metal, parent = yard })
+	end
+	P({ name = "CraneBridge", size = V(164, 4, 4), cf = CF(720, 42, 120), color = crane, mat = M.Metal, parent = yard })
+	P({ name = "CraneTrolley", size = V(8, 4, 8), cf = CF(705, 38.5, 120), color = Color3.fromRGB(60, 60, 66), mat = M.Metal, parent = yard })
+	P({ name = "CraneCable", size = V(0.4, 6, 0.4), cf = CF(705, 33.5, 120), color = C.dark, collide = false, parent = yard })
+	P({ name = "Spreader", size = V(9, 1, 40), cf = CF(705, 30, 120), color = crane, mat = M.Metal, parent = yard })
+	-- tower crane by the factory
+	P({ name = "Mast", size = V(3, 80, 3), cf = CF(510, 40, 180), color = crane, mat = M.Metal, parent = yard })
+	P({ name = "Jib", size = V(90, 3, 3), cf = CF(545, 81.5, 180), color = crane, mat = M.Metal, parent = yard })
+	P({ name = "CounterJib", size = V(24, 3, 3), cf = CF(490, 81.5, 180), color = crane, mat = M.Metal, parent = yard })
+	P({ name = "Counterweight", size = V(6, 5, 5), cf = CF(482, 78, 180), color = Color3.fromRGB(110, 110, 115), mat = M.Concrete, parent = yard })
+	P({ name = "Cab", size = V(4, 4, 4), cf = CF(513, 77, 180), color = Color3.fromRGB(230, 230, 235), mat = M.Metal, parent = yard })
+	mapPoint("Shipping Yard", "Landmark", V(720, 0, 40))
+
+	-- race track in the north half, paddock by the service road
+	raceTrack(V(640, 0, -500), current)
+	lot(300, 400, -530, -430)
+	shop({ name = "Race Control", center = V(355, 0, -565), size = V(50, 14, 30), color = Color3.fromRGB(230, 230, 235), material = M.Concrete, face = "S", signText = "RACE CONTROL", signColor = Color3.fromRGB(255, 60, 60) })
+	mapPoint("City Speedway", "Social", V(360, 0, -470))
+
+	-- the underground: a rusty gate, a ramp, a hidden room and the old tunnel west
+	downRamp(830, 850, -120, -200, UNDER_FLOOR, Color3.fromRGB(110, 80, 70))
+	for _, x in { 829, 851 } do
+		P({ name = "GatePost", size = V(1.5, 12, 1.5), cf = CF(x, 6, -119), color = Color3.fromRGB(120, 70, 50), mat = M.CorrodedMetal })
+		P({ name = "Railing", size = V(1, 3, 80), cf = CF(x, 1.5, -160), color = Color3.fromRGB(120, 70, 50), mat = M.CorrodedMetal })
+	end
+	signBoard("GateSign", V(840, 12, -118.6), V(23, 2.5, 0.5), V(0, 0, 1), "NO ENTRY · SERVICE TUNNEL", Color3.fromRGB(255, 200, 60))
+	undergroundRoom(800, 880, -280, -200, UNDER_FLOOR, -4, Color3.fromRGB(95, 80, 75), { S = { 833, 847, UNDER_FLOOR + 12 }, W = { TUNNEL_Z - 6, TUNNEL_Z + 6, UNDER_FLOOR + 12 } })
+	local den = model("UndergroundDen")
+	for i, pos in { V(812, 0, -270), V(818, 0, -268), V(870, 0, -270), V(866, 0, -262) } do
+		P({ name = "Crate", size = V(5, 5, 5), cf = CF(pos.X, UNDER_FLOOR + 2.5 + (if i == 2 then 5 else 0), pos.Z), color = Color3.fromRGB(140, 100, 60), mat = M.WoodPlanks, parent = den })
+	end
+	local couch = seat(V(840, UNDER_FLOOR + 1.6, -272), V(0, 0, 1), Color3.fromRGB(120, 40, 40), den)
+	couch.Size = V(10, 1.2, 4)
+	P({ name = "CouchBack", size = V(10, 3, 1), cf = CF(840, UNDER_FLOOR + 2.5, -274.5), color = Color3.fromRGB(110, 35, 35), mat = M.Fabric, parent = den })
+	signBoard("DenSign", V(840, UNDER_FLOOR + 9, -279.4), V(24, 4, 0.4), V(0, 0, 1), "THE UNDERGROUND", Color3.fromRGB(80, 255, 160), nil, den)
+	for _, pos in { V(820, -6, -240), V(860, -6, -240) } do
+		local bulb = P({ name = "Bulb", size = V(1, 1, 1), cf = CF(pos), color = Color3.fromRGB(120, 255, 180), mat = M.Neon, shape = Enum.PartType.Ball, collide = false, parent = den })
+		pointLight(bulb, 40, 1.2, Color3.fromRGB(140, 255, 190), true)
+	end
+	secretArea("IndustrialUnderground", "The Underground", V(840, UNDER_FLOOR + 8, -240), V(80, 16, 80))
+end
+
+---------------------------------------------------------------------------
+-- Beach (section 8)
+---------------------------------------------------------------------------
+local function palm(pos: Vector3, rng: Random, parent: Instance)
+	local h = 17 + rng:NextNumber() * 7
+	local lean = rng:NextNumber(-0.12, 0.12)
+	local trunkCF = CF(pos) * CFrame.Angles(lean, 0, lean * 0.6) * CF(0, h / 2, 0)
+	P({ name = "Trunk", size = V(h, 1.5, 1.5), cf = trunkCF * CFrame.Angles(0, 0, math.pi / 2), color = Color3.fromRGB(140, 105, 70), mat = M.Wood, shape = Enum.PartType.Cylinder, parent = parent })
+	local top = (trunkCF * CF(0, h / 2, 0)).Position
+	local spin = rng:NextNumber() * math.pi
+	for k = 0, 4 do
+		P({ name = "Frond", size = V(11, 0.3, 2.6), cf = CF(top) * CFrame.Angles(0, spin + k * math.pi * 2 / 5, 0) * CF(5, -1, 0) * CFrame.Angles(0, 0, -0.35), color = Color3.fromRGB(60, 150 + rng:NextInteger(0, 30), 60), mat = M.Grass, collide = false, parent = parent })
+	end
+end
+
+local function buildBeach()
+	-- sand, a sloping shore, the sea floor and the ocean surface
+	ground(-760, 900, 230, 520, C.sand, M.Sand, Color3.fromRGB(230, 210, 150))
+	ramp("Shore", V(70, 0.05, 520), V(70, -8, 562), 1660, Color3.fromRGB(205, 185, 135), M.Sand, 2)
+	P({ name = "SeaFloor", size = V(1660, 2, 440), cf = CF(70, -9, 780), color = Color3.fromRGB(180, 160, 115), mat = M.Sand })
+	local ocean = P({ name = "Ocean", size = V(2040, 7, 680), cf = CF(70, -4.5, 860), color = Color3.fromRGB(40, 120, 175), mat = M.Glass, transp = 0.3, collide = false, map = Color3.fromRGB(50, 120, 190), layer = 1 })
+	ocean.CastShadow = false
+	-- the cross road comes down to a beach lot
+	road("z", 230, 330, 0, { lampEvery = 50 })
+	lot(-60, 60, 330, 372)
+	-- boardwalk
+	P({ name = "Boardwalk", size = V(1060, 0.6, 18), cf = CF(30, 0.3, 389), color = Color3.fromRGB(165, 125, 85), mat = M.WoodPlanks, map = Color3.fromRGB(160, 120, 80), layer = 2 })
+	for x = -440, 500, 120 do
+		lantern(V(x, 0.6, 381), Color3.fromRGB(255, 200, 140), 9)
+	end
+	for _, x in { -320, -240, 60, 200, 280, 360, 440 } do
+		H.bench(CF(x, 0.6, 384) * CFrame.Angles(0, math.pi, 0), current)
+	end
+
+	-- pier
+	local pier = model("CityPier")
+	P({ name = "PierDeck", size = V(14, 0.8, 242), cf = CF(150, 0.8, 519), color = Color3.fromRGB(150, 115, 80), mat = M.WoodPlanks, parent = pier, map = Color3.fromRGB(150, 115, 80), layer = 3 })
+	P({ name = "PierEnd", size = V(40, 0.8, 30), cf = CF(150, 0.8, 653), color = Color3.fromRGB(150, 115, 80), mat = M.WoodPlanks, parent = pier, map = Color3.fromRGB(150, 115, 80), layer = 3 })
+	for z = 430, 630, 40 do
+		for _, x in { 143.5, 156.5 } do
+			cylinder("Piling", V(x, -9, z), 9.4, 1.4, Color3.fromRGB(100, 75, 55), M.Wood, pier)
+		end
+	end
+	for _, x in { 142.8, 157.2 } do
+		P({ name = "Railing", size = V(0.4, 3, 240), cf = CF(x, 2.7, 520), color = Color3.fromRGB(230, 230, 230), parent = pier })
+	end
+	P({ name = "Railing", size = V(40, 3, 0.4), cf = CF(150, 2.7, 667.8), color = Color3.fromRGB(230, 230, 230), parent = pier })
+	for _, x in { -1, 1 } do
+		P({ name = "Railing", size = V(0.4, 3, 30), cf = CF(150 + x * 19.8, 2.7, 653), color = Color3.fromRGB(230, 230, 230), parent = pier })
+		H.bench(CF(150 + x * 12, 1.2, 662), pier)
+	end
+	lantern(V(150, 1.2, 645), Color3.fromRGB(255, 210, 150), 9)
+	signBoard("PierSign", V(150, 10, 400), V(16, 3, 0.5), V(0, 0, -1), "CITY PIER", Color3.fromRGB(80, 200, 255), nil, pier)
+	for _, x in { 142.5, 157.5 } do
+		P({ name = "SignPost", size = V(0.6, 10, 0.6), cf = CF(x, 5, 400), color = C.wood, mat = M.Wood, parent = pier })
+	end
+	mapPoint("City Pier", "Social", V(150, 0, 404))
+
+	-- ferris wheel
+	buildFerrisWheel(V(-150, 45, 470))
+	mapPoint("Ferris Wheel", "Social", V(-150, 0, 456))
+
+	-- beach court
+	local court = H.buildCourt("BeachCourt", V(300, 0, 300), Color3.fromRGB(205, 185, 140), Color3.fromRGB(40, 150, 190))
+	court.Parent = current
+
+	-- skate park
+	local skate = model("SkatePark")
+	local sc = V(-330, 0, 300)
+	local concrete = Color3.fromRGB(175, 175, 178)
+	P({ name = "SkatePad", size = V(90, 0.3, 60), cf = CF(sc + V(0, 0.15, 0)), color = concrete, mat = M.Concrete, parent = skate, map = Color3.fromRGB(170, 170, 175), layer = 2 })
+	for _, sx in { -1, 1 } do
+		ramp("QuarterPipe", sc + V(sx * 28, 0.3, 0), sc + V(sx * 44, 8, 0), 50, concrete, M.Concrete, 1, skate)
+		P({ name = "Deck", size = V(2, 8, 50), cf = CF(sc + V(sx * 45, 4, 0)), color = concrete, mat = M.Concrete, parent = skate })
+		ramp("Kicker", sc + V(sx * 4, 0.3, -18), sc + V(sx * 14, 3, -18), 10, Color3.fromRGB(70, 140, 220), M.Metal, 1, skate)
+	end
+	P({ name = "FunBox", size = V(8, 3, 14), cf = CF(sc + V(0, 1.5, -18)), color = concrete, mat = M.Concrete, parent = skate })
+	P({ name = "Rail", size = V(30, 0.4, 0.4), cf = CF(sc + V(0, 2.2, 14)), color = Color3.fromRGB(220, 220, 225), mat = M.Metal, parent = skate })
+	for _, x in { -14, 14 } do
+		P({ name = "RailLeg", size = V(0.4, 2, 0.4), cf = CF(sc + V(x, 1, 14)), color = Color3.fromRGB(220, 220, 225), mat = M.Metal, parent = skate })
+	end
+	signBoard("SkateSign", sc + V(0, 6, 30.5), V(20, 3, 0.4), V(0, 0, 1), "SKATE PARK", Color3.fromRGB(255, 90, 160), nil, skate)
+	mapPoint("Skate Park", "Fitness", sc + V(0, 0, 34))
+
+	-- running track (oval)
+	local track = model("RunningTrack")
+	local tc, half, R, W = V(560, 0, 320), 60, 36, 8
+	local tartan = Color3.fromRGB(190, 70, 55)
+	P({ name = "TrackInfield", size = V(half * 2, 0.15, (R - W / 2) * 2), cf = CF(tc + V(0, 0.08, 0)), color = Color3.fromRGB(85, 150, 75), mat = M.Grass, parent = track })
+	for _, sz in { -1, 1 } do
+		P({ name = "TrackLane", size = V(half * 2, 0.25, W), cf = CF(tc + V(0, 0.12, sz * R)), color = tartan, mat = M.Fabric, parent = track, map = tartan, layer = 3 })
+	end
+	for _, e in { { half, -90, 90 }, { -half, 90, 270 } } do
+		local c = tc + V(e[1], 0, 0)
+		P({ name = "TrackInfield", size = V(0.15, (R - W / 2) * 2, (R - W / 2) * 2), cf = CF(c + V(0, 0.08, 0)) * CFrame.Angles(0, 0, math.pi / 2), color = Color3.fromRGB(85, 150, 75), mat = M.Grass, shape = Enum.PartType.Cylinder, parent = track })
+		for i = 0, 7 do
+			local a = math.rad(e[2] + (i + 0.5) * (e[3] - e[2]) / 8)
+			local pos = c + V(math.cos(a), 0, math.sin(a)) * R + V(0, 0.12, 0)
+			P({ name = "TrackLane", size = V(W, 0.25, math.rad(180 / 8) * (R + W / 2) + 0.6), cf = CFrame.lookAt(pos, pos + V(-math.sin(a), 0, math.cos(a))), color = tartan, mat = M.Fabric, parent = track, map = tartan, layer = 3 })
+		end
+	end
+	mapPoint("Running Track", "Fitness", tc + V(0, 0, R + 8))
+
+	-- Muscle Beach outdoor gym props
+	local gym = model("MuscleBeach")
+	local gc = V(420, 0, 450)
+	P({ name = "GymMat", size = V(34, 0.3, 22), cf = CF(gc + V(0, 0.15, 0)), color = Color3.fromRGB(50, 50, 55), mat = M.Rubber, parent = gym })
+	for _, x in { -12, -4 } do
+		P({ name = "PullUpPost", size = V(0.6, 10, 0.6), cf = CF(gc + V(x, 5, -6)), color = C.metal, mat = M.Metal, parent = gym })
+	end
+	P({ name = "PullUpBar", size = V(8.6, 0.4, 0.4), cf = CF(gc + V(-8, 9.8, -6)), color = Color3.fromRGB(200, 200, 205), mat = M.Metal, parent = gym })
+	P({ name = "Bench", size = V(2, 1.6, 6), cf = CF(gc + V(6, 0.9, -4)), color = Color3.fromRGB(40, 40, 46), mat = M.Fabric, parent = gym })
+	P({ name = "Barbell", size = V(9, 0.3, 0.3), cf = CF(gc + V(6, 3.6, -6)), color = Color3.fromRGB(200, 200, 205), mat = M.Metal, parent = gym })
+	for _, x in { -4.2, 4.2 } do
+		P({ name = "Plate", size = V(0.6, 2.4, 2.4), cf = CF(gc + V(6 + x, 3.6, -6)), color = C.dark, mat = M.Rubber, shape = Enum.PartType.Cylinder, parent = gym })
+	end
+	P({ name = "DumbbellRack", size = V(10, 2.5, 2), cf = CF(gc + V(6, 1.25, 7)), color = C.metal, mat = M.Metal, parent = gym })
+	for _, x in { -12, -9 } do
+		P({ name = "DipBar", size = V(0.4, 0.4, 6), cf = CF(gc + V(x, 4, 6)), color = Color3.fromRGB(200, 200, 205), mat = M.Metal, parent = gym })
+		P({ name = "DipPost", size = V(0.5, 4, 0.5), cf = CF(gc + V(x, 2, 6)), color = C.metal, mat = M.Metal, parent = gym })
+	end
+	signBoard("GymSign", gc + V(0, 4, -11.5), V(16, 2.5, 0.4), V(0, 0, -1), "MUSCLE BEACH", Color3.fromRGB(255, 200, 40), nil, gym)
+	mapPoint("Muscle Beach", "Fitness", gc + V(0, 0, -14))
+
+	-- Tiki Shack: a beach bar with stools to sit on
+	local tiki = model("TikiShack")
+	local tk = V(40, 0, 440)
+	P({ name = "Counter", size = V(20, 4, 3), cf = CF(tk + V(0, 2, -5)), color = Color3.fromRGB(140, 95, 55), mat = M.Wood, parent = tiki })
+	for _, x in { -9, 9 } do
+		for _, z in { -7, 5 } do
+			cylinder("Post", tk + V(x, 0, z), 10, 0.8, Color3.fromRGB(120, 85, 50), M.Wood, tiki)
+		end
+	end
+	for _, s in { -1, 1 } do
+		P({ name = "Thatch", size = V(24, 0.6, 9.5), cf = CF(tk + V(0, 11.5, -1 + s * 4)) * CFrame.Angles(s * 0.35, 0, 0), color = Color3.fromRGB(205, 175, 95), mat = M.Grass, parent = tiki })
+	end
+	for x = -6, 6, 4 do
+		seat(tk + V(x, 2.2, -9), V(0, 0, 1), Color3.fromRGB(200, 60, 50), tiki)
+	end
+	local tikiSign = signBoard("TikiSign", tk + V(0, 9, -7.4), V(12, 2, 0.4), V(0, 0, -1), "TIKI SHACK", Color3.fromRGB(255, 220, 90), nil, tiki)
+	pointLight(tikiSign, 26, 1.5, Color3.fromRGB(255, 170, 90))
+	mapPoint("Tiki Shack", "Food", tk + V(0, 0, -12))
+
+	-- lifeguard tower
+	local guard = model("LifeguardTower")
+	local lg = V(250, 0, 480)
+	for _, x in { -3, 3 } do
+		for _, z in { -3, 3 } do
+			P({ name = "Leg", size = V(0.6, 8, 0.6), cf = CF(lg + V(x, 4, z)), color = C.white, parent = guard })
+		end
+	end
+	P({ name = "Platform", size = V(8, 0.6, 8), cf = CF(lg + V(0, 8.3, 0)), color = C.white, parent = guard })
+	P({ name = "Cabin", size = V(6, 5, 6), cf = CF(lg + V(0, 11, 0)), color = Color3.fromRGB(220, 60, 50), parent = guard })
+	P({ name = "Roof", size = V(8, 0.5, 8), cf = CF(lg + V(0, 13.8, 0)), color = C.white, parent = guard })
+	ramp("Ladder", lg + V(0, 0.1, -9), lg + V(0, 8.6, -4), 2.5, Color3.fromRGB(200, 200, 200), M.WoodPlanks, 0.5, guard)
+
+	-- umbrellas, towels, a bonfire circle and palms
+	local social = model("BeachSocial")
+	local rng = Random.new(8)
+	local umbrellaColors = { Color3.fromRGB(240, 80, 80), Color3.fromRGB(60, 160, 240), Color3.fromRGB(250, 200, 50), Color3.fromRGB(90, 200, 120) }
+	for i = 0, 7 do
+		local p = V(-60 + i * 55 + rng:NextNumber(-10, 10), 0, 470 + rng:NextNumber(-25, 25))
+		P({ name = "UmbrellaPole", size = V(0.3, 9, 0.3), cf = CF(p + V(0, 4.5, 0)), color = C.white, parent = social })
+		P({ name = "Umbrella", size = V(0.5, 10, 10), cf = CF(p + V(0, 9, 0)) * CFrame.Angles(0, 0, math.pi / 2), color = umbrellaColors[i % #umbrellaColors + 1], shape = Enum.PartType.Cylinder, parent = social })
+		P({ name = "Towel", size = V(3.4, 0.1, 6.5), cf = CF(p + V(3, 0.1, 2)), color = umbrellaColors[(i + 1) % #umbrellaColors + 1], mat = M.Fabric, collide = false, parent = social })
+	end
+	local fire = V(-30, 0, 480)
+	local pit = cylinder("FirePit", fire, 1, 6, Color3.fromRGB(90, 85, 80), M.Slate, social)
+	local flame = Instance.new("Fire")
+	flame.Size = 6
+	flame.Heat = 8
+	flame.Parent = pit
+	pointLight(pit, 30, 2, Color3.fromRGB(255, 150, 70), true)
+	for i = 0, 3 do
+		local a = i / 4 * math.pi * 2 + math.pi / 4
+		local p = fire + V(math.cos(a) * 9, 0, math.sin(a) * 9)
+		local log = seat(p + V(0, 1, 0), (fire - p) * V(1, 0, 1), Color3.fromRGB(120, 85, 55), social)
+		log.Size = V(6, 1.6, 2)
+		log.Material = M.Wood
+	end
+	mapPoint("Beach Bonfire", "Social", fire + V(0, 0, -12))
+	local palms = model("Palms")
+	for _, p in { V(-260, 0, 410), V(-220, 0, 440), V(-90, 0, 415), V(-60, 0, 505), V(0, 0, 420), V(90, 0, 500), V(110, 0, 415), V(200, 0, 430), V(330, 0, 410), V(360, 0, 500), V(480, 0, 420), V(520, 0, 500), V(-380, 0, 420), V(-430, 0, 480), V(-40, 0, 250), V(40, 0, 250), V(-120, 0, 345), V(120, 0, 345) } do
+		palm(p, rng, palms)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Luxury Hills (section 9)
+---------------------------------------------------------------------------
+local HILL_Y = 14.05
+
+local function mansion(name: string, c: Vector3, face: number, color: Color3, accent: Color3)
+	local m = model(name)
+	local f = face
+	P({ name = "Body", size = V(50, 16, 32), cf = CF(c + V(0, 8, 0)), color = color, mat = M.SmoothPlastic, parent = m, map = Color3.fromRGB(230, 225, 215), layer = 3 })
+	P({ name = "Upper", size = V(34, 11, 24), cf = CF(c + V(-5, 21.5, -f * 3)), color = color, mat = M.SmoothPlastic, parent = m })
+	P({ name = "Roof", size = V(53, 1, 35), cf = CF(c + V(0, 16.5, 0)), color = accent, mat = M.Slate, parent = m })
+	P({ name = "Roof", size = V(37, 1, 27), cf = CF(c + V(-5, 27.5, -f * 3)), color = accent, mat = M.Slate, parent = m })
+	P({ name = "Glass", size = V(40, 9, 0.4), cf = CF(c + V(0, 7, f * 16.1)), color = Color3.fromRGB(120, 180, 220), mat = M.Glass, transp = 0.2, parent = m })
+	local upperGlass = P({ name = "Glass", size = V(28, 7, 0.4), cf = CF(c + V(-5, 21, f * 9.1)), color = Color3.fromRGB(120, 180, 220), mat = M.Glass, transp = 0.2, parent = m })
+	glowAtNight(upperGlass, C.windowWarm)
+	P({ name = "Door", size = V(6, 10, 0.4), cf = CF(c + V(0, 5, f * 16.4)), color = Color3.fromRGB(60, 40, 30), mat = M.Wood, parent = m })
+	for _, x in { -7, 7 } do
+		cylinder("Column", c + V(x, 0, f * 22), 13, 1.8, C.white, M.Marble, m)
+	end
+	P({ name = "Portico", size = V(18, 1, 9), cf = CF(c + V(0, 13.5, f * 20.5)), color = C.white, mat = M.Marble, parent = m })
+	local porch = P({ name = "PorchLight", size = V(1, 1, 1), cf = CF(c + V(0, 12.6, f * 20.5)), color = Color3.fromRGB(255, 230, 180), shape = Enum.PartType.Ball, collide = false, parent = m })
+	glowAtNight(porch, Color3.fromRGB(255, 225, 170))
+	pointLight(porch, 26, 1.6, Color3.fromRGB(255, 215, 160))
+	-- back garden with a pool
+	P({ name = "PoolDeck", size = V(34, 0.2, 18), cf = CF(c + V(0, 0.1, -f * 27)), color = Color3.fromRGB(225, 220, 205), mat = M.Slate, parent = m })
+	P({ name = "Pool", size = V(26, 0.3, 11), cf = CF(c + V(0, 0.25, -f * 27)), color = Color3.fromRGB(60, 190, 230), mat = M.Glass, transp = 0.15, collide = false, parent = m })
+	for _, x in { -27, 27 } do
+		P({ name = "Hedge", size = V(2.5, 4, 40), cf = CF(c + V(x, 2, -f * 12)), color = Color3.fromRGB(50, 110, 50), mat = M.LeafyGrass, parent = m })
+	end
+end
+
+local function supercar(pos: Vector3, yaw: number, color: Color3, parent: Instance)
+	local cf = CF(pos) * CFrame.Angles(0, yaw, 0)
+	P({ name = "CarBody", size = V(6, 1.6, 13), cf = cf * CF(0, 1.6, 0), color = color, mat = M.Metal, parent = parent })
+	P({ name = "CarCabin", size = V(4.6, 1.4, 5), cf = cf * CF(0, 3, 0.6), color = Color3.fromRGB(30, 30, 36), mat = M.Glass, transp = 0.1, parent = parent })
+	for _, z in { -4.2, 4.2 } do
+		P({ name = "Wheels", size = V(6.4, 2.2, 2.2), cf = cf * CF(0, 1.1, z), color = C.dark, mat = M.Rubber, shape = Enum.PartType.Cylinder, parent = parent })
+	end
+end
+
+local function buildPrivateCourt(c: Vector3)
+	local m = model("PrivateClub")
+	local court = H.buildCourt("LuxuryPrivateCourt", c, Color3.fromRGB(30, 30, 36), Color3.fromRGB(170, 130, 60))
+	court.Parent = current
+	local x0, x1, z0, z1 = c.X - 38, c.X + 38, c.Z - 55, c.Z + 55
+	local wallH = 16
+	local wallColor = Color3.fromRGB(45, 95, 55)
+	local function wall(ax: number, bx: number, az: number, bz: number)
+		P({ name = "ClubWall", size = V(math.max(1.5, bx - ax), wallH, math.max(1.5, bz - az)), cf = CF((ax + bx) / 2, c.Y + wallH / 2, (az + bz) / 2), color = wallColor, mat = M.LeafyGrass, parent = m, map = Color3.fromRGB(60, 110, 70), layer = 3 })
+	end
+	wall(x0, x0 + 1.5, z0, z1)
+	wall(x1 - 1.5, x1, z0, z1)
+	wall(x0, x1, z1 - 1.5, z1)
+	wall(x0, c.X - 5, z0, z0 + 1.5)
+	wall(c.X + 5, x1, z0, z0 + 1.5)
+	-- gold trim along the top
+	P({ name = "Trim", size = V(x1 - x0, 0.6, 1.8), cf = CF(c.X, c.Y + wallH + 0.3, z0 + 0.75), color = Color3.fromRGB(210, 170, 80), mat = M.Metal, parent = m })
+	-- the gate: visible bars + an invisible barrier; the prompt checks membership server-side
+	local gatePos = V(c.X, c.Y + wallH / 2, z0 + 0.75)
+	local barrier = P({ name = "GateBarrier", size = V(10, wallH, 1.5), cf = CF(gatePos), transp = 1, parent = m })
+	for i = -2, 2 do
+		P({ name = "GateBar", size = V(0.4, wallH - 2, 0.4), cf = CF(gatePos + V(i * 2, -1, 0)), color = Color3.fromRGB(210, 170, 80), mat = M.Metal, collide = false, parent = m })
+	end
+	signBoard("ClubSign", V(c.X, c.Y + wallH + 3, z0 - 0.2), V(22, 3, 0.4), V(0, 0, -1), "HILLS PRIVATE CLUB · MEMBERS ONLY", Color3.fromRGB(230, 190, 90), nil, m)
+	local enter = addPrompt(barrier, "EnterClub", "Enter", "Private Court", 10)
+	-- members arrive behind the south baseline, where the court fence has its opening
+	local insideSpot = V(c.X, c.Y, z1 - 9)
+	local outsideSpot = V(c.X, c.Y, z0 - 8)
+	local exitPad = P({ name = "ClubExit", size = V(6, 0.3, 4), cf = CF(c.X, c.Y + 0.15, z1 - 5), color = Color3.fromRGB(210, 170, 80), mat = M.Metal, parent = m })
+	local leave = addPrompt(exitPad, "LeaveClub", "Leave", "Private Court", 9)
+	P({ name = "Path", size = V(10, 0.2, 31), cf = CF(c.X, c.Y + 0.1, z0 - 15.5), color = Color3.fromRGB(220, 210, 190), mat = M.Slate, parent = m })
+
+	enter.Triggered:Connect(function(player)
+		if not Net.allow(player, "ClubGate", 1) or Net.distance(player, barrier.Position) > 16 then
+			return
+		end
+		local ok, reason = canMove(player)
+		if not ok then
+			if reason then
+				Net.notify(player, "PRIVATE COURT", reason)
+			end
+			return
+		end
+		local rep = player:GetAttribute("Reputation")
+		local level = player:GetAttribute("Level")
+		rep = if type(rep) == "number" then rep else 0
+		level = if type(level) == "number" then level else 1
+		if rep >= DC.PRIVATE_COURT_REPUTATION or level >= DC.PRIVATE_COURT_LEVEL then
+			Places.teleport(player, CFrame.lookAt(insideSpot, insideSpot + V(0, 0, -1)))
+			Net.notify(player, "WELCOME, MEMBER", "The Hills Private Club court is yours to play.")
+		else
+			Net.notify(
+				player,
+				"MEMBERS ONLY",
+				string.format("Members need Reputation %d+ or Level %d+. You have Reputation %d and Level %d.", DC.PRIVATE_COURT_REPUTATION, DC.PRIVATE_COURT_LEVEL, rep, level)
+			)
+		end
+	end)
+	leave.Triggered:Connect(function(player)
+		if not Net.allow(player, "ClubGate", 1) or Net.distance(player, exitPad.Position) > 14 then
+			return
+		end
+		Places.teleport(player, CFrame.lookAt(outsideSpot, outsideSpot + V(0, 0, -1)))
+	end)
+end
+
+local function buildLuxury()
+	ground(-760, -300, -730, -230, Color3.fromRGB(95, 155, 80), M.Grass, Color3.fromRGB(90, 150, 80))
+	-- the hill
+	local hx0, hx1, hz0, hz1 = -740, -420, -710, -280
+	P({ name = "Hill", size = V(hx1 - hx0, HILL_Y - 1, hz1 - hz0), cf = CF((hx0 + hx1) / 2, (HILL_Y - 1) / 2 - 0.5, (hz0 + hz1) / 2), color = Color3.fromRGB(130, 115, 95), mat = M.Rock })
+	P({ name = "HillTop", size = V(hx1 - hx0, 1.5, hz1 - hz0), cf = CF((hx0 + hx1) / 2, HILL_Y - 0.75, (hz0 + hz1) / 2), color = Color3.fromRGB(100, 165, 85), mat = M.Grass, map = Color3.fromRGB(110, 170, 95), layer = 2 })
+	-- Luxury Drive: from Downtown's avenue, up a ramp, across the hill
+	road("x", -360, -300, -480, { lamps = false })
+	local hillRamp = ramp("RampRoad", V(-360, 0.2, -480), V(-420, HILL_Y + 0.2, -480), ROAD_W, C.asphalt, M.Asphalt, 1)
+	hillRamp:SetAttribute("MapColor", C.mapRoad)
+	hillRamp:SetAttribute("MapLayer", 2)
+	for _, side in { -1, 1 } do
+		ramp("GuardRail", V(-360, 2.4, -480 + side * 16.4), V(-420, HILL_Y + 2.4, -480 + side * 16.4), 0.6, Color3.fromRGB(200, 200, 205), M.Metal, 2)
+	end
+	road("x", -730, -420, -480, { y = HILL_Y, lampEvery = 75 })
+
+	-- mansions
+	mansion("Mansion Aurelia", V(-490, HILL_Y, -590), 1, Color3.fromRGB(245, 242, 235), Color3.fromRGB(60, 60, 70))
+	mansion("Mansion Solace", V(-640, HILL_Y, -590), 1, Color3.fromRGB(230, 220, 200), Color3.fromRGB(110, 70, 50))
+	mansion("Mansion Vireo", V(-490, HILL_Y, -380), -1, Color3.fromRGB(235, 235, 240), Color3.fromRGB(40, 50, 70))
+	for _, d in { { -490, -574, -504 }, { -640, -574, -504 }, { -490, -456, -396 } } do
+		P({ name = "Driveway", size = V(10, 0.2, math.abs(d[3] - d[2])), cf = CF(d[1], HILL_Y + 0.1, (d[2] + d[3]) / 2), color = Color3.fromRGB(215, 205, 185), mat = M.Slate })
+	end
+	local rng = Random.new(11)
+	for _, p in { V(-450, HILL_Y, -530), V(-560, HILL_Y, -530), V(-700, HILL_Y, -530), V(-560, HILL_Y, -430), V(-450, HILL_Y, -300), V(-720, HILL_Y, -300), V(-720, HILL_Y, -660), V(-560, HILL_Y, -680) } do
+		H.tree(p + V(rng:NextNumber(-4, 4), 0, rng:NextNumber(-4, 4)), current)
+	end
+	mapPoint("Luxury Hills Estates", "Landmark", V(-560, HILL_Y, -500))
+
+	-- private court (gated)
+	buildPrivateCourt(V(-650, HILL_Y, -370))
+
+	-- penthouse towers, the Sky Lounge on top of one, and the supercar showroom
+	tower({ name = "Penthouse One", center = V(-360, 0, -620), w = 44, d = 44, h = 130, color = Color3.fromRGB(235, 235, 240), glass = Color3.fromRGB(150, 200, 230), trim = Color3.fromRGB(200, 165, 90), lit = 0.6, front = V(0, 0, 1), spire = 14 })
+	local lounge = V(-360, 0, -330)
+	local loungeY = 110
+	tower({ name = "Penthouse Two", center = lounge, w = 40, d = 40, h = loungeY, color = Color3.fromRGB(30, 30, 36), glass = Color3.fromRGB(120, 160, 200), trim = Color3.fromRGB(200, 165, 90), lit = 0.6, front = V(0, 0, 1), flatRoof = true })
+	local sky = model("SkyLounge")
+	for _, side in { -1, 1 } do
+		P({ name = "LoungeGlass", size = V(0.5, 4, 40), cf = CF(lounge + V(side * 19.75, loungeY + 2, 0)), color = Color3.fromRGB(190, 225, 255), mat = M.Glass, transp = 0.6, parent = sky })
+		P({ name = "LoungeGlass", size = V(40, 4, 0.5), cf = CF(lounge + V(0, loungeY + 2, side * 19.75)), color = Color3.fromRGB(190, 225, 255), mat = M.Glass, transp = 0.6, parent = sky })
+	end
+	P({ name = "LoungeDeck", size = V(39, 0.3, 39), cf = CF(lounge + V(0, loungeY + 0.15, 0)), color = Color3.fromRGB(120, 85, 60), mat = M.WoodPlanks, parent = sky })
+	for _, t in { V(-9, 0, -8), V(9, 0, -8), V(-9, 0, 6), V(9, 0, 6) } do
+		local tp = lounge + V(0, loungeY + 0.3, 0) + t
+		cylinder("TableLeg", tp, 3, 0.6, C.dark, M.Metal, sky)
+		cylinder("TableTop", tp + V(0, 3, 0), 0.3, 5, C.white, M.Marble, sky)
+		for _, dx in { -3.8, 3.8 } do
+			seat(tp + V(dx, 1.6, 0), V(-dx, 0, 0), Color3.fromRGB(200, 170, 110), sky)
+		end
+	end
+	P({ name = "Bar", size = V(18, 3.6, 3), cf = CF(lounge + V(0, loungeY + 2, -16)), color = Color3.fromRGB(30, 30, 34), mat = M.Marble, parent = sky })
+	for _, z in { -12, 12 } do
+		local string_ = P({ name = "StringLights", size = V(38, 0.3, 0.3), cf = CF(lounge + V(0, loungeY + 7, z)), color = Color3.fromRGB(255, 220, 150), mat = M.Neon, collide = false, parent = sky })
+		pointLight(string_, 30, 1.4, Color3.fromRGB(255, 210, 150))
+	end
+	signBoard("LoungeSign", lounge + V(0, loungeY + 6, -19.6), V(16, 2.5, 0.4), V(0, 0, 1), "SKY LOUNGE", Color3.fromRGB(230, 190, 90), nil, sky)
+	elevator("Sky Lounge", lounge + V(10, 0, 20.4), V(0, 0, 1), lounge + V(12, loungeY, 12), V(-1, 0, 0))
+	mapPoint("Sky Lounge", "Food", lounge + V(10, 0, 26))
+
+	-- Prestige Motors showroom
+	local show = model("PrestigeMotors")
+	local sc = V(-360, 0, -545)
+	P({ name = "ShowroomFloor", size = V(60, 0.4, 40), cf = CF(sc + V(0, 0.2, 0)), color = Color3.fromRGB(235, 235, 240), mat = M.Marble, parent = show })
+	P({ name = "Body", size = V(60, 18, 2), cf = CF(sc + V(0, 9, -19)), color = Color3.fromRGB(25, 25, 30), mat = M.SmoothPlastic, parent = show, map = C.mapBuilding, layer = 3 })
+	for _, x in { -29, 29 } do
+		P({ name = "SideWall", size = V(2, 18, 40), cf = CF(sc + V(x, 9, 0)), color = Color3.fromRGB(25, 25, 30), parent = show })
+	end
+	P({ name = "Roof", size = V(62, 1.2, 42), cf = CF(sc + V(0, 18.6, 0)), color = Color3.fromRGB(200, 165, 90), mat = M.Metal, parent = show })
+	P({ name = "Glass", size = V(48, 15, 0.4), cf = CF(sc + V(-6, 7.5, 19.8)), color = Color3.fromRGB(170, 210, 240), mat = M.Glass, transp = 0.6, parent = show })
+	signBoard("ShowroomSign", sc + V(0, 16, 20.6), V(30, 3, 0.4), V(0, 0, 1), "PRESTIGE MOTORS", Color3.fromRGB(230, 190, 90), nil, show)
+	supercar(sc + V(-16, 0.4, 0), 0.5, Color3.fromRGB(220, 30, 30), show)
+	supercar(sc + V(0, 0.4, -4), 0, Color3.fromRGB(250, 200, 40), show)
+	supercar(sc + V(16, 0.4, 0), -0.5, Color3.fromRGB(30, 30, 34), show)
+	local showLight = P({ name = "ShowLight", size = V(40, 0.3, 4), cf = CF(sc + V(0, 17.8, 0)), color = C.white, mat = M.Neon, collide = false, parent = show })
+	pointLight(showLight, 40, 1.5, C.white)
+	mapPoint("Prestige Motors", "Landmark", sc + V(0, 0, 26))
+end
+
+---------------------------------------------------------------------------
+-- Old Town (section 10)
+---------------------------------------------------------------------------
+local OLD = {
+	Color3.fromRGB(150, 70, 55),
+	Color3.fromRGB(120, 85, 60),
+	Color3.fromRGB(175, 120, 80),
+	Color3.fromRGB(110, 55, 50),
+	Color3.fromRGB(190, 160, 120),
+	Color3.fromRGB(95, 70, 60),
+}
+
+local function oldBuilding(name: string, x: number, z: number, w: number, h: number, face: string, colorIndex: number, signText: string, signColor: Color3, category: string?)
+	local m = shop({ name = name, center = V(x, 0, z), size = V(w, h, 30), color = OLD[colorIndex], material = M.Brick, face = face, signText = signText, signColor = signColor, category = category, floorHeight = 10 })
+	-- a cornice along the roof line for the old-town look
+	P({ name = "Cornice", size = V(w + 2, 1.4, 31.5), cf = CF(x, h + 1.6, z), color = Color3.fromRGB(215, 200, 175), mat = M.Concrete, parent = m })
+	return m
+end
+
+local function buildOldTown()
+	local hole = { -687, -673, -172, -110 }
+	ground(-760, -300, -230, 230, Color3.fromRGB(140, 128, 112), M.Cobblestone, Color3.fromRGB(150, 130, 110), { hole })
+	road("x", -760, -300, 0, { color = Color3.fromRGB(95, 88, 82), mat = M.Cobblestone, walkColor = Color3.fromRGB(150, 100, 80), walkMat = M.Brick, lampEvery = 70 })
+	-- narrow side streets
+	for _, x in { -450, -610 } do
+		for _, seg in { { -230, -24 }, { 24, 230 } } do
+			P({ name = "Street", size = V(14, 0.2, seg[2] - seg[1]), cf = CF(x, 0.1, (seg[1] + seg[2]) / 2), color = Color3.fromRGB(105, 95, 85), mat = M.Cobblestone, map = Color3.fromRGB(95, 85, 75), layer = 2 })
+		end
+	end
+
+	-- north side of the main road (fronts face the road, +z)
+	oldBuilding("Curio & Relic Antiques", -332, -47, 40, 20, "S", 1, "CURIO & RELIC ANTIQUES", Color3.fromRGB(240, 220, 160), "Landmark")
+	oldBuilding("Rosie's Bakery", -420, -47, 30, 16, "S", 5, "ROSIE'S BAKERY", Color3.fromRGB(255, 180, 190))
+	oldBuilding("Second Hand Rose", -485, -47, 38, 20, "S", 4, "SECOND HAND ROSE · VINTAGE", Color3.fromRGB(255, 160, 200), "Landmark")
+	oldBuilding("Old Town Tailor", -535, -47, 30, 24, "S", 2, "TAILOR", Color3.fromRGB(230, 220, 200))
+	oldBuilding("Hotel Bellmont", -580, -47, 36, 30, "S", 3, "HOTEL BELLMONT", Color3.fromRGB(255, 215, 120))
+	oldBuilding("Printing House", -650, -47, 36, 20, "S", 6, "PRINTING HOUSE", Color3.fromRGB(230, 230, 230))
+	oldBuilding("Old Post Office", -715, -47, 50, 22, "S", 1, "POST OFFICE · 1898", Color3.fromRGB(240, 220, 160))
+	shop({ name = "Old Town Hall", center = V(-380, 0, -150), size = V(70, 28, 50), color = Color3.fromRGB(200, 185, 160), material = M.Concrete, face = "S", signText = "OLD TOWN HALL", signColor = Color3.fromRGB(80, 60, 40), category = "Landmark", floorHeight = 14 })
+
+	-- south side (fronts face the road, -z)
+	oldBuilding("Moretti's Pizzeria", -335, 47, 40, 16, "N", 4, "MORETTI'S PIZZERIA", Color3.fromRGB(120, 220, 120))
+	oldBuilding("Blue Lantern Jazz Club", -410, 47, 40, 20, "N", 6, "BLUE LANTERN JAZZ", Color3.fromRGB(90, 160, 255), "Landmark")
+	oldBuilding("Old Town Books", -490, 47, 30, 18, "N", 2, "OLD TOWN BOOKS", Color3.fromRGB(240, 220, 160))
+	oldBuilding("Watchmaker", -570, 47, 30, 18, "N", 5, "WATCHMAKER", Color3.fromRGB(80, 60, 40))
+	oldBuilding("Grand Theatre", -660, 47, 40, 22, "N", 1, "GRAND THEATRE", Color3.fromRGB(255, 215, 120), "Landmark")
+	oldBuilding("Apothecary", -725, 47, 40, 18, "N", 3, "APOTHECARY", Color3.fromRGB(150, 230, 170))
+	shop({ name = "Warehouse Lofts", center = V(-690, 0, 160), size = V(60, 24, 50), color = OLD[2], material = M.Brick, face = "N", signText = "WAREHOUSE LOFTS", signColor = Color3.fromRGB(230, 220, 200), floorHeight = 12 })
+
+	-- the old court: cracked, faded, weeds
+	local court = H.buildCourt("OldTownCourt", V(-530, 0, 130), Color3.fromRGB(115, 108, 98), Color3.fromRGB(150, 95, 70))
+	court.Parent = current
+	local cfloor = court:FindFirstChild("CourtFloor")
+	if cfloor and cfloor:IsA("BasePart") then
+		cfloor.Material = M.Slate
+	end
+	local paint = court:FindFirstChild("Paint")
+	if paint and paint:IsA("BasePart") then
+		paint.Transparency = 0.35
+	end
+	local crng = Random.new(5)
+	for _ = 1, 7 do
+		local p = V(-530 + crng:NextNumber(-18, 18), 0.5, 130 + crng:NextNumber(-34, 34))
+		P({ name = "Crack", size = V(0.3, 0.04, crng:NextNumber(4, 12)), cf = CF(p) * CFrame.Angles(0, crng:NextNumber(0, math.pi), 0), color = Color3.fromRGB(45, 42, 40), collide = false, parent = court })
+	end
+	for _ = 1, 5 do
+		local p = V(-530 + crng:NextNumber(-25, 25), 0.6, 130 + crng:NextNumber(-40, 40))
+		P({ name = "Weeds", size = V(1.4, 0.6, 1.4), cf = CF(p), color = Color3.fromRGB(80, 130, 60), mat = M.Grass, collide = false, parent = court })
+	end
+
+	-- street lanterns
+	for _, p in { V(-450, 0, -100), V(-450, 0, 110), V(-610, 0, -120), V(-610, 0, 120) } do
+		lantern(p + V(9, 0, 0), Color3.fromRGB(255, 190, 110))
+	end
+
+	-- Clocktower Lofts and its secret rooftop, reached by climbing crates in the alley
+	local clock = shop({ name = "Clocktower Lofts", center = V(-380, 0, 150), size = V(40, 30, 40), color = OLD[4], material = M.Brick, face = "N", signText = "CLOCKTOWER LOFTS", signColor = Color3.fromRGB(240, 220, 160), floorHeight = 10 })
+	local clockFace = P({ name = "ClockFace", size = V(0.6, 9, 9), cf = CF(-380, 25, 129.6) * CFrame.Angles(0, math.pi / 2, 0), color = Color3.fromRGB(245, 240, 225), shape = Enum.PartType.Cylinder, parent = clock })
+	glowAtNight(clockFace, Color3.fromRGB(255, 240, 200))
+	local climb = model("AlleyCrates")
+	for i = 1, 7 do
+		local top = 4 * i
+		local z = 168 - (i - 1) * 5
+		P({ name = "Crates", size = V(5, top, 5), cf = CF(-356.5, top / 2, z), color = if i % 2 == 0 then Color3.fromRGB(150, 110, 70) else Color3.fromRGB(130, 95, 60), mat = M.WoodPlanks, parent = climb })
+	end
+	local roof = model("SecretRooftop")
+	H.bench(CF(-388, 31, 160) * CFrame.Angles(0, math.pi, 0), roof)
+	local fairy = P({ name = "RooftopLights", size = V(30, 0.3, 0.3), cf = CF(-380, 36, 140), color = Color3.fromRGB(255, 220, 150), mat = M.Neon, collide = false, parent = roof })
+	pointLight(fairy, 30, 1.2, Color3.fromRGB(255, 210, 150))
+	for _, x in { -395, -365 } do
+		P({ name = "LightPole", size = V(0.4, 5, 0.4), cf = CF(x, 33.5, 140), color = C.dark, mat = M.Metal, parent = roof })
+	end
+	signBoard("Plaque", V(-380, 32, 169.2), V(6, 1.6, 0.3), V(0, 0, -1), "YOU FOUND THE CLOCKTOWER ROOF", Color3.fromRGB(255, 220, 120), nil, roof)
+	secretArea("OldTownRooftop", "Clocktower Rooftop", V(-380, 38, 150), V(40, 14, 40))
+
+	-- The Forgotten Cellar: an abandoned building with a ramp down to the catacombs
+	local cellar = model("ForgottenCellar")
+	local bx0, bx1, bz0, bz1, bh = -705, -655, -175, -105, 18
+	local brick = Color3.fromRGB(100, 70, 60)
+	local function bwall(ax: number, bx: number, az: number, bz: number)
+		P({ name = "Wall", size = V(math.max(1, bx - ax), bh, math.max(1, bz - az)), cf = CF((ax + bx) / 2, bh / 2, (az + bz) / 2), color = brick, mat = M.Brick, parent = cellar, map = Color3.fromRGB(150, 120, 100), layer = 3 })
+	end
+	bwall(bx0, bx1, bz0, bz0 + 1)
+	bwall(bx0, bx1, bz1 - 1, bz1)
+	bwall(bx0, bx0 + 1, bz0, bz1)
+	-- east wall facing the alley, with a gap where a board fell off
+	bwall(bx1 - 1, bx1, bz0, -132)
+	bwall(bx1 - 1, bx1, -127, bz1)
+	P({ name = "Lintel", size = V(1, bh - 7, 5), cf = CF(bx1 - 0.5, 7 + (bh - 7) / 2, -129.5), color = brick, mat = M.Brick, parent = cellar })
+	for _, y in { 5.5, 6.5 } do
+		P({ name = "Board", size = V(0.4, 0.8, 6), cf = CF(bx1 + 0.2, y, -129.5) * CFrame.Angles(math.rad(y * 6 - 35), 0, 0), color = Color3.fromRGB(110, 85, 60), mat = M.WoodPlanks, collide = false, parent = cellar })
+	end
+	P({ name = "Roof", size = V(bx1 - bx0 + 2, 1, bz1 - bz0 + 2), cf = CF((bx0 + bx1) / 2, bh + 0.5, (bz0 + bz1) / 2), color = Color3.fromRGB(70, 60, 55), mat = M.Slate, parent = cellar })
+	local lamp = P({ name = "Candle", size = V(0.6, 1.2, 0.6), cf = CF(-670, 0.6, -108), color = Color3.fromRGB(255, 200, 120), mat = M.Neon, collide = false, parent = cellar })
+	pointLight(lamp, 24, 1, Color3.fromRGB(255, 170, 90), true)
+	downRamp(hole[1], hole[2], hole[4], hole[3], UNDER_FLOOR, Color3.fromRGB(90, 65, 55))
+	secretArea("OldTownCellar", "The Forgotten Cellar", V((bx0 + bx1) / 2, 8, (bz0 + bz1) / 2), V(bx1 - bx0 - 2, 16, bz1 - bz0 - 2))
+
+	-- catacombs below, joined to the Industrial underground by the old tunnel
+	undergroundRoom(-720, -640, -228, -172, UNDER_FLOOR, -4, Color3.fromRGB(110, 90, 75), { S = { -684, -676, UNDER_FLOOR + 12 }, E = { TUNNEL_Z - 6, TUNNEL_Z + 6, UNDER_FLOOR + 12 } })
+	local cata = model("Catacombs")
+	for _, x in { -705, -690, -670, -655 } do
+		P({ name = "Pillar", size = V(3, 16, 3), cf = CF(x, UNDER_FLOOR + 8, -200), color = Color3.fromRGB(150, 135, 115), mat = M.Limestone, parent = cata })
+	end
+	for _, pos in { V(-710, 0, -220), V(-650, 0, -180), V(-700, 0, -180) } do
+		local candle = P({ name = "Candle", size = V(0.5, 1.4, 0.5), cf = CF(pos.X, UNDER_FLOOR + 0.7, pos.Z), color = Color3.fromRGB(255, 210, 140), mat = M.Neon, collide = false, parent = cata })
+		pointLight(candle, 26, 1.2, Color3.fromRGB(255, 170, 90), true)
+	end
+	signBoard("CataSign", V(-680, UNDER_FLOOR + 9, -227.4), V(22, 3, 0.4), V(0, 0, 1), "OLD TOWN CATACOMBS · EST. 1871", Color3.fromRGB(240, 210, 150), nil, cata)
+	secretArea("OldTownCatacombs", "Old Town Catacombs", V(-680, UNDER_FLOOR + 8, -200), V(80, 16, 56))
+end
+
+---------------------------------------------------------------------------
+-- World edges: invisible walls so nobody walks off the map
+---------------------------------------------------------------------------
+local function buildBounds()
+	local f = Instance.new("Folder")
+	f.Name = "Bounds"
+	f.Parent = root
+	local lo, hi = DC.WORLD_MIN, DC.WORLD_MAX
+	local h, y = 400, 150
+	local cx, cz = (lo.X + hi.X) / 2, (lo.Z + hi.Z) / 2
+	local w, d = hi.X - lo.X, hi.Z - lo.Z
+	for _, spec in {
+		{ V(2, h, d + 4), V(lo.X - 1, y, cz) },
+		{ V(2, h, d + 4), V(hi.X + 1, y, cz) },
+		{ V(w + 4, h, 2), V(cx, y, lo.Z - 1) },
+		{ V(w + 4, h, 2), V(cx, y, hi.Z - 21) },
+	} do
+		local wall = P({ name = "WorldEdge", size = spec[1], cf = CF(spec[2]), transp = 1, parent = f })
+		wall.CanQuery = false
+		wall.CastShadow = false
+	end
+end
+
+---------------------------------------------------------------------------
+-- Subway riding (server side)
+---------------------------------------------------------------------------
+local lastRide: { [Player]: number } = {}
+local riding: { [Player]: boolean } = {}
+
+local function lazy(name: string): any
+	local mod = script.Parent:FindFirstChild(name)
+	if not mod then
+		return nil
+	end
+	local ok, result = pcall(require, mod)
+	return if ok then result else nil
+end
+
+local function rideBlocked(player: Player): string?
+	if not Net.alive(player) then
+		return "You can't ride right now."
+	end
+	if riding[player] then
+		return "You're already on a train."
+	end
+	if (player:GetAttribute("Interior") or "") ~= "" then
+		return "Head outside first."
+	end
+	local driving = player:GetAttribute("Driving")
+	if type(driving) == "string" and driving ~= "" then
+		return "Park your vehicle before taking the subway."
+	end
+	local event = player:GetAttribute("Event")
+	if type(event) == "string" and event ~= "" then
+		return "You're signed up for an event right now."
+	end
+	local training = player:GetAttribute("Training")
+	if type(training) == "string" and training ~= "" then
+		return "Finish your workout first."
+	end
+	local CourtGames = lazy("CourtGames")
+	if CourtGames and CourtGames.gameOf and CourtGames.gameOf(player) then
+		return "Finish your game first."
+	end
+	return nil
+end
+
+local function rootPosition(player: Player): Vector3?
+	local character = player.Character
+	local r = character and character:FindFirstChild("HumanoidRootPart")
+	return if r and r:IsA("BasePart") then r.Position else nil
+end
+
+local function setupSubway()
+	local SubwayUI = Net.remote("RemoteEvent", "SubwayUI") -- server -> client ("Open", stationId)
+	local SubwayRide = Net.remote("RemoteFunction", "SubwayRide") -- client -> server (destinationId) -> (ok, rideTimeOrMessage)
+
+	for id, prompt in stationPrompts do
+		prompt.Triggered:Connect(function(player)
+			if not Net.allow(player, "SubwayPrompt", 0.8) then
+				return
+			end
+			local pos = rootPosition(player)
+			local st = pos and DC.nearestStation(pos, DC.SUBWAY_RANGE + 4)
+			if not st or st.id ~= id then
+				return
+			end
+			local reason = rideBlocked(player)
+			if reason then
+				Net.notify(player, "SUBWAY", reason)
+				return
+			end
+			SubwayUI:FireClient(player, "Open", id)
+		end)
+	end
+
+	SubwayRide.OnServerInvoke = function(player: Player, destId: any)
+		if not Net.allow(player, "SubwayRide", 1) then
+			return false, "Hold on a second."
+		end
+		if type(destId) ~= "string" then
+			return false, "Pick a station."
+		end
+		local dest = DC.station(destId)
+		if not dest then
+			return false, "That station doesn't exist."
+		end
+		local pos = rootPosition(player)
+		local from = pos and DC.nearestStation(pos, DC.SUBWAY_RANGE + 4)
+		if not from then
+			return false, "Stand at a subway entrance to ride."
+		end
+		if from.id == dest.id then
+			return false, "You're already at " .. dest.name .. "."
+		end
+		local now = os.clock()
+		local wait = (lastRide[player] or -math.huge) + DC.SUBWAY_COOLDOWN - now
+		if wait > 0 then
+			return false, string.format("Next train in %ds.", math.ceil(wait))
+		end
+		local reason = rideBlocked(player)
+		if reason then
+			return false, reason
+		end
+		if not PlayerData.spendCash(player, DC.SUBWAY_FARE, "Subway fare") then
+			return false, string.format("The fare is $%d.", DC.SUBWAY_FARE)
+		end
+		lastRide[player] = now
+		riding[player] = true
+		task.spawn(function()
+			-- teleport while the rider's screen is black
+			task.wait(DC.SUBWAY_RIDE_TIME * 0.5)
+			if player.Parent and Net.alive(player) then
+				local Basketball = lazy("Basketball")
+				local ball = Basketball and Basketball.heldBall and Basketball.heldBall(player)
+				if ball then
+					Basketball.drop(ball)
+				end
+				Places.teleport(player, dest.exit)
+				player:SetAttribute("District", DC.at(dest.exit.Position))
+				local rides = player:GetAttribute("SubwayRides")
+				player:SetAttribute("SubwayRides", (if type(rides) == "number" then rides else 0) + 1)
+				player:SetAttribute("LastSubwayStation", dest.id)
+				Districts.subwayRide:Fire(player, from.id, dest.id)
+			end
+			task.wait(DC.SUBWAY_RIDE_TIME * 0.5)
+			riding[player] = nil
+		end)
+		return true, DC.SUBWAY_RIDE_TIME
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		lastRide[player] = nil
+		riding[player] = nil
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+-- District id at a world position ("Neighborhood", "Downtown", ..., or "Outskirts").
+function Districts.at(position: Vector3): string
+	return DC.at(position)
+end
+
+local function makeDistrict(id: string): Folder
+	local d = DC.get(id)
+	local f = Instance.new("Folder")
+	f.Name = id
+	if d then
+		f:SetAttribute("DisplayName", d.name)
+		f:SetAttribute("Center", d.center)
+		f:SetAttribute("Size", d.size)
+	end
+	f.Parent = root
+	current = f
+	return f
+end
+
+function Districts.build(cityModel: Model)
+	city = cityModel
+	H = CityBuilder.helpers
+	root = Instance.new("Folder")
+	root.Name = "Districts"
+	root.Parent = city
+
+	local steps: { { any } } = {
+		{ "Downtown", buildDowntown },
+		{ "Industrial", buildIndustrial },
+		{ "Beach", buildBeach },
+		{ "Luxury", buildLuxury },
+		{ "OldTown", buildOldTown },
+	}
+	for _, step in steps do
+		makeDistrict(step[1])
+		local ok, err = pcall(step[2])
+		if not ok then
+			warn("[CityGrind] District " .. step[1] .. " failed:", err)
+		end
+	end
+	-- tunnel under the Neighborhood belongs to no district folder of its own
+	current = root
+	local tunnelOk, tunnelErr = pcall(buildSecretTunnel)
+	if not tunnelOk then
+		warn("[CityGrind] Secret tunnel failed:", tunnelErr)
+	end
+	buildBounds()
+
+	-- subway: the Neighborhood's existing entrance gets a prompt, every other district gets a station
+	local transit = city:FindFirstChild("Transit")
+	local old = transit and transit:FindFirstChild("SubwayEntrance")
+	local well = old and old:FindFirstChild("Stairwell")
+	local hood = DC.station("Neighborhood")
+	if well and hood then
+		local oldPrompt = well:FindFirstChild("TakeSubway")
+		if oldPrompt then
+			oldPrompt:Destroy() -- left over in a saved City; replaced by a wired one
+		end
+		stationPrompts.Neighborhood = addPrompt(well, "TakeSubway", "Take Subway", "Subway · " .. hood.name, 10)
+		local points = city:FindFirstChild("MapPoints")
+		local point = points and points:FindFirstChild("Subway Station")
+		if point then
+			point.Name = "Subway · " .. hood.name
+		end
+	end
+	for _, st in DC.STATIONS do
+		if st.id ~= "Neighborhood" then
+			local folder = root:FindFirstChild(st.id)
+			current = folder or root
+			buildStation(st)
+		end
+	end
+	setupSubway()
+
+	-- moving / ticking parts
+	if #wheel.parts > 0 then
+		poseWheel()
+		local accumulator = 0
+		RunService.Heartbeat:Connect(function(dt)
+			if not wheel.active then
+				return
+			end
+			wheel.angle = (wheel.angle + dt * WHEEL_SPEED) % (math.pi * 2)
+			accumulator += dt
+			if accumulator >= 1 / 30 then
+				accumulator = 0
+				poseWheel()
+			end
+		end)
+	end
+
+	task.spawn(function()
+		local tick = 0
+		local lastNight: boolean? = nil
+		while true do
+			-- day / night for windows and lamps owned here
+			local night = Lighting.ClockTime < 6.3 or Lighting.ClockTime > 17.7
+			if night ~= lastNight then
+				lastNight = night
+				applyNight(night)
+			end
+			-- which district each player is in; whether anyone is near the ferris wheel
+			local nearWheel = false
+			for _, player in Players:GetPlayers() do
+				local pos = rootPosition(player)
+				if pos then
+					if pos.Y < 400 and (player:GetAttribute("Interior") or "") == "" then
+						local id = DC.at(pos)
+						if player:GetAttribute("District") ~= id then
+							player:SetAttribute("District", id)
+						end
+					end
+					if (pos - wheel.axle).Magnitude < 500 then
+						nearWheel = true
+					end
+				end
+			end
+			wheel.active = nearWheel
+			if tick % 5 == 0 then
+				pcall(refreshLeaderboard)
+			end
+			if tick % 4 == 0 then
+				pcall(cycleBillboards)
+			end
+			tick += 1
+			task.wait(2)
+		end
+	end)
+
+	local count = 0
+	for _, d in root:GetDescendants() do
+		if d:IsA("BasePart") then
+			count += 1
+		end
+	end
+	print(string.format("[CityGrind] Districts built: %d parts", count))
+end
+
+Players.PlayerAdded:Connect(function(player)
+	player:SetAttribute("District", "Neighborhood")
+	player:SetAttribute("SubwayRides", 0)
+	player:SetAttribute("LastSubwayStation", "")
+end)
+for _, player in Players:GetPlayers() do
+	if player:GetAttribute("District") == nil then
+		player:SetAttribute("District", "Neighborhood")
+	end
+end
+
+return Districts
+]=====])
 put(server, 'ModuleScript', 'Emotes', [=====[
 -- CITY GRIND: emotes (sections 31, 95). Server side.
 -- The server tweens the character's R15 Motor6D C0s (like the gym) so every
@@ -16934,22 +20108,3128 @@ end
 
 return Emotes
 ]=====])
+put(server, 'ModuleScript', 'EventDunk', [=====[
+-- CITY GRIND: Dunk Contest (city event kind, plugs into Events.registerKind).
+-- Entrants take turns at one hoop of a free public court. Each turn hands the
+-- dunker ATTEMPTS balls, one at a time; they pick their own run-up. A make only
+-- counts when Basketball judged the shot a "dunk" on the contest hoop, and the
+-- style points come from what the server saw of the dunker's body (sampled every
+-- frame): approach speed just before the release, hang time since leaving the
+-- floor, how far from the rim they took off, and a bonus the first time they
+-- finish from each approach (straight on / wing / baseline). No judges, no dice.
+--
+-- Saved: section "events".dunkBest (best contest total).
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local EventDunk = {}
+
+type Sample = { t: number, pos: Vector3, speed: number, air: boolean }
+type Dunk = { points: number, detail: string }
+type DTurn = {
+	player: Player,
+	name: string,
+	readyAt: number,
+	endsAt: number,
+	attempts: number,
+	score: number,
+	best: number,
+	dunks: { Dunk },
+	angles: { [string]: boolean },
+	ball: any?,
+	awaySince: number?,
+	samples: { Sample },
+	ended: boolean,
+	order: number,
+}
+type BallInfo = { turn: DTurn, ev: any, givenAt: number, held: boolean, releasedAt: number?, judged: boolean }
+
+local COURT_PREFER = { "GrandArena", "BeachCourt", "NeighborhoodCourt" }
+
+function EventDunk.init(ctx: any): any
+	local EC = ctx.EC
+	local D = EC.DUNK
+	local now = ctx.now
+
+	local balls: { [any]: BallInfo } = {}
+	local activeTurns: { [Player]: DTurn } = {} -- the dunker of every live contest
+
+	---------------------------------------------------------------------------
+	-- Body sampling for the dunker (every frame, last 3 seconds kept)
+	---------------------------------------------------------------------------
+	RunService.Heartbeat:Connect(function()
+		if next(activeTurns) == nil then
+			return
+		end
+		local clock = os.clock()
+		for p, turn in activeTurns do
+			local r = ctx.rootOf(p)
+			local h = ctx.humanoidOf(p)
+			if r and h then
+				local v = r.AssemblyLinearVelocity
+				table.insert(turn.samples, {
+					t = clock,
+					pos = r.Position,
+					speed = Vector3.new(v.X, 0, v.Z).Magnitude,
+					air = h.FloorMaterial == Enum.Material.Air,
+				})
+				while #turn.samples > 0 and clock - turn.samples[1].t > 3 do
+					table.remove(turn.samples, 1)
+				end
+			end
+		end
+	end)
+
+	-- Style points for a made dunk released at os.clock() `at` on rim `rim`.
+	local function judge(turn: DTurn, at: number, rim: Vector3, courtCenter: Vector3): Dunk
+		local topSpeed = 0
+		local lastGround: Sample? = nil
+		local atSample: Sample? = nil
+		for _, s in turn.samples do
+			if s.t <= at + 0.02 then
+				atSample = s
+				if s.t >= at - 0.8 then
+					topSpeed = math.max(topSpeed, s.speed)
+				end
+				if not s.air then
+					lastGround = s
+				end
+			end
+		end
+		local airborne = atSample ~= nil and atSample.air
+		local airTime = if airborne and lastGround then math.clamp(at - lastGround.t, 0, 1.5) elseif airborne then 1.5 else 0
+		local takeoffPos = if airborne and lastGround then lastGround.pos elseif atSample then atSample.pos else rim
+		local takeoff = ctx.flatDist(takeoffPos, rim)
+
+		local speedPts = math.clamp(math.floor((topSpeed - D.SPEED_FROM) / D.SPEED_STEP) + 1, 0, D.SPEED_MAX)
+		if topSpeed < D.SPEED_FROM then
+			speedPts = 0
+		end
+		local airPts = math.clamp(math.floor(airTime * D.AIR_PER_SECOND), 0, D.AIR_MAX)
+		local takeoffPts = 0
+		if takeoff >= D.TAKEOFF_FROM then
+			takeoffPts = math.clamp(math.floor((takeoff - D.TAKEOFF_FROM) / D.TAKEOFF_STEP) + 1, 0, D.TAKEOFF_MAX)
+		end
+		-- approach direction relative to the court's long axis (z)
+		local fromRim = ctx.flat(takeoffPos - rim)
+		local toCenter = ctx.flat(courtCenter - rim)
+		local angleName = "straight"
+		if fromRim.Magnitude > 0.5 and toCenter.Magnitude > 0.5 then
+			local deg = math.deg(math.acos(math.clamp(fromRim.Unit:Dot(toCenter.Unit), -1, 1)))
+			angleName = if deg < 25 then "straight" elseif deg < 62 then "wing" else "baseline"
+		end
+		local varietyPts = 0
+		if not turn.angles[angleName] then
+			turn.angles[angleName] = true
+			varietyPts = D.NEW_ANGLE
+		end
+		local total = D.BASE + speedPts + airPts + takeoffPts + varietyPts
+		local detail = string.format("%d pts: made +%d, speed +%d (%d st/s), air +%d (%.2fs), take-off +%d (%.1f st), %s%s", total, D.BASE, speedPts, math.floor(topSpeed), airPts, airTime, takeoffPts, takeoff, angleName, if varietyPts > 0 then " +" .. varietyPts else "")
+		return { points = total, detail = detail }
+	end
+
+	---------------------------------------------------------------------------
+	-- Ball rules: contest balls only ever go to the dunker; the dunker only
+	-- uses contest balls; nothing can be stolen from or by the dunker.
+	---------------------------------------------------------------------------
+	local policy = Basketball.policy
+	local canHold = policy.canHold
+	policy.canHold = function(player, ball)
+		local info = balls[ball]
+		if info then
+			return info.turn.player == player and not info.releasedAt and not info.turn.ended
+		end
+		if activeTurns[player] then
+			return false
+		end
+		return canHold(player, ball)
+	end
+	local canSteal = policy.canSteal
+	policy.canSteal = function(player, victim, ball)
+		if balls[ball] or activeTurns[player] or activeTurns[victim] then
+			return false
+		end
+		return canSteal(player, victim, ball)
+	end
+	local passTargets = policy.passTargets
+	policy.passTargets = function(player, ball)
+		if balls[ball] then
+			return {}
+		end
+		return passTargets(player, ball)
+	end
+
+	local function dropBall(ball: any)
+		balls[ball] = nil
+		Basketball.destroy(ball)
+	end
+
+	---------------------------------------------------------------------------
+	-- Turns
+	---------------------------------------------------------------------------
+	local function endTurn(ev: any, reason: string?)
+		local d = ev.data
+		local turn: DTurn? = d.turn
+		if not turn then
+			return
+		end
+		d.turn = nil
+		turn.ended = true
+		if activeTurns[turn.player] == turn then
+			activeTurns[turn.player] = nil
+		end
+		if turn.ball then
+			dropBall(turn.ball)
+			turn.ball = nil
+		end
+		table.insert(d.done, turn)
+		if turn.player.Parent then
+			ctx.announce({ turn.player }, string.format("%d POINTS", turn.score))
+			if reason then
+				ctx.notify(turn.player, "TURN OVER", reason)
+			end
+		end
+		ctx.markDirty()
+	end
+
+	local function startTurn(ev: any, p: Player)
+		local d = ev.data
+		local held = Basketball.heldBall(p)
+		if held then
+			Basketball.drop(held)
+		end
+		local t = now()
+		local turn: DTurn = {
+			player = p,
+			name = p.DisplayName,
+			readyAt = t + D.READY,
+			endsAt = t + D.READY + D.TURN,
+			attempts = 0,
+			score = 0,
+			best = 0,
+			dunks = {},
+			angles = {},
+			ball = nil,
+			awaySince = nil,
+			samples = {},
+			ended = false,
+			order = (table.find(d.order, p) or 99),
+		}
+		d.turn = turn
+		activeTurns[p] = turn
+		local character = p.Character
+		if character then
+			character:PivotTo(CFrame.lookAt(d.start, Vector3.new(d.rim.X, d.start.Y, d.rim.Z)))
+		end
+		ctx.announce({ p }, string.format("YOUR TURN! %d DUNKS", D.ATTEMPTS))
+		ctx.notify(p, "YOUR TURN", "Take any run-up you like. Speed, hang time, a long take-off and new angles all score. Only real dunks count.")
+		ctx.markDirty()
+	end
+
+	local function giveBall(ev: any, turn: DTurn)
+		local r = ctx.rootOf(turn.player)
+		if not r then
+			return
+		end
+		local ball = Basketball.newBall(r.Position + Vector3.new(0, 2, 0))
+		ball.owner = turn.player
+		ball.court = ev.data.court
+		balls[ball] = { turn = turn, ev = ev, givenAt = os.clock(), held = false, releasedAt = nil, judged = false }
+		turn.ball = ball
+		turn.attempts += 1
+		Basketball.give(ball, turn.player)
+		ctx.announce({ turn.player }, string.format("DUNK %d / %d", turn.attempts, D.ATTEMPTS))
+	end
+
+	local function scoreMiss(turn: DTurn, why: string)
+		table.insert(turn.dunks, { points = 0, detail = why })
+		if turn.player.Parent then
+			ctx.announce({ turn.player }, why:upper())
+		end
+		ctx.markDirty()
+	end
+
+	Basketball.scored.connect(function(ball, hoop, shot)
+		local info = balls[ball]
+		if not info or info.judged then
+			return
+		end
+		local turn = info.turn
+		local ev = info.ev
+		local d = ev.data
+		if not d or d.turn ~= turn then
+			return
+		end
+		info.judged = true
+		if shot and shot.shooter == turn.player and shot.kind == "dunk" and hoop.court == d.court and hoop.side == d.side then
+			local dunk = judge(turn, shot.at, d.rim, d.center)
+			table.insert(turn.dunks, dunk)
+			turn.score += dunk.points
+			turn.best = math.max(turn.best, dunk.points)
+			d.last = turn.name .. " · " .. dunk.detail
+			ctx.announce(ctx.audience(ev), string.format("%s +%d", turn.name:upper(), dunk.points))
+			ctx.markDirty()
+		elseif shot and shot.shooter == turn.player then
+			scoreMiss(turn, if hoop.court == d.court and hoop.side == d.side then "Not a dunk" else "Wrong hoop")
+		else
+			scoreMiss(turn, "No good")
+		end
+		task.delay(0.8, function()
+			if balls[ball] then
+				dropBall(ball)
+			end
+			if turn.ball == ball then
+				turn.ball = nil
+			end
+		end)
+	end)
+
+	---------------------------------------------------------------------------
+	-- Venue
+	---------------------------------------------------------------------------
+	local function build(ev: any, court: Model)
+		local folder = Instance.new("Folder")
+		folder.Name = "DunkContest"
+		folder.Parent = ctx.root
+		local center = ctx.courtCenter(court)
+		local side = "North"
+		local rim = ctx.rimOf(court, side) :: Vector3
+		local dir = ctx.flat(center - rim)
+		dir = if dir.Magnitude > 0.1 then dir.Unit else Vector3.new(0, 0, 1)
+		local floorY = center.Y + 0.45
+		local startFlat = Vector3.new(rim.X, floorY, rim.Z) + dir * D.START_DIST
+		ctx.part({
+			name = "StartMark",
+			size = Vector3.new(0.12, 5, 5),
+			cframe = CFrame.new(startFlat + Vector3.new(0, 0.04, 0)) * CFrame.Angles(0, 0, math.pi / 2),
+			color = Color3.fromRGB(255, 70, 70),
+			material = Enum.Material.Neon,
+			shape = Enum.PartType.Cylinder,
+			collide = false,
+			parent = folder,
+		})
+		local banner = ctx.part({
+			name = "Banner",
+			size = Vector3.new(24, 4, 0.4),
+			cframe = CFrame.new(center + Vector3.new(0, 18, 0)),
+			color = Color3.fromRGB(20, 20, 26),
+			collide = false,
+			parent = folder,
+		})
+		for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+			ctx.surfaceText(banner, face, "💥 DUNK CONTEST", Color3.fromRGB(255, 90, 90))
+		end
+		ev.data = {
+			court = court,
+			side = side,
+			rim = rim,
+			center = center,
+			start = startFlat + Vector3.new(0, 3, 0),
+			folder = folder,
+			queue = {} :: { Player },
+			order = {} :: { Player },
+			done = {} :: { DTurn },
+			turn = nil :: DTurn?,
+			entrants = 0,
+			graceUntil = nil :: number?,
+			last = nil :: string?,
+		}
+	end
+
+	---------------------------------------------------------------------------
+	-- Handlers
+	---------------------------------------------------------------------------
+	local function pickCourt(prefer: any): Model?
+		return ctx.freeCourt(prefer or COURT_PREFER, ctx.threeCourt()) or ctx.freeCourt(prefer or COURT_PREFER, nil)
+	end
+
+	local handlers = {}
+	handlers.tip = "Be on the contest court at check-in."
+
+	function handlers.available(): boolean
+		return pickCourt(nil) ~= nil
+	end
+
+	function handlers.pickVenue(): (Vector3, string?, any)
+		local court = pickCourt(nil)
+		if not court then
+			return nil :: any, nil, nil
+		end
+		return ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8), ctx.courtLabel(court), court
+	end
+
+	function handlers.goLive(ev: any): (string, string?)
+		local court = pickCourt(if ev.venue then ev.venue else nil)
+		if not court then
+			return "postpone", "Every court is busy with games."
+		end
+		build(ev, court) -- builds first so a failed build never leaves the court claimed
+		ctx.claimCourt(court, ev.name)
+		ev.venue = court
+		ev.location = ctx.courtLabel(court)
+		ev.pos = ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8)
+		ev.state = "Checkin"
+		ev.phase = "Check-in: get on the court"
+		ev.phaseEndsAt = now() + D.CHECKIN
+		return "live", nil
+	end
+
+	local function finish(ev: any)
+		local d = ev.data
+		local turns = table.clone(d.done)
+		table.sort(turns, function(a: DTurn, b: DTurn)
+			if a.score ~= b.score then
+				return a.score > b.score
+			end
+			if a.best ~= b.best then
+				return a.best > b.best
+			end
+			return a.order < b.order
+		end)
+		local ranked, lines = {}, {}
+		for place, turn in turns do
+			local p = turn.player
+			if p.Parent and ctx.isRegistered(ev, p) then
+				table.insert(ranked, p)
+				local sec = ctx.section(p)
+				if sec and turn.score > (sec.dunkBest or 0) then
+					sec.dunkBest = turn.score
+					PlayerData.markChanged(p)
+					ctx.notify(p, "PERSONAL BEST", string.format("New Dunk Contest best: %d points.", turn.score))
+				end
+				if turn.score > 0 then
+					PlayerData.addStatXP(p, "Vertical", 20)
+					PlayerData.addStatXP(p, "Finishing", 10)
+				end
+			end
+			if place <= 5 then
+				local made = 0
+				for _, dk in turn.dunks do
+					if dk.points > 0 then
+						made += 1
+					end
+				end
+				table.insert(lines, string.format("%d. %s — %d pts (%d/%d dunks, best %d)", place, turn.name, turn.score, made, D.ATTEMPTS, turn.best))
+			end
+		end
+		local scores = {}
+		for _, turn in turns do
+			scores[turn.player] = turn.score
+		end
+		ctx.payPodium(ev, ranked, d.entrants, function(p: Player)
+			return (scores[p] or 0) > 0
+		end)
+		ctx.pushResult(ev, lines, turns[1] and turns[1].name or nil)
+		if turns[1] then
+			ctx.announce(ctx.audience(ev), turns[1].name:upper() .. " WINS THE DUNK CONTEST")
+		end
+		ctx.closeEvent(ev)
+	end
+
+	function handlers.tick(ev: any)
+		local d = ev.data
+		local court: Model = d.court
+		if not court.Parent then
+			ctx.cancelEvent(ev, "The court is gone.")
+			return
+		end
+		local t = now()
+		if ev.state == "Checkin" then
+			if t < ev.phaseEndsAt then
+				return
+			end
+			for _, p in table.clone(ev.registered) do
+				if p.Parent and ctx.onCourt(court, p, 10) and not p:GetAttribute("InGame") then
+					table.insert(d.queue, p)
+					table.insert(d.order, p)
+				else
+					ctx.dropEntrant(ev, p, "MISSED CHECK-IN", "You weren't on the court when the Dunk Contest started.")
+				end
+			end
+			d.entrants = #d.queue
+			if d.entrants < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, string.format("A dunk contest needs at least %d dunkers on the court.", ctx.minEntrants(ev.kind)))
+				return
+			end
+			ev.state = "Running"
+			ev.phase = "Dunking"
+			ev.phaseEndsAt = 0
+			ctx.markDirty()
+			return
+		end
+
+		local turn: DTurn? = d.turn
+		if turn then
+			local p = turn.player
+			local h = ctx.humanoidOf(p)
+			if not p.Parent or not ctx.isRegistered(ev, p) then
+				endTurn(ev, nil)
+			elseif not h or h.Health <= 0 then
+				endTurn(ev, "You went down mid-turn.")
+			elseif not ctx.onFoot(p) then
+				endTurn(ev, "No vehicles or seats in the dunk contest.")
+			else
+				if not ctx.onCourt(court, p, 8) then
+					turn.awaySince = turn.awaySince or t
+					if t - (turn.awaySince :: number) > 5 then
+						endTurn(ev, "You left the court.")
+					end
+				else
+					turn.awaySince = nil
+				end
+				if d.turn == turn and t >= turn.endsAt then
+					-- a ball already in the air still gets judged by the grace below
+					endTurn(ev, "Time!")
+				end
+			end
+			if d.turn == turn and t >= turn.readyAt then
+				local ball = turn.ball
+				local info = ball and balls[ball]
+				if ball and not info then
+					turn.ball = nil
+				elseif ball and info then
+					local clock = os.clock()
+					if ball.holder == p then
+						info.held = true
+					elseif ball.holder == nil then
+						if not info.held then
+							-- never reached their hands (no character): hand out a fresh one
+							if clock - info.givenAt > 2 then
+								dropBall(ball)
+								turn.ball = nil
+								turn.attempts -= 1
+							end
+						elseif not info.judged then
+							info.releasedAt = info.releasedAt or clock
+							if clock - (info.releasedAt :: number) > D.MISS_RETURN then
+								info.judged = true
+								dropBall(ball)
+								turn.ball = nil
+								scoreMiss(turn, "Missed")
+							end
+						end
+					else
+						dropBall(ball)
+						turn.ball = nil
+					end
+				end
+				if not turn.ball then
+					if turn.attempts < D.ATTEMPTS then
+						giveBall(ev, turn)
+					else
+						endTurn(ev, nil)
+					end
+				end
+			end
+		end
+
+		if not d.turn then
+			while #d.queue > 0 and not d.turn do
+				local p = table.remove(d.queue, 1) :: Player
+				if p.Parent and ctx.isRegistered(ev, p) then
+					if ctx.onCourt(court, p, 30) then
+						startTurn(ev, p)
+					else
+						ctx.notify(p, "SKIPPED", "You weren't near the court when your turn came up.")
+						table.insert(d.done, {
+							player = p,
+							name = p.DisplayName,
+							readyAt = t,
+							endsAt = t,
+							attempts = 0,
+							score = 0,
+							best = 0,
+							dunks = {},
+							angles = {},
+							samples = {},
+							ended = true,
+							order = table.find(d.order, p) or 99,
+						})
+					end
+				end
+			end
+		end
+
+		if d.turn or #d.queue > 0 then
+			d.graceUntil = nil
+			return
+		end
+		if not d.graceUntil then
+			d.graceUntil = t + 2
+			return
+		end
+		if t >= d.graceUntil then
+			finish(ev)
+		end
+	end
+
+	function handlers.live(ev: any, viewer: Player): any
+		local d = ev.data
+		local lines, status = {}, ""
+		local turn: DTurn? = d.turn
+		if ev.state == "Checkin" then
+			local here = 0
+			for _, p in ev.registered do
+				if ctx.onCourt(d.court, p, 10) then
+					here += 1
+				end
+			end
+			table.insert(lines, string.format("%d / %d dunkers on %s", here, #ev.registered, ctx.courtLabel(d.court)))
+			table.insert(lines, string.format("Scoring: made %d · speed up to +%d · air up to +%d · take-off up to +%d · new angle +%d", D.BASE, D.SPEED_MAX, D.AIR_MAX, D.TAKEOFF_MAX, D.NEW_ANGLE))
+			status = if ctx.isRegistered(ev, viewer)
+				then (if ctx.onCourt(d.court, viewer, 10) then "Checked in. Wait for your turn." else "Get onto the contest court!")
+				else "Check-in is open"
+		else
+			if turn then
+				local clock = if now() < turn.readyAt then "ready" else ctx.EC.formatIn(turn.endsAt - now())
+				table.insert(lines, string.format("On the hoop: %s · %d pts · dunk %d/%d · %s", turn.name, turn.score, math.max(1, turn.attempts), D.ATTEMPTS, clock))
+			end
+			if d.last then
+				table.insert(lines, "Last: " .. d.last)
+			end
+			local board = table.clone(d.done)
+			table.sort(board, function(a: DTurn, b: DTurn)
+				return a.score > b.score
+			end)
+			for i = 1, math.min(3, #board) do
+				table.insert(lines, string.format("#%d %s — %d", i, board[i].name, board[i].score))
+			end
+			if #d.queue > 0 then
+				local names = {}
+				for i = 1, math.min(3, #d.queue) do
+					table.insert(names, d.queue[i].DisplayName)
+				end
+				table.insert(lines, "Up next: " .. table.concat(names, ", "))
+			end
+			if turn and turn.player == viewer then
+				status = if now() < turn.readyAt then "Get ready…" else string.format("YOUR TURN · %d pts · dunk %d/%d", turn.score, math.max(1, turn.attempts), D.ATTEMPTS)
+			elseif table.find(d.queue, viewer) then
+				status = string.format("You're #%d in line", table.find(d.queue, viewer) :: number)
+			elseif ctx.isRegistered(ev, viewer) then
+				status = "Done dunking. Waiting for results."
+			else
+				status = "Watching"
+			end
+		end
+		return {
+			lines = lines,
+			status = status,
+			endsAt = if turn and turn.player == viewer then turn.endsAt elseif ev.state == "Checkin" then ev.phaseEndsAt else 0,
+			highlight = turn ~= nil and turn.player == viewer,
+		}
+	end
+
+	function handlers.leave(ev: any, p: Player)
+		local d = ev.data
+		local i = table.find(d.queue, p)
+		if i then
+			table.remove(d.queue, i)
+		end
+		if d.turn and d.turn.player == p then
+			endTurn(ev, nil)
+		end
+	end
+
+	function handlers.cleanup(ev: any)
+		local d = ev.data
+		if d then
+			if d.turn then
+				activeTurns[d.turn.player] = nil
+				d.turn.ended = true
+				d.turn = nil
+			end
+			for ball, info in balls do
+				if info.ev == ev then
+					dropBall(ball)
+				end
+			end
+			if d.folder then
+				d.folder:Destroy()
+			end
+			ctx.releaseCourt(d.court)
+		end
+	end
+
+	Players.PlayerRemoving:Connect(function(p)
+		activeTurns[p] = nil
+	end)
+
+	return handlers
+end
+
+return EventDunk
+]=====])
+put(server, 'ModuleScript', 'EventFashion', [=====[
+-- CITY GRIND: Fashion Show (city event kind, plugs into Events.registerKind).
+-- A pop-up runway is built on open ground (checked with raycasts / empty-box
+-- tests, falling back through EC.FASHION.SPOTS). Entrants check in at the
+-- runway wearing a Closet outfit (the Shops wardrobe, not the Roblox-avatar
+-- toggle), then walk one at a time: reach the end of the runway in time and
+-- hold the pose. The outfit shown on the ballot is read from the server-side
+-- wardrobe when the walk starts. Then the crowd votes: entrants plus anyone
+-- standing at the runway, one vote each, never for yourself. Most votes wins;
+-- a tie goes to whoever walked first.
+--
+-- Saved: section "events".fashionWins.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local ShopsConfig = require(shared:WaitForChild("ShopsConfig"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local EventKit = require(script.Parent:WaitForChild("EventKit"))
+
+local EventFashion = {}
+
+type Model_ = { userId: number, player: Player, name: string, outfit: string, pieces: number, order: number, walked: boolean }
+type Walk = { entry: Model_, startedAt: number, endsAt: number, reachedAt: number?, offSince: number? }
+
+local PINK = Color3.fromRGB(255, 110, 200)
+
+-- "Black Block Hoodie · Dark Wash Baggy Jeans · ..." from the saved wardrobe.
+local function describeOutfit(player: Player): (string?, number)
+	local w = PlayerData.section(player, "wardrobe")
+	if not w then
+		return nil, 0
+	end
+	if w.useRobloxAvatar then
+		return nil, 0
+	end
+	local bits = {}
+	for _, slot in ShopsConfig.SLOTS do
+		local id = w.equipped and w.equipped[slot]
+		local item = type(id) == "string" and ShopsConfig.ITEMS[id]
+		if item then
+			local idx = (w.colours and w.colours[slot]) or 1
+			local variant = item.variants[idx] or item.variants[1]
+			table.insert(bits, (if variant and #item.variants > 1 then variant.name .. " " else "") .. item.name)
+		end
+	end
+	if #bits == 0 then
+		return nil, 0
+	end
+	return table.concat(bits, " · "), #bits
+end
+
+function EventFashion.init(ctx: any): any
+	local EC = ctx.EC
+	local F = EC.FASHION
+	local now = ctx.now
+	local RUNWAY: Vector3 = F.RUNWAY
+	local FOOTPRINT = Vector3.new(RUNWAY.X + 24, 8, RUNWAY.Z + 16)
+
+	local function findSpot(first: Vector3?): Vector3?
+		local list = {}
+		if first then
+			table.insert(list, first)
+		end
+		for _, s in F.SPOTS do
+			table.insert(list, s)
+		end
+		return EventKit.openSpot(list, FOOTPRINT, { ctx.root })
+	end
+
+	---------------------------------------------------------------------------
+	-- Venue: runway along +z, the walk starts at the backdrop (-z end)
+	---------------------------------------------------------------------------
+	local function build(ground: Vector3): any
+		local folder = Instance.new("Folder")
+		folder.Name = "FashionShow"
+		folder.Parent = ctx.root
+		local topY = ground.Y + RUNWAY.Y
+		local center = Vector3.new(ground.X, ground.Y + RUNWAY.Y / 2, ground.Z)
+		ctx.part({ name = "Runway", size = RUNWAY, cframe = CFrame.new(center), color = Color3.fromRGB(245, 245, 250), material = Enum.Material.SmoothPlastic, parent = folder })
+		for _, s in { -1, 1 } do
+			ctx.part({
+				name = "EdgeGlow",
+				size = Vector3.new(0.3, 0.2, RUNWAY.Z),
+				cframe = CFrame.new(center + Vector3.new(s * (RUNWAY.X / 2 - 0.15), RUNWAY.Y / 2 + 0.1, 0)),
+				color = PINK,
+				material = Enum.Material.Neon,
+				collide = false,
+				parent = folder,
+			})
+			-- low stands for the crowd along both sides
+			for row = 1, 2 do
+				ctx.part({
+					name = "Stand",
+					size = Vector3.new(3, row * 1.2, RUNWAY.Z - 10),
+					cframe = CFrame.new(Vector3.new(ground.X + s * (RUNWAY.X / 2 + 4 + row * 3), ground.Y + row * 0.6, ground.Z + 3)),
+					color = Color3.fromRGB(40, 40, 48),
+					material = Enum.Material.Metal,
+					parent = folder,
+				})
+			end
+		end
+		-- steps up at the start end
+		local startZ = ground.Z - RUNWAY.Z / 2
+		ctx.part({ name = "Step", size = Vector3.new(RUNWAY.X, RUNWAY.Y / 2, 3), cframe = CFrame.new(Vector3.new(ground.X, ground.Y + RUNWAY.Y / 4, startZ - 1.5)), color = Color3.fromRGB(220, 220, 228), parent = folder })
+		-- backdrop + sign
+		local back = ctx.part({
+			name = "Backdrop",
+			size = Vector3.new(RUNWAY.X + 10, 14, 0.8),
+			cframe = CFrame.new(Vector3.new(ground.X, ground.Y + 7, startZ - 4.5)),
+			color = Color3.fromRGB(20, 18, 26),
+			parent = folder,
+		})
+		ctx.surfaceText(back, Enum.NormalId.Back, "CITY GRIND\nFASHION SHOW", PINK, 20)
+		ctx.surfaceText(back, Enum.NormalId.Front, "👗 FASHION SHOW", PINK, 20)
+		local endMark = ctx.part({
+			name = "PoseMark",
+			size = Vector3.new(0.1, 5, 5),
+			cframe = CFrame.new(Vector3.new(ground.X, topY + 0.06, ground.Z + RUNWAY.Z / 2 - 3.5)) * CFrame.Angles(0, 0, math.pi / 2),
+			color = PINK,
+			material = Enum.Material.Neon,
+			shape = Enum.PartType.Cylinder,
+			collide = false,
+			parent = folder,
+		})
+		for _, s in { -1, 1 } do
+			local lamp = ctx.part({
+				name = "Spot",
+				size = Vector3.new(1, 1, 1),
+				cframe = CFrame.new(Vector3.new(ground.X + s * (RUNWAY.X / 2 + 2), topY + 9, ground.Z + RUNWAY.Z / 2 - 3)),
+				color = Color3.fromRGB(255, 240, 250),
+				material = Enum.Material.Neon,
+				collide = false,
+				parent = folder,
+			})
+			local light = Instance.new("SpotLight")
+			light.Face = Enum.NormalId.Bottom
+			light.Range = 18
+			light.Angle = 70
+			light.Brightness = 3
+			light.Color = Color3.fromRGB(255, 220, 240)
+			light.Parent = lamp
+		end
+		return {
+			folder = folder,
+			ground = ground,
+			topY = topY,
+			startPos = Vector3.new(ground.X, topY + 3, startZ + 3),
+			endPos = endMark.Position,
+			center = center,
+		}
+	end
+
+	local function onRunway(d: any, p: Player): boolean
+		local r = ctx.rootOf(p)
+		if not r then
+			return false
+		end
+		local o = r.Position - d.venue.center
+		return math.abs(o.X) <= RUNWAY.X / 2 + 0.5 and math.abs(o.Z) <= RUNWAY.Z / 2 + 0.5 and r.Position.Y > d.venue.topY and r.Position.Y < d.venue.topY + 8
+	end
+
+	local function nearRunway(d: any, p: Player, range: number): boolean
+		local r = ctx.rootOf(p)
+		return r ~= nil and ctx.flatDist(r.Position, d.venue.center) <= range and math.abs(r.Position.Y - d.venue.topY) < 25
+	end
+
+	---------------------------------------------------------------------------
+	-- Results
+	---------------------------------------------------------------------------
+	local function candidates(d: any): { Model_ }
+		local list = {}
+		for _, e in d.models do
+			if e.walked then
+				table.insert(list, e)
+			end
+		end
+		return list
+	end
+
+	local function finish(ev: any)
+		local d = ev.data
+		local tally = EventKit.tally(d.box)
+		local list = candidates(d)
+		table.sort(list, function(a: Model_, b: Model_)
+			local va, vb = tally[a.userId] or 0, tally[b.userId] or 0
+			if va ~= vb then
+				return va > vb
+			end
+			return a.order < b.order
+		end)
+		local lines = {}
+		local place = 0
+		for i, e in list do
+			local votes = tally[e.userId] or 0
+			if i <= 5 then
+				table.insert(lines, string.format("%d. %s — %d vote%s", i, e.name, votes, if votes == 1 then "" else "s"))
+			end
+			local p = e.player
+			if p.Parent and ctx.isRegistered(ev, p) then
+				place += 1
+				ctx.payPlace(ev, p, place, #list, votes > 0)
+				if place == 1 and votes > 0 then
+					local sec = ctx.section(p)
+					if sec then
+						sec.fashionWins = (sec.fashionWins or 0) + 1
+						PlayerData.markChanged(p)
+					end
+					PlayerData.addFame(p, 10)
+				end
+			end
+		end
+		table.insert(lines, string.format("%d vote%s from the crowd", EventKit.voteCount(d.box), if EventKit.voteCount(d.box) == 1 then "" else "s"))
+		local top = list[1]
+		local winner = if top and (tally[top.userId] or 0) > 0 then top.name else nil
+		ctx.pushResult(ev, lines, winner)
+		if winner then
+			ctx.announce(ctx.audience(ev), winner:upper() .. " WINS THE FASHION SHOW")
+		end
+		ctx.closeEvent(ev)
+	end
+
+	local function canVote(ev: any, d: any, p: Player): boolean
+		if ctx.isRegistered(ev, p) then
+			return true
+		end
+		return nearRunway(d, p, F.SPECTATOR_RANGE)
+	end
+
+	local function startWalk(ev: any, e: Model_)
+		local d = ev.data
+		local outfit, pieces = describeOutfit(e.player)
+		if outfit then
+			e.outfit = outfit
+			e.pieces = pieces
+		end
+		local held = e.player.Character
+		if held then
+			held:PivotTo(CFrame.lookAt(d.venue.startPos, d.venue.startPos + Vector3.new(0, 0, 1)))
+		end
+		local t = now()
+		d.walk = { entry = e, startedAt = t, endsAt = t + F.WALK, reachedAt = nil, offSince = nil }
+		ev.phase = "Runway: " .. e.name
+		ctx.announce({ e.player }, "YOUR WALK! HIT THE PINK MARK")
+		ctx.announce(ctx.audience(ev), "NOW WALKING: " .. e.name:upper())
+		ctx.markDirty()
+	end
+
+	---------------------------------------------------------------------------
+	-- Handlers
+	---------------------------------------------------------------------------
+	local handlers = {}
+	handlers.tip = "Put on your best fit in the Closet (Shops), then be at the runway for check-in."
+
+	function handlers.available(): boolean
+		return findSpot(nil) ~= nil
+	end
+
+	function handlers.pickVenue(): (Vector3, string?, any)
+		local g = findSpot(nil)
+		if not g then
+			return nil :: any, nil, nil
+		end
+		local name = EventKit.landmark(g, 200)
+		return g, if name then "Runway near " .. name else "Pop-up runway", g
+	end
+
+	function handlers.goLive(ev: any): (string, string?)
+		local g = findSpot(if typeof(ev.venue) == "Vector3" then ev.venue else nil)
+		if not g then
+			return "postpone", "The runway spot is blocked."
+		end
+		local venue = build(g)
+		ev.venue = g
+		ev.pos = g + Vector3.new(0, 0, RUNWAY.Z / 2 + 6)
+		local name = EventKit.landmark(g, 200)
+		ev.location = if name then "Runway near " .. name else "Pop-up runway"
+		ev.data = {
+			venue = venue,
+			folder = venue.folder,
+			models = {} :: { Model_ },
+			queue = {} :: { Model_ },
+			walk = nil :: Walk?,
+			box = EventKit.newVotes(),
+			autoWatched = {} :: { [Player]: boolean },
+			entrants = 0,
+		}
+		ev.state = "Checkin"
+		ev.phase = "Check-in at the runway"
+		ev.phaseEndsAt = now() + F.CHECKIN
+		return "live", nil
+	end
+
+	local function autoWatch(ev: any, d: any)
+		for _, p in Players:GetPlayers() do
+			if not ctx.isRegistered(ev, p) and not d.autoWatched[p] and nearRunway(d, p, F.SPECTATOR_RANGE) then
+				d.autoWatched[p] = true
+				ev.watchers[p] = true
+				ctx.notify(p, "👗 FASHION SHOW", "You're in the crowd! Watch the walks and vote for the best fit.")
+			end
+		end
+	end
+
+	function handlers.tick(ev: any)
+		local d = ev.data
+		local t = now()
+		if not d.folder.Parent then
+			ctx.cancelEvent(ev, "The runway is gone.")
+			return
+		end
+		autoWatch(ev, d)
+
+		if ev.state == "Checkin" then
+			if t < ev.phaseEndsAt then
+				return
+			end
+			for _, p in table.clone(ev.registered) do
+				if not p.Parent or not nearRunway(d, p, 40) or not ctx.onFoot(p) then
+					ctx.dropEntrant(ev, p, "MISSED CHECK-IN", "You weren't at the runway when the Fashion Show started.")
+				else
+					local outfit, pieces = describeOutfit(p)
+					if not outfit then
+						ctx.dropEntrant(ev, p, "NO CLOSET OUTFIT", "Fashion Show fits come from your Closet. Turn off \"Use my Roblox avatar\" in the Closet next time.")
+					else
+						local e: Model_ = { userId = p.UserId, player = p, name = p.DisplayName, outfit = outfit, pieces = pieces, order = #d.models + 1, walked = false }
+						table.insert(d.models, e)
+						table.insert(d.queue, e)
+					end
+				end
+			end
+			d.entrants = #d.models
+			if d.entrants < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, string.format("A fashion show needs at least %d models at the runway.", ctx.minEntrants(ev.kind)))
+				return
+			end
+			ev.state = "Running"
+			ev.phase = "Runway"
+			ev.phaseEndsAt = 0
+			ctx.markDirty()
+			return
+		end
+
+		if ev.state == "Running" then
+			local walk: Walk? = d.walk
+			if walk then
+				local e = walk.entry
+				local p = e.player
+				local done = false
+				if not p.Parent or not ctx.isRegistered(ev, p) then
+					done = true
+				elseif not onRunway(d, p) then
+					walk.offSince = walk.offSince or t
+					if t - (walk.offSince :: number) > 2.5 then
+						ctx.notify(p, "OFF THE RUNWAY", "You stepped off the runway, so the walk doesn't count.")
+						done = true
+					end
+				else
+					walk.offSince = nil
+					local r = ctx.rootOf(p)
+					local atEnd = r ~= nil and ctx.flatDist(r.Position, d.venue.endPos) <= 4
+					if atEnd then
+						walk.reachedAt = walk.reachedAt or t
+						if t - (walk.reachedAt :: number) >= F.POSE then
+							e.walked = true
+							done = true
+							ctx.announce(ctx.audience(ev), e.name:upper() .. " SERVES!")
+						end
+					else
+						walk.reachedAt = nil
+					end
+				end
+				if not done and t >= walk.endsAt + (if walk.reachedAt then F.POSE else 0) then
+					if p.Parent then
+						ctx.notify(p, "TIME", "You didn't hold the pose at the pink mark in time.")
+					end
+					done = true
+				end
+				if done then
+					d.walk = nil
+					ctx.markDirty()
+				end
+			end
+			if not d.walk then
+				while #d.queue > 0 and not d.walk do
+					local e = table.remove(d.queue, 1) :: Model_
+					if e.player.Parent and ctx.isRegistered(ev, e.player) then
+						if nearRunway(d, e.player, 60) then
+							startWalk(ev, e)
+						else
+							ctx.notify(e.player, "SKIPPED", "You weren't at the runway when your walk came up.")
+						end
+					end
+				end
+			end
+			if d.walk or #d.queue > 0 then
+				return
+			end
+			local walked = #candidates(d)
+			if walked < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, "Not enough models finished their walk for a vote.")
+				return
+			end
+			ev.state = "Voting"
+			ev.phase = "Crowd vote"
+			ev.phaseEndsAt = t + F.VOTE
+			for _, p in ctx.audience(ev) do
+				ctx.notify(p, "👗 VOTE NOW", "Pick the best fit in the event panel. One vote, not for yourself.")
+			end
+			ctx.markDirty()
+			return
+		end
+
+		-- Voting
+		local alive = 0
+		for _, e in candidates(d) do
+			if e.player.Parent and ctx.isRegistered(ev, e.player) then
+				alive += 1
+			end
+		end
+		if alive < ctx.minEntrants(ev.kind) then
+			ctx.cancelEvent(ev, "Too many models left before the vote finished.")
+			return
+		end
+		if t >= ev.phaseEndsAt then
+			finish(ev)
+		end
+	end
+
+	function handlers.live(ev: any, viewer: Player): any
+		local d = ev.data
+		local lines = {}
+		local out: any = { lines = lines, endsAt = ev.phaseEndsAt }
+		local status
+		if ev.state == "Checkin" then
+			local here = 0
+			for _, p in ev.registered do
+				if nearRunway(d, p, 40) then
+					here += 1
+				end
+			end
+			table.insert(lines, string.format("%d / %d models at the runway", here, #ev.registered))
+			if ctx.isRegistered(ev, viewer) then
+				local outfit = describeOutfit(viewer)
+				table.insert(lines, "Your fit: " .. (outfit or "none: turn off \"Use my Roblox avatar\" in the Closet"))
+				status = if nearRunway(d, viewer, 40) then "Checked in. Strike a pose while you wait." else "Get to the runway!"
+			else
+				status = "Models are arriving"
+			end
+		elseif ev.state == "Running" then
+			local walk: Walk? = d.walk
+			if walk then
+				table.insert(lines, "On the runway: " .. walk.entry.name)
+				table.insert(lines, "Wearing: " .. walk.entry.outfit)
+				out.endsAt = walk.endsAt
+			end
+			if #d.queue > 0 then
+				local names = {}
+				for i = 1, math.min(3, #d.queue) do
+					table.insert(names, d.queue[i].name)
+				end
+				table.insert(lines, "Up next: " .. table.concat(names, ", "))
+			end
+			if walk and walk.entry.player == viewer then
+				status = if walk.reachedAt then "HOLD THE POSE!" else "Walk to the pink mark at the end!"
+				out.highlight = true
+			elseif ctx.isRegistered(ev, viewer) then
+				local pos = 0
+				for i, e in d.queue do
+					if e.player == viewer then
+						pos = i
+					end
+				end
+				status = if pos > 0 then string.format("You walk #%d in line", pos) else "Walk done. Votes open after the last model."
+			else
+				status = "Watching the runway"
+			end
+		else
+			local voted = d.box.votes[viewer.UserId]
+			table.insert(lines, string.format("%d vote%s so far", EventKit.voteCount(d.box), if EventKit.voteCount(d.box) == 1 then "" else "s"))
+			local entries = {}
+			for _, e in candidates(d) do
+				table.insert(entries, { key = e.userId, name = e.name, detail = e.outfit, mine = e.userId == viewer.UserId })
+			end
+			local allowed = canVote(ev, d, viewer)
+			out.ballot = {
+				title = "👗 Best Fit",
+				note = if allowed then "One vote each. You can't vote for yourself." else "Stand at the runway to vote.",
+				entries = entries,
+				voted = voted,
+				canVote = voted == nil and allowed,
+				endsAt = ev.phaseEndsAt,
+			}
+			status = if voted then "Vote locked in ✓" elseif allowed then "Crowd vote: tap VOTE" else "Get to the runway to vote"
+		end
+		out.status = status
+		return out
+	end
+
+	function handlers.request(ev: any, player: Player, action: string, b: any, _c: any): any
+		local d = ev.data
+		if action ~= "Vote" then
+			return { ok = false, msg = "Nothing to do here right now." }
+		end
+		if ev.state ~= "Voting" then
+			return { ok = false, msg = "Voting isn't open." }
+		end
+		if not canVote(ev, d, player) then
+			return { ok = false, msg = "Only models and the crowd at the runway can vote." }
+		end
+		local ok, msg = EventKit.castVote(d.box, player, b, function(userId: number): boolean
+			for _, e in candidates(d) do
+				if e.userId == userId then
+					return true
+				end
+			end
+			return false
+		end)
+		if ok then
+			ctx.markDirty()
+		end
+		return { ok = ok, msg = msg, voted = d.box.votes[player.UserId] }
+	end
+
+	function handlers.leave(ev: any, p: Player)
+		local d = ev.data
+		for i, e in d.queue do
+			if e.player == p then
+				table.remove(d.queue, i)
+				break
+			end
+		end
+		if d.walk and d.walk.entry.player == p then
+			d.walk = nil
+		end
+	end
+
+	function handlers.cleanup(ev: any)
+		local d = ev.data
+		if d then
+			if d.folder then
+				d.folder:Destroy()
+			end
+			for p in d.autoWatched do
+				ev.watchers[p] = nil
+			end
+		end
+	end
+
+	return handlers
+end
+
+return EventFashion
+]=====])
+put(server, 'ModuleScript', 'EventHunt', [=====[
+-- CITY GRIND: Treasure Hunt (city event kind, plugs into Events.registerKind).
+-- The server hides HUNT.CACHES glowing caches on open ground spread over the
+-- districts (raycast + empty-box checks, so never inside a building). Caches
+-- appear one by one with a district clue, then a landmark hint, then a compass
+-- bearing (and a light pillar). The first registered hunter to physically reach
+-- a cache (server distance check every tick) claims it. Most caches wins; ties go
+-- to whoever got their last cache first. Everything is removed afterwards.
+--
+-- Saved: section "events".caches (lifetime caches found).
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local DistrictsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("DistrictsConfig"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local EventKit = require(script.Parent:WaitForChild("EventKit"))
+
+local EventHunt = {}
+
+type Cache = {
+	index: number,
+	district: string,
+	pos: Vector3,
+	model: Model,
+	core: BasePart,
+	revealAt: number,
+	landmarkAt: number,
+	bearingAt: number,
+	landmarkText: string,
+	bearingText: string,
+	visible: boolean,
+	pillar: boolean,
+	claimedBy: string?,
+}
+type Hunter = { player: Player, name: string, found: number, lastAt: number }
+
+local GOLD = Color3.fromRGB(255, 205, 60)
+
+function EventHunt.init(ctx: any): any
+	local EC = ctx.EC
+	local H = EC.HUNT
+	local now = ctx.now
+
+	local function blocked(pos: Vector3): boolean
+		-- keep caches out of gated / non-public court areas (the Hills private club)
+		for _, m in game:GetService("CollectionService"):GetTagged("Court") do
+			if m:IsA("Model") and not ctx.publicCourt(m) and ctx.flatDist(ctx.courtCenter(m), pos) < 70 then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function hints(pos: Vector3, districtId: string): (string, string)
+		local name, offset = EventKit.landmark(pos, 260)
+		local districtName = DistrictsConfig.displayName(districtId)
+		if name and offset then
+			local dist = offset.Magnitude
+			local landmarkText = string.format("near %s", name)
+			local bearingText = if dist < 12
+				then string.format("right by %s", name)
+				else string.format("%d studs %s of %s", math.floor(dist / 5 + 0.5) * 5, EventKit.compass(offset), name)
+			return landmarkText, bearingText
+		end
+		local d = DistrictsConfig.get(districtId)
+		local offset2 = if d then ctx.flat(pos - d.center) else Vector3.zero
+		local part = if offset2.Magnitude > 40 then EventKit.compass(offset2) .. " side of " .. districtName else "middle of " .. districtName
+		return "in the " .. part, string.format("%d studs %s of the %s centre", math.floor(offset2.Magnitude / 5 + 0.5) * 5, EventKit.compass(offset2), districtName)
+	end
+
+	local function makeCache(folder: Instance, index: number, pos: Vector3): (Model, BasePart)
+		local m = Instance.new("Model")
+		m.Name = "Cache" .. index
+		m.Parent = folder
+		local base = ctx.part({
+			name = "Chest",
+			size = Vector3.new(2.6, 1.6, 1.8),
+			cframe = CFrame.new(pos + Vector3.new(0, 0.8, 0)),
+			color = Color3.fromRGB(110, 70, 35),
+			material = Enum.Material.Wood,
+			collide = false,
+			parent = m,
+		})
+		base.Transparency = 1
+		local core = ctx.part({
+			name = "Glow",
+			size = Vector3.one * 1.3,
+			cframe = CFrame.new(pos + Vector3.new(0, 2.3, 0)),
+			color = GOLD,
+			material = Enum.Material.Neon,
+			shape = Enum.PartType.Ball,
+			collide = false,
+			parent = m,
+		})
+		core.Transparency = 1
+		local light = Instance.new("PointLight")
+		light.Color = GOLD
+		light.Range = 14
+		light.Brightness = 2
+		light.Enabled = false
+		light.Parent = core
+		local sparkle = Instance.new("ParticleEmitter")
+		sparkle.Color = ColorSequence.new(GOLD)
+		sparkle.LightEmission = 1
+		sparkle.Size = NumberSequence.new(0.35, 0)
+		sparkle.Lifetime = NumberRange.new(0.8, 1.4)
+		sparkle.Speed = NumberRange.new(1.5, 3)
+		sparkle.SpreadAngle = Vector2.new(180, 180)
+		sparkle.Rate = 12
+		sparkle.Enabled = false
+		sparkle.Parent = core
+		m.PrimaryPart = core
+		return m, core
+	end
+
+	local function show(cache: Cache)
+		cache.visible = true
+		for _, d in cache.model:GetDescendants() do
+			if d:IsA("BasePart") and d.Name ~= "Pillar" then
+				d.Transparency = 0
+			elseif d:IsA("PointLight") or d:IsA("ParticleEmitter") then
+				d.Enabled = true
+			end
+		end
+	end
+
+	local function addPillar(cache: Cache)
+		cache.pillar = true
+		local pillar = ctx.part({
+			name = "Pillar",
+			size = Vector3.new(160, 1.6, 1.6),
+			cframe = CFrame.new(cache.pos + Vector3.new(0, 82, 0)) * CFrame.Angles(0, 0, math.pi / 2),
+			color = GOLD,
+			material = Enum.Material.Neon,
+			shape = Enum.PartType.Cylinder,
+			collide = false,
+			parent = cache.model,
+		})
+		pillar.Transparency = 0.55
+	end
+
+	-- Spreads the caches over the districts (round robin, shuffled), falling
+	-- back to known open ground.
+	local function placeCaches(folder: Folder, startAt: number): { Cache }
+		local districts = table.clone(DistrictsConfig.LIST)
+		for i = #districts, 2, -1 do
+			local j = ctx.rng:NextInteger(1, i)
+			districts[i], districts[j] = districts[j], districts[i]
+		end
+		local used: { Vector3 } = {}
+		local caches: { Cache } = {}
+		local fallback = table.clone(H.FALLBACK)
+		for i = 1, H.CACHES do
+			local d = districts[(i - 1) % #districts + 1]
+			local pos: Vector3? = nil
+			for _ = 1, 4 do
+				local g = EventKit.randomSpot(ctx.rng, d.center, d.size, Vector3.new(4, 6, 4), 12, used, H.MIN_SPACING, { ctx.root })
+				if g and not blocked(g) then
+					pos = g
+					break
+				end
+			end
+			while not pos and #fallback > 0 do
+				local f = table.remove(fallback, ctx.rng:NextInteger(1, #fallback)) :: Vector3
+				local g = EventKit.groundAt(f, { ctx.root })
+				pos = g or Vector3.new(f.X, 0.3, f.Z)
+			end
+			if not pos then
+				break
+			end
+			local p = pos :: Vector3
+			table.insert(used, p)
+			local districtId = DistrictsConfig.at(p)
+			local landmarkText, bearingText = hints(p, districtId)
+			local model, core = makeCache(folder, i, p)
+			local revealAt = startAt + (i - 1) * H.CLUE_EVERY
+			table.insert(caches, {
+				index = i,
+				district = districtId,
+				pos = p,
+				model = model,
+				core = core,
+				revealAt = revealAt,
+				landmarkAt = revealAt + H.LANDMARK_AFTER,
+				bearingAt = revealAt + H.BEARING_AFTER,
+				landmarkText = landmarkText,
+				bearingText = bearingText,
+				visible = false,
+				pillar = false,
+				claimedBy = nil,
+			})
+		end
+		return caches
+	end
+
+	local function finish(ev: any)
+		local d = ev.data
+		local list: { Hunter } = {}
+		for _, h in d.hunters do
+			table.insert(list, h)
+		end
+		table.sort(list, function(a: Hunter, b: Hunter)
+			if a.found ~= b.found then
+				return a.found > b.found
+			end
+			return a.lastAt < b.lastAt
+		end)
+		local lines = {}
+		local place = 0
+		for i, h in list do
+			if i <= 5 then
+				table.insert(lines, string.format("%d. %s — %d cache%s", i, h.name, h.found, if h.found == 1 then "" else "s"))
+			end
+			local p = h.player
+			if p.Parent and ctx.isRegistered(ev, p) then
+				if h.found > 0 then
+					place += 1
+					PlayerData.addStatXP(p, "Stamina", 15)
+					ctx.payPlace(ev, p, place, d.entrants, true)
+				else
+					ctx.notify(p, "TREASURE HUNT OVER", "You didn't reach a cache this time. Clues get sharper the longer a cache stays hidden.")
+				end
+			end
+		end
+		local unclaimed = 0
+		for _, c in d.caches do
+			if not c.claimedBy then
+				unclaimed += 1
+			end
+		end
+		if unclaimed > 0 then
+			table.insert(lines, string.format("%d cache%s never found", unclaimed, if unclaimed == 1 then " was" else "s were"))
+		end
+		local winner = list[1] and list[1].found > 0 and list[1].name or nil
+		ctx.pushResult(ev, lines, winner)
+		if winner then
+			ctx.announce(ctx.audience(ev), winner:upper() .. " WINS THE TREASURE HUNT")
+		end
+		ctx.closeEvent(ev)
+	end
+
+	local handlers = {}
+	handlers.tip = "Clues appear in the live panel. Any vehicle or the subway is fair game."
+
+	function handlers.pickVenue(): (Vector3, string?, any)
+		local d = DistrictsConfig.get("Neighborhood")
+		return if d then d.center else Vector3.zero, "All over the city", nil
+	end
+
+	function handlers.goLive(ev: any): (string, string?)
+		local folder = Instance.new("Folder")
+		folder.Name = "TreasureHunt"
+		folder.Parent = ctx.root
+		local startAt = now() + H.CHECKIN
+		local caches = placeCaches(folder, startAt)
+		if #caches == 0 then
+			folder:Destroy()
+			return "cancel", "No open ground for the caches."
+		end
+		ev.data = {
+			folder = folder,
+			caches = caches,
+			hunters = {} :: { [Player]: Hunter },
+			startAt = startAt,
+			endsAt = startAt + H.TIME_LIMIT,
+			entrants = 0,
+			feed = {} :: { string },
+		}
+		ev.state = "Checkin"
+		ev.phase = "Sign-ups: first clue soon"
+		ev.phaseEndsAt = startAt
+		return "live", nil
+	end
+
+	function handlers.tick(ev: any)
+		local d = ev.data
+		local t = now()
+		if ev.state == "Checkin" then
+			if t < ev.phaseEndsAt then
+				return
+			end
+			for _, p in ev.registered do
+				if p.Parent then
+					d.hunters[p] = { player = p, name = p.DisplayName, found = 0, lastAt = math.huge }
+					d.entrants += 1
+				end
+			end
+			if d.entrants < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, "Nobody signed up to hunt.")
+				return
+			end
+			ev.state = "Running"
+			ev.phase = "Hunting"
+			ev.phaseEndsAt = d.endsAt
+			ctx.announce(ev.registered, "THE HUNT IS ON!")
+			ctx.markDirty()
+			return
+		end
+
+		-- reveal stages
+		local left = 0
+		for _, c in d.caches do
+			if not c.claimedBy then
+				left += 1
+				if not c.visible and t >= c.revealAt then
+					show(c)
+					for _, p in ev.registered do
+						ctx.notify(p, "🗝️ NEW CLUE", string.format("Cache #%d is somewhere in %s.", c.index, DistrictsConfig.displayName(c.district)))
+					end
+					ctx.markDirty()
+				end
+				if c.visible and not c.pillar and t >= c.bearingAt then
+					addPillar(c)
+				end
+			end
+		end
+
+		-- touches: first registered hunter in reach claims it
+		for _, c in d.caches do
+			if c.visible and not c.claimedBy then
+				local best: Player? = nil
+				local bestDist = H.TOUCH_RADIUS
+				for p in d.hunters do
+					local r = ctx.rootOf(p)
+					local hum = ctx.humanoidOf(p)
+					if r and hum and hum.Health > 0 and p.Parent and ctx.isRegistered(ev, p) then
+						local dist = ctx.flatDist(r.Position, c.pos)
+						if dist <= bestDist and math.abs(r.Position.Y - c.pos.Y) < 9 then
+							best, bestDist = p, dist
+						end
+					end
+				end
+				if best then
+					local h = d.hunters[best]
+					h.found += 1
+					h.lastAt = t
+					c.claimedBy = h.name
+					left -= 1
+					c.model:Destroy()
+					local sec = ctx.section(best)
+					if sec then
+						sec.caches = (sec.caches or 0) + 1
+						PlayerData.markChanged(best)
+					end
+					ctx.announce({ best }, string.format("CACHE #%d FOUND!", c.index))
+					local msg = string.format("%s found cache #%d in %s.", h.name, c.index, DistrictsConfig.displayName(c.district))
+					table.insert(d.feed, 1, msg)
+					for _, p in ctx.audience(ev) do
+						if p ~= best then
+							ctx.notify(p, "🗝️ CACHE CLAIMED", msg)
+						end
+					end
+					ctx.markDirty()
+				end
+			end
+		end
+
+		local anyone = false
+		for p in d.hunters do
+			if p.Parent and ctx.isRegistered(ev, p) then
+				anyone = true
+			end
+		end
+		if not anyone then
+			ctx.cancelEvent(ev, "Every hunter left.")
+			return
+		end
+		if left <= 0 or t >= d.endsAt then
+			finish(ev)
+		end
+	end
+
+	function handlers.live(ev: any, viewer: Player): any
+		local d = ev.data
+		local t = now()
+		local lines = {}
+		local status
+		if ev.state == "Checkin" then
+			table.insert(lines, string.format("%d hunter%s signed up · %d caches hidden", #ev.registered, if #ev.registered == 1 then "" else "s", #d.caches))
+			table.insert(lines, "A new clue drops every " .. H.CLUE_EVERY .. "s. Clues sharpen over time.")
+			status = if ctx.isRegistered(ev, viewer) then "Get moving: the first clue drops soon!" else "Sign-ups are open"
+		else
+			for _, c in d.caches do
+				if c.claimedBy then
+					table.insert(lines, string.format("#%d ✓ %s · found by %s", c.index, DistrictsConfig.displayName(c.district), c.claimedBy))
+				elseif t < c.revealAt then
+					table.insert(lines, string.format("#%d clue in %s", c.index, EC.formatIn(c.revealAt - t)))
+				elseif t >= c.bearingAt then
+					table.insert(lines, string.format("#%d %s · %s (look for the light pillar)", c.index, DistrictsConfig.displayName(c.district), c.bearingText))
+				elseif t >= c.landmarkAt then
+					table.insert(lines, string.format("#%d %s · %s", c.index, DistrictsConfig.displayName(c.district), c.landmarkText))
+				else
+					table.insert(lines, string.format("#%d somewhere in %s · more in %s", c.index, DistrictsConfig.displayName(c.district), EC.formatIn(c.landmarkAt - t)))
+				end
+			end
+			local me = d.hunters[viewer]
+			if me and ctx.isRegistered(ev, viewer) then
+				local rank = 1
+				for _, h in d.hunters do
+					if h.found > me.found or (h.found == me.found and h.lastAt < me.lastAt) then
+						rank += 1
+					end
+				end
+				status = string.format("You've found %d · rank %d", me.found, rank)
+			else
+				status = if d.feed[1] then d.feed[1] else "Watching the hunt"
+			end
+		end
+		return {
+			lines = lines,
+			status = status,
+			endsAt = ev.phaseEndsAt,
+		}
+	end
+
+	function handlers.cleanup(ev: any)
+		local d = ev.data
+		if d and d.folder then
+			d.folder:Destroy()
+		end
+	end
+
+	return handlers
+end
+
+return EventHunt
+]=====])
+put(server, 'ModuleScript', 'EventKit', [=====[
+-- CITY GRIND: shared helpers for the city event kinds (EventDunk, EventHunt,
+-- EventPhoto, EventFashion, EventStreetball).
+--   * open-ground finder: raycast for the ground, then check a box above it is
+--     empty (no buildings, trees, benches...) so pop-up venues never clip into
+--     district buildings
+--   * landmark hints from the phone-map points (City.MapPoints)
+--   * vote boxes: real players only, one vote each, never for yourself
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local DistrictsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("DistrictsConfig"))
+
+local EventKit = {}
+
+---------------------------------------------------------------------------
+-- Ground / open space
+---------------------------------------------------------------------------
+local function ignoreList(extra: { Instance }?): { Instance }
+	local list: { Instance } = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	local balls = Workspace:FindFirstChild("Basketballs")
+	if balls then
+		table.insert(list, balls)
+	end
+	if extra then
+		for _, e in extra do
+			table.insert(list, e)
+		end
+	end
+	return list
+end
+
+local function isWater(result: RaycastResult): boolean
+	if result.Material == Enum.Material.Water then
+		return true
+	end
+	local name = result.Instance.Name:lower()
+	return name:find("water") ~= nil or name:find("ocean") ~= nil or name:find("sea") ~= nil
+end
+
+-- Top of the walkable ground under (x, z), or nil (no ground / water / a roof).
+function EventKit.groundAt(pos: Vector3, extra: { Instance }?): Vector3?
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignoreList(extra)
+	params.IgnoreWater = false
+	local from = Vector3.new(pos.X, 250, pos.Z)
+	local result = Workspace:Raycast(from, Vector3.new(0, -400, 0), params)
+	if not result or isWater(result) or result.Normal.Y < 0.85 then
+		return nil
+	end
+	-- ground in this city is around y = 0 (Luxury Hills sits on a plateau at
+	-- about y = 14); a hit well above that is a roof
+	local y = result.Position.Y
+	local onHill = y > 12.5 and y < 15.8 and DistrictsConfig.at(result.Position) == "Luxury"
+	if not onHill and (y > 3 or y < -6) then
+		return nil
+	end
+	return result.Position
+end
+
+-- True when nothing solid-ish sits in a box of `size` standing on `ground`.
+function EventKit.isClear(ground: Vector3, size: Vector3, extra: { Instance }?): boolean
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignoreList(extra)
+	-- start 0.8 above the ground so roads, sidewalks and the ground itself don't count
+	local cf = CFrame.new(ground + Vector3.new(0, 0.8 + size.Y / 2, 0))
+	local hits = Workspace:GetPartBoundsInBox(cf, size, params)
+	for _, hit in hits do
+		if hit.Transparency < 1 or hit.CanCollide then
+			return false
+		end
+	end
+	return true
+end
+
+-- Ground under the corners of a footprint is roughly level (no slopes / steps).
+function EventKit.isLevel(ground: Vector3, size: Vector3, extra: { Instance }?): boolean
+	for _, c in { Vector3.new(1, 0, 1), Vector3.new(-1, 0, 1), Vector3.new(1, 0, -1), Vector3.new(-1, 0, -1) } do
+		local g = EventKit.groundAt(ground + Vector3.new(c.X * size.X / 2, 0, c.Z * size.Z / 2), extra)
+		if not g or math.abs(g.Y - ground.Y) > 1.2 then
+			return false
+		end
+	end
+	return true
+end
+
+-- First candidate centre with open, level ground for a footprint of `size`.
+-- Also tries a few nudged positions around each candidate.
+function EventKit.openSpot(candidates: { Vector3 }, size: Vector3, extra: { Instance }?): Vector3?
+	local nudges = { Vector3.zero, Vector3.new(30, 0, 0), Vector3.new(-30, 0, 0), Vector3.new(0, 0, 30), Vector3.new(0, 0, -30), Vector3.new(45, 0, 45), Vector3.new(-45, 0, -45) }
+	for _, c in candidates do
+		for _, n in nudges do
+			local g = EventKit.groundAt(c + n, extra)
+			if g and EventKit.isClear(g, size, extra) and EventKit.isLevel(g, size, extra) then
+				return g
+			end
+		end
+	end
+	return nil
+end
+
+-- A random open spot inside an XZ rectangle (centre, size), `tries` attempts.
+function EventKit.randomSpot(rng: Random, center: Vector3, size: Vector3, footprint: Vector3, tries: number, avoid: { Vector3 }, minSpacing: number, extra: { Instance }?): Vector3?
+	local inset = 25
+	for _ = 1, tries do
+		local x = center.X + rng:NextNumber(-1, 1) * math.max(0, size.X / 2 - inset)
+		local z = center.Z + rng:NextNumber(-1, 1) * math.max(0, size.Z / 2 - inset)
+		local g = EventKit.groundAt(Vector3.new(x, 0, z), extra)
+		if g and EventKit.isClear(g, footprint, extra) then
+			local ok = true
+			for _, a in avoid do
+				if (Vector3.new(a.X, 0, a.Z) - Vector3.new(g.X, 0, g.Z)).Magnitude < minSpacing then
+					ok = false
+					break
+				end
+			end
+			if ok then
+				return g
+			end
+		end
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- Landmarks
+---------------------------------------------------------------------------
+local COMPASS = { "east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east" }
+
+-- Compass word for a flat direction (+x east, +z south, like the phone map).
+function EventKit.compass(v: Vector3): string
+	local angle = math.atan2(v.Z, v.X) -- 0 = east, +pi/2 = south
+	local index = math.floor((angle / (math.pi * 2)) * 8 + 0.5) % 8 + 1
+	return COMPASS[index]
+end
+
+-- Nearest phone-map point (name, flat offset from it to pos) within `range`.
+function EventKit.landmark(pos: Vector3, range: number?): (string?, Vector3?)
+	local city = Workspace:FindFirstChild("City")
+	local points = city and city:FindFirstChild("MapPoints")
+	local best, bestDist, bestPos = nil, range or 400, nil
+	if points then
+		for _, p in points:GetChildren() do
+			if p:IsA("BasePart") then
+				local d = (Vector3.new(p.Position.X, 0, p.Position.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude
+				if d < bestDist then
+					best, bestDist, bestPos = p.Name, d, p.Position
+				end
+			end
+		end
+	end
+	if best and bestPos then
+		return best, Vector3.new(pos.X - bestPos.X, 0, pos.Z - bestPos.Z)
+	end
+	return nil, nil
+end
+
+---------------------------------------------------------------------------
+-- Votes: one per real player, never for yourself, candidates only.
+---------------------------------------------------------------------------
+export type VoteBox = { votes: { [number]: number }, castAt: { [number]: number } }
+
+function EventKit.newVotes(): VoteBox
+	return { votes = {}, castAt = {} }
+end
+
+function EventKit.castVote(box: VoteBox, voter: Player, target: any, isCandidate: (number) -> boolean): (boolean, string)
+	if type(target) ~= "number" or target % 1 ~= 0 then
+		return false, "Bad vote."
+	end
+	if box.votes[voter.UserId] then
+		return false, "You already voted. One vote per player."
+	end
+	if target == voter.UserId then
+		return false, "You can't vote for yourself."
+	end
+	if not isCandidate(target) then
+		return false, "That entry isn't in the running."
+	end
+	box.votes[voter.UserId] = target
+	box.castAt[voter.UserId] = os.clock()
+	return true, "Vote locked in."
+end
+
+-- Votes per candidate userId (self-votes can't exist; voters must be real players).
+function EventKit.tally(box: VoteBox): { [number]: number }
+	local tally: { [number]: number } = {}
+	for voterId, target in box.votes do
+		if voterId ~= target then
+			tally[target] = (tally[target] or 0) + 1
+		end
+	end
+	return tally
+end
+
+function EventKit.voteCount(box: VoteBox): number
+	local n = 0
+	for _ in box.votes do
+		n += 1
+	end
+	return n
+end
+
+return EventKit
+]=====])
+put(server, 'ModuleScript', 'EventPhoto', [=====[
+-- CITY GRIND: Photo Challenge (city event kind, plugs into Events.registerKind).
+-- A theme drops when it goes live. Entrants shoot with the phone Camera app
+-- (every photo is a server-built SceneSnapshot, see Media.luau) and submit one
+-- photo from their Gallery that was taken AFTER the challenge started (a photo
+-- they also posted on CityGram is the same Gallery photo). The server checks the
+-- theme against the saved snapshot itself: where the camera was (district), the
+-- in-game clock, who is in frame, which vehicles are in frame. Then a voting
+-- window: real players only (entrants and anyone watching), one vote each, never
+-- for your own photo. Most votes wins; a tie goes to the earlier submission.
+--
+-- Saved: section "events".photoWins.
+
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local DistrictsConfig = require(shared:WaitForChild("DistrictsConfig"))
+local SceneSnapshot = require(shared:WaitForChild("SceneSnapshot"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local EventKit = require(script.Parent:WaitForChild("EventKit"))
+
+local EventPhoto = {}
+
+type Entry = { userId: number, name: string, photoId: string, snap: any, at: number, place: string, people: number }
+
+local NEON = Enum.Material.Neon.Value
+
+local function getMedia(): any
+	local module = script.Parent:FindFirstChild("Media")
+	if not module then
+		return nil
+	end
+	local ok, M = pcall(require, module)
+	return if ok then M else nil
+end
+
+-- Is in-game hour `h` inside [from, to) (which may wrap past midnight)?
+local function inWindow(h: number, from: number, to: number): boolean
+	if from <= to then
+		return h >= from and h < to
+	end
+	return h >= from or h < to
+end
+
+-- In-game hours of [from, to) covered while the clock runs from `start` for `span` hours.
+local function overlapHours(start: number, span: number, from: number, to: number): number
+	local covered = 0
+	local step = 0.1
+	local h = 0
+	while h < span do
+		if inWindow((start + h) % 24, from, to) then
+			covered += step
+		end
+		h += step
+	end
+	return covered
+end
+
+function EventPhoto.init(ctx: any): any
+	local EC = ctx.EC
+	local P = EC.PHOTO
+	local now = ctx.now
+	local lastTheme: string? = nil
+
+	---------------------------------------------------------------------------
+	-- Theme checks against the snapshot the server built
+	---------------------------------------------------------------------------
+	local function cameraPos(snap: any): Vector3?
+		if type(snap) ~= "table" or type(snap.c) ~= "table" then
+			return nil
+		end
+		local ok, cf = pcall(SceneSnapshot.arrToCf, snap.c)
+		return if ok then cf.Position else nil
+	end
+
+	local function hasUnderglow(snap: any): boolean
+		for _, v in (if type(snap.h) == "table" then snap.h else {}) do
+			for _, a in (if type(v) == "table" and type(v.b) == "table" then v.b else {}) do
+				if type(a) == "table" and a[12] == NEON and type(a[2]) == "number" and type(a[3]) == "number" and type(a[4]) == "number" then
+					local dims = { a[2], a[3], a[4] }
+					table.sort(dims)
+					-- a flat glowing plate under the car, not a headlight
+					if dims[1] <= 0.35 and dims[2] * dims[3] >= 4 then
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local function nearCourt(snap: any): boolean
+		local courts = {}
+		for _, m in CollectionService:GetTagged("Court") do
+			if m:IsA("Model") then
+				table.insert(courts, ctx.courtCenter(m))
+			end
+		end
+		for _, person in (if type(snap.p) == "table" then snap.p else {}) do
+			if type(person) == "table" and type(person.r) == "table" then
+				local ok, cf = pcall(SceneSnapshot.arrToCf, person.r)
+				if ok then
+					for _, c in courts do
+						if (cf.Position - c).Magnitude <= 40 then
+							return true
+						end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local function matches(theme: any, snap: any): (boolean, string?)
+		local cam = cameraPos(snap)
+		if not cam then
+			return false, "That photo can't be read."
+		end
+		local clock = if type(snap.k) == "number" then snap.k else -1
+		local people = if type(snap.p) == "table" then #snap.p else 0
+		if theme.id == "sunset" then
+			if DistrictsConfig.at(cam) ~= "Beach" then
+				return false, "That wasn't taken at the Beach."
+			end
+			if not inWindow(clock, theme.clockFrom, theme.clockTo) then
+				return false, "Wrong time of day: shoot between 16:30 and 20:00."
+			end
+		elseif theme.id == "night" then
+			if DistrictsConfig.at(cam) ~= "Downtown" then
+				return false, "That wasn't taken Downtown."
+			end
+			if not inWindow(clock, theme.clockFrom, theme.clockTo) then
+				return false, "It has to be night (19:00-05:30)."
+			end
+		elseif theme.id == "crew" then
+			if people < 3 then
+				return false, string.format("Only %d %s in frame; you need 3+.", people, if people == 1 then "person" else "people")
+			end
+		elseif theme.id == "neon" then
+			if not hasUnderglow(snap) then
+				return false, "No car with its underglow on is in that photo."
+			end
+		elseif theme.id == "hoops" then
+			if not nearCourt(snap) then
+				return false, "Nobody in that photo is at a basketball court."
+			end
+		end
+		return true, nil
+	end
+
+	-- Themes that can actually be shot in the next SHOOT seconds.
+	local function pickTheme(): any
+		local hoursPerSecond = 24 / P.DAY_SECONDS
+		local span = P.SHOOT * hoursPerSecond
+		local clock = Lighting.ClockTime
+		local options = {}
+		for _, theme in P.THEMES do
+			local ok = true
+			if theme.clockFrom then
+				ok = overlapHours(clock, span, theme.clockFrom, theme.clockTo) >= P.MIN_WINDOW_HOURS
+			end
+			if ok and theme.id ~= lastTheme then
+				table.insert(options, theme)
+			end
+		end
+		if #options == 0 then
+			for _, theme in P.THEMES do
+				if not theme.clockFrom then
+					table.insert(options, theme)
+				end
+			end
+		end
+		local theme = options[ctx.rng:NextInteger(1, #options)]
+		lastTheme = theme.id
+		return theme
+	end
+
+	---------------------------------------------------------------------------
+	-- Helpers
+	---------------------------------------------------------------------------
+	local function entryCount(d: any): number
+		local n = 0
+		for _ in d.entries do
+			n += 1
+		end
+		return n
+	end
+
+	local function eligiblePhotos(d: any, p: Player): { any }
+		local sec = PlayerData.section(p, "media")
+		local list = {}
+		if sec and type(sec.photos) == "table" then
+			for _, meta in sec.photos do
+				if type(meta) == "table" and type(meta.t) == "number" and meta.t >= d.shootFrom then
+					table.insert(list, { id = meta.id, l = meta.l, n = meta.n, t = meta.t })
+					if #list >= P.MAX_PHOTOS_LISTED then
+						break
+					end
+				end
+			end
+		end
+		return list
+	end
+
+	local function sortedEntries(d: any, tally: { [number]: number }?): { Entry }
+		local list: { Entry } = {}
+		for _, e in d.entries do
+			table.insert(list, e)
+		end
+		table.sort(list, function(a: Entry, b: Entry)
+			if tally then
+				local va, vb = tally[a.userId] or 0, tally[b.userId] or 0
+				if va ~= vb then
+					return va > vb
+				end
+			end
+			return a.at < b.at
+		end)
+		return list
+	end
+
+	local function finish(ev: any)
+		local d = ev.data
+		local tally = EventKit.tally(d.box)
+		local list = sortedEntries(d, tally)
+		local lines = {}
+		local place = 0
+		for i, e in list do
+			local votes = tally[e.userId] or 0
+			if i <= 5 then
+				table.insert(lines, string.format("%d. %s — %d vote%s · %s", i, e.name, votes, if votes == 1 then "" else "s", e.place))
+			end
+			local p = Players:GetPlayerByUserId(e.userId)
+			if p and ctx.isRegistered(ev, p) then
+				place += 1
+				ctx.payPlace(ev, p, place, #list, votes > 0)
+				if place == 1 and votes > 0 then
+					local sec = ctx.section(p)
+					if sec then
+						sec.photoWins = (sec.photoWins or 0) + 1
+						PlayerData.markChanged(p)
+					end
+					PlayerData.addFame(p, 10)
+				end
+			end
+		end
+		table.insert(lines, string.format("Theme: %s · %d vote%s cast", d.theme.name, EventKit.voteCount(d.box), if EventKit.voteCount(d.box) == 1 then "" else "s"))
+		local top = list[1]
+		local winner = if top and (tally[top.userId] or 0) > 0 then top.name else nil
+		ctx.pushResult(ev, lines, winner)
+		if winner then
+			ctx.announce(ctx.audience(ev), winner:upper() .. " WINS THE PHOTO CHALLENGE")
+		end
+		ctx.closeEvent(ev)
+	end
+
+	---------------------------------------------------------------------------
+	-- Handlers
+	---------------------------------------------------------------------------
+	local handlers = {}
+	handlers.tip = "The theme drops at the start. Shoot with the Camera app, then tap SUBMIT in the event panel."
+
+	function handlers.available(): boolean
+		return getMedia() ~= nil
+	end
+
+	function handlers.pickVenue(): (Vector3, string?, any)
+		local d = DistrictsConfig.get("Neighborhood")
+		return if d then d.center else Vector3.zero, "Anywhere in the city", nil
+	end
+
+	function handlers.goLive(ev: any): (string, string?)
+		local theme = pickTheme()
+		ev.data = {
+			theme = theme,
+			shootFrom = os.time() - 1,
+			entries = {} :: { [number]: Entry },
+			box = EventKit.newVotes(),
+			entrants = 0,
+		}
+		-- sign-ups stay open while people shoot ("Checkin" keeps joining allowed)
+		ev.state = "Checkin"
+		ev.phase = "Shoot: " .. theme.name
+		ev.phaseEndsAt = now() + P.SHOOT
+		ev.location = "Anywhere · theme: " .. theme.name
+		for _, p in Players:GetPlayers() do
+			ctx.notify(p, "📸 PHOTO CHALLENGE THEME", string.format("\"%s\" — %s. Join in the Events app.", theme.name, theme.rule))
+		end
+		return "live", nil
+	end
+
+	function handlers.tick(ev: any)
+		local d = ev.data
+		local t = now()
+		-- entries from players who left no longer count
+		for userId in d.entries do
+			local p = Players:GetPlayerByUserId(userId)
+			if not p or not ctx.isRegistered(ev, p) then
+				d.entries[userId] = nil
+				ctx.markDirty()
+			end
+		end
+		if ev.state == "Checkin" then
+			if t < ev.phaseEndsAt then
+				return
+			end
+			d.entrants = entryCount(d)
+			if d.entrants < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, string.format("Only %d matching photo%s came in; a vote needs %d.", d.entrants, if d.entrants == 1 then "" else "s", ctx.minEntrants(ev.kind)))
+				return
+			end
+			ev.state = "Voting"
+			ev.phase = "Voting"
+			ev.phaseEndsAt = t + P.VOTE
+			for _, p in Players:GetPlayers() do
+				ctx.notify(p, "📸 PHOTO VOTE OPEN", string.format("%d photos for \"%s\". Open Events > Live > WATCH to vote (not for your own).", d.entrants, d.theme.name))
+			end
+			ctx.markDirty()
+			return
+		end
+		-- Voting
+		if entryCount(d) < ctx.minEntrants(ev.kind) then
+			ctx.cancelEvent(ev, "Too many photographers left before the vote finished.")
+			return
+		end
+		if t >= ev.phaseEndsAt then
+			finish(ev)
+		end
+	end
+
+	function handlers.live(ev: any, viewer: Player): any
+		local d = ev.data
+		local lines = {
+			string.format("Theme: %s", d.theme.name),
+			"Rule: " .. d.theme.rule,
+		}
+		local status
+		local mine: Entry? = d.entries[viewer.UserId]
+		local out: any = { lines = lines, endsAt = ev.phaseEndsAt }
+		if ev.state == "Checkin" then
+			table.insert(lines, string.format("%d photo%s submitted · %d photographers", entryCount(d), if entryCount(d) == 1 then "" else "s", #ev.registered))
+			if ctx.isRegistered(ev, viewer) then
+				status = if mine then string.format("Submitted ✓ (%s). You can swap it until the timer ends.", mine.place) else "Snap a photo with the Camera app, then SUBMIT it."
+				out.submit = {
+					title = "Submit for \"" .. d.theme.name .. "\"",
+					note = "Only photos taken after the challenge started. " .. d.theme.rule .. ".",
+					photos = eligiblePhotos(d, viewer),
+					current = if mine then mine.photoId else nil,
+				}
+			else
+				status = "Photographers are out shooting"
+			end
+		else
+			local voted = d.box.votes[viewer.UserId]
+			table.insert(lines, string.format("%d photos · %d vote%s cast", entryCount(d), EventKit.voteCount(d.box), if EventKit.voteCount(d.box) == 1 then "" else "s"))
+			local entries = {}
+			for _, e in sortedEntries(d, nil) do
+				table.insert(entries, {
+					key = e.userId,
+					name = e.name,
+					detail = string.format("%s · %d in frame", e.place, e.people),
+					mine = e.userId == viewer.UserId,
+					photo = true,
+				})
+			end
+			out.ballot = {
+				title = "📸 " .. d.theme.name,
+				note = "One vote each. You can't vote for your own photo. Tap a photo to view it.",
+				entries = entries,
+				voted = voted,
+				canVote = voted == nil,
+				endsAt = ev.phaseEndsAt,
+			}
+			status = if voted then "Vote locked in ✓" else "Voting is open: tap VOTE"
+		end
+		out.status = status
+		return out
+	end
+
+	function handlers.request(ev: any, player: Player, action: string, b: any, _c: any): any
+		local d = ev.data
+		if action == "Submit" then
+			if ev.state ~= "Checkin" then
+				return { ok = false, msg = "Submissions are closed." }
+			end
+			if not ctx.isRegistered(ev, player) then
+				return { ok = false, msg = "Join the Photo Challenge first." }
+			end
+			if type(b) ~= "string" or #b > 40 then
+				return { ok = false, msg = "Pick a photo." }
+			end
+			local Media = getMedia()
+			if not Media or not Media.ownsPhoto(player, b) then
+				return { ok = false, msg = "That photo isn't in your Gallery." }
+			end
+			local record = Media.getPhoto(b)
+			if type(record) ~= "table" or record.o ~= player.UserId or type(record.s) ~= "table" then
+				return { ok = false, msg = "Couldn't load that photo. Try again." }
+			end
+			if type(record.t) ~= "number" or record.t < d.shootFrom then
+				return { ok = false, msg = "That photo was taken before the challenge started." }
+			end
+			if ev.state ~= "Checkin" or not ctx.isRegistered(ev, player) then
+				return { ok = false, msg = "Submissions are closed." }
+			end
+			local ok, why = matches(d.theme, record.s)
+			if not ok then
+				return { ok = false, msg = "Doesn't fit the theme: " .. (why or "") }
+			end
+			local people = if type(record.s.p) == "table" then #record.s.p else 0
+			local previous = d.entries[player.UserId]
+			d.entries[player.UserId] = {
+				userId = player.UserId,
+				name = player.DisplayName,
+				photoId = b,
+				snap = record.s,
+				at = if previous then previous.at else now(),
+				place = if type(record.s.l) == "string" then record.s.l else "the city",
+				people = people,
+			}
+			ctx.markDirty()
+			return { ok = true, msg = if previous then "Entry swapped. Good luck!" else "Photo submitted. Good luck!" }
+		elseif action == "Entry" then
+			if type(b) ~= "number" then
+				return { ok = false, msg = "Bad request." }
+			end
+			local e: Entry? = d.entries[b]
+			if not e then
+				return { ok = false, msg = "That entry is gone." }
+			end
+			if ev.state ~= "Voting" and b ~= player.UserId then
+				return { ok = false, msg = "Photos are shown when voting opens." }
+			end
+			return { ok = true, snap = e.snap, name = e.name, place = e.place }
+		elseif action == "Vote" then
+			if ev.state ~= "Voting" then
+				return { ok = false, msg = "Voting isn't open." }
+			end
+			if not ctx.isRegistered(ev, player) and not ev.watchers[player] then
+				return { ok = false, msg = "Tap WATCH on the challenge to vote." }
+			end
+			local ok, msg = EventKit.castVote(d.box, player, b, function(userId: number): boolean
+				return d.entries[userId] ~= nil
+			end)
+			if ok then
+				ctx.markDirty()
+			end
+			return { ok = ok, msg = msg, voted = d.box.votes[player.UserId] }
+		end
+		return { ok = false, msg = "Nothing to do here right now." }
+	end
+
+	function handlers.leave(ev: any, p: Player)
+		ev.data.entries[p.UserId] = nil
+	end
+
+	return handlers
+end
+
+return EventPhoto
+]=====])
+put(server, 'ModuleScript', 'EventStreetball', [=====[
+-- CITY GRIND: Streetball Tournament (city event kind, plugs into Events.registerKind).
+-- A knockout bracket of half-court games on a reserved public court: 1v1, or
+-- 2v2 when the field is big and even. Both hoops are used, so two games run at
+-- once. Games are run here rather than by CourtGames (CourtGames only starts
+-- games from players standing on its pads and has no "start a match between
+-- these players" hook); the court is claimed with the Event attribute so
+-- CourtGames keeps it free while the tournament runs.
+--
+-- Rules: ones and twos (a basket inside the arc is 1, beyond it 2), loser's
+-- ball after a make, out of bounds or a ball left loose for a few seconds goes to
+-- the other side, first to STREETBALL.TARGET or the leader when the game clock
+-- runs out (tied: next basket wins, then the higher seed). Teams that aren't at
+-- the court when their game comes up forfeit.
+--
+-- Saved: section "events".streetballWins.
+
+local Players = game:GetService("Players")
+
+local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local EventStreetball = {}
+
+type Team = { id: number, players: { Player }, name: string, seed: number, out: number?, lostPoints: number, played: boolean }
+type Lane = { side: string, rim: Vector3, dir: Vector3, key: Vector3, match: any?, freeAt: number }
+type Match = {
+	round: number,
+	a: Team,
+	b: Team,
+	lane: Lane?,
+	score: { [Team]: number },
+	startedAt: number,
+	endsAt: number,
+	sudden: boolean,
+	winner: Team?,
+	ball: any?,
+	lastTouch: Team?,
+	looseSince: number?,
+	checkAt: number?,
+	checkTo: Team?,
+	awaySince: { [Player]: number },
+	done: boolean,
+	ev: any,
+}
+
+local COURT_PREFER = { "BeachCourt", "GrandArena", "NeighborhoodCourt" }
+local SUDDEN_LIMIT = 60
+
+function EventStreetball.init(ctx: any): any
+	local EC = ctx.EC
+	local S = EC.STREETBALL
+	local now = ctx.now
+
+	local matchBalls: { [any]: Match } = {}
+	local playerMatch: { [Player]: Match } = {}
+
+	local function teamOf(m: Match, p: Player?): Team?
+		if not p then
+			return nil
+		end
+		if table.find(m.a.players, p) then
+			return m.a
+		elseif table.find(m.b.players, p) then
+			return m.b
+		end
+		return nil
+	end
+
+	local function other(m: Match, t: Team): Team
+		return if t == m.a then m.b else m.a
+	end
+
+	local function matchPlayers(m: Match): { Player }
+		local list = table.clone(m.a.players)
+		for _, p in m.b.players do
+			table.insert(list, p)
+		end
+		return list
+	end
+
+	---------------------------------------------------------------------------
+	-- Ball rules for tournament games
+	---------------------------------------------------------------------------
+	local policy = Basketball.policy
+	local canHold = policy.canHold
+	policy.canHold = function(player, ball)
+		local m = matchBalls[ball]
+		if m then
+			return not m.done and playerMatch[player] == m and m.checkAt == nil
+		end
+		if playerMatch[player] then
+			return false -- only the game ball during a game
+		end
+		return canHold(player, ball)
+	end
+	local canSteal = policy.canSteal
+	policy.canSteal = function(player, victim, ball)
+		local m = matchBalls[ball]
+		if m then
+			local tp, tv = teamOf(m, player), teamOf(m, victim)
+			return tp ~= nil and tv ~= nil and tp ~= tv and playerMatch[player] == m
+		end
+		if playerMatch[player] or playerMatch[victim] then
+			return false
+		end
+		return canSteal(player, victim, ball)
+	end
+	local passTargets = policy.passTargets
+	policy.passTargets = function(player, ball)
+		local m = matchBalls[ball]
+		if m then
+			local t = teamOf(m, player)
+			local mates = {}
+			if t then
+				for _, p in t.players do
+					if p ~= player and p.Parent then
+						table.insert(mates, p)
+					end
+				end
+			end
+			return mates
+		end
+		return passTargets(player, ball)
+	end
+	local opponents = policy.opponents
+	policy.opponents = function(player, ball)
+		local m = playerMatch[player]
+		if m then
+			local t = teamOf(m, player)
+			return if t then other(m, t).players else {}
+		end
+		return opponents(player, ball)
+	end
+
+	---------------------------------------------------------------------------
+	-- Lanes (one per hoop) and the half-court box
+	---------------------------------------------------------------------------
+	local function inHalf(d: any, lane: Lane, pos: Vector3, margin: number): boolean
+		local center = d.center
+		local size = d.size
+		local o = pos - center
+		if math.abs(o.X) > size.X / 2 + margin or math.abs(o.Z) > size.Z / 2 + margin then
+			return false
+		end
+		-- the lane's half: same side of the centre line as its rim
+		local side = (lane.rim - center).Z
+		return o.Z * math.sign(side) >= -margin
+	end
+
+	local function present(ev: any, d: any, p: Player): boolean
+		return p.Parent ~= nil and ctx.isRegistered(ev, p) and ctx.onCourt(d.court, p, 40)
+	end
+
+	local function giveTo(m: Match, t: Team)
+		local ball = m.ball
+		if not ball then
+			return
+		end
+		local here = {}
+		for _, p in t.players do
+			if p.Parent and playerMatch[p] == m and ctx.rootOf(p) then
+				table.insert(here, p)
+			end
+		end
+		if #here == 0 then
+			return
+		end
+		Basketball.give(ball, here[math.random(1, #here)])
+		m.lastTouch = t
+		m.looseSince = nil
+	end
+
+	-- Ball goes to team `t` after a short pause (a "check").
+	local function check(m: Match, t: Team, delay: number)
+		m.checkAt = os.clock() + delay
+		m.checkTo = t
+		local ball = m.ball
+		if ball and ball.holder then
+			Basketball.drop(ball)
+		end
+	end
+
+	local function finishMatch(ev: any, m: Match, winner: Team, why: string?)
+		if m.done then
+			return
+		end
+		m.done = true
+		m.winner = winner
+		local loser = other(m, winner)
+		loser.out = m.round
+		loser.lostPoints = m.score[loser]
+		for _, p in matchPlayers(m) do
+			if playerMatch[p] == m then
+				playerMatch[p] = nil
+			end
+		end
+		if m.ball then
+			matchBalls[m.ball] = nil
+			Basketball.destroy(m.ball)
+			m.ball = nil
+		end
+		if m.lane then
+			m.lane.match = nil
+			m.lane.freeAt = now() + S.BETWEEN
+		end
+		local d = ev.data
+		table.insert(d.log, 1, string.format("R%d: %s %d-%d %s%s", m.round, winner.name, m.score[winner], m.score[loser], loser.name, if why then " (" .. why .. ")" else ""))
+		for _, p in winner.players do
+			if p.Parent then
+				ctx.announce({ p }, "YOU ADVANCE!")
+			end
+		end
+		for _, p in loser.players do
+			if p.Parent then
+				ctx.announce({ p }, "ELIMINATED")
+				ctx.notify(p, "KNOCKED OUT", string.format("%s beat you %d-%d. Stick around for the payouts.", winner.name, m.score[winner], m.score[loser]))
+			end
+		end
+		ctx.markDirty()
+	end
+
+	local function startMatch(ev: any, m: Match, lane: Lane)
+		local d = ev.data
+		m.lane = lane
+		lane.match = m
+		local t = now()
+		m.startedAt = t
+		m.endsAt = t + S.GAME_TIME
+		m.a.played = true
+		m.b.played = true
+		-- offence lines up at the top of the key, defence between them and the rim
+		local function place(team: Team, dist: number)
+			for i, p in team.players do
+				if p.Parent then
+					playerMatch[p] = m
+					local held = Basketball.heldBall(p)
+					if held then
+						Basketball.drop(held)
+					end
+					local side = Vector3.new(-lane.dir.Z, 0, lane.dir.X)
+					local pos = Vector3.new(lane.rim.X, d.floorY + 3, lane.rim.Z) + lane.dir * dist + side * ((i - (#team.players + 1) / 2) * 6)
+					local character = p.Character
+					if character then
+						character:PivotTo(CFrame.lookAt(pos, Vector3.new(lane.rim.X, pos.Y, lane.rim.Z)))
+					end
+				end
+			end
+		end
+		local first = if ctx.rng:NextNumber() < 0.5 then m.a else m.b
+		place(first, 23)
+		place(other(m, first), 15)
+		local ball = Basketball.newBall(lane.key + Vector3.new(0, 3, 0))
+		ball.court = d.court
+		m.ball = ball
+		matchBalls[ball] = m
+		check(m, first, 1.5)
+		local mode = #m.a.players .. "v" .. #m.b.players
+		ctx.announce(matchPlayers(m), string.format("%s · FIRST TO %d", mode, S.TARGET))
+		ctx.announce(ctx.audience(ev), string.format("%s VS %s", m.a.name:upper(), m.b.name:upper()))
+		ctx.markDirty()
+	end
+
+	---------------------------------------------------------------------------
+	-- Scoring
+	---------------------------------------------------------------------------
+	Basketball.scored.connect(function(ball, hoop, shot)
+		local m = matchBalls[ball]
+		if not m or m.done or not m.lane then
+			return
+		end
+		local d = m.ev.data
+		if not d or hoop.court ~= d.court or hoop.side ~= m.lane.side then
+			return
+		end
+		local team = (shot and teamOf(m, shot.shooter)) or teamOf(m, ball.lastHolder) or m.lastTouch
+		if not team then
+			return
+		end
+		local points = if shot and shot.points == 3 then 2 else 1
+		m.score[team] += points
+		if shot and shot.shooter and teamOf(m, shot.shooter) == team then
+			PlayerData.recordBasketball(shot.shooter, {
+				points = points,
+				threes = if points == 2 then 1 else 0,
+				dunks = if shot.kind == "dunk" then 1 else 0,
+			})
+		end
+		ctx.announce(matchPlayers(m), string.format("%s +%d  ·  %d-%d", team.name:upper(), points, m.score[m.a], m.score[m.b]))
+		ctx.markDirty()
+		if m.score[team] >= S.TARGET or m.sudden then
+			check(m, other(m, team), 60) -- freeze the ball so nobody scores again before the result
+			task.delay(1, function()
+				finishMatch(m.ev, m, team, nil)
+			end)
+			return
+		end
+		check(m, other(m, team), 1.2)
+	end)
+
+	---------------------------------------------------------------------------
+	-- Bracket
+	---------------------------------------------------------------------------
+	local function buildRound(d: any, teams: { Team })
+		d.roundTeams = teams
+		d.matches = {}
+		d.bye = nil
+		local list = table.clone(teams)
+		if #list % 2 == 1 then
+			-- the best seed sits this round out
+			table.sort(list, function(a: Team, b: Team)
+				return a.seed < b.seed
+			end)
+			d.bye = table.remove(list, 1)
+		end
+		-- pair best remaining seed with worst
+		table.sort(list, function(a: Team, b: Team)
+			return a.seed < b.seed
+		end)
+		while #list >= 2 do
+			local a = table.remove(list, 1) :: Team
+			local b = table.remove(list) :: Team
+			table.insert(d.matches, {
+				round = d.round,
+				a = a,
+				b = b,
+				lane = nil,
+				score = { [a] = 0, [b] = 0 },
+				startedAt = 0,
+				endsAt = 0,
+				sudden = false,
+				winner = nil,
+				ball = nil,
+				lastTouch = nil,
+				looseSince = nil,
+				checkAt = nil,
+				checkTo = nil,
+				awaySince = {},
+				done = false,
+				ev = d.ev,
+			} :: Match)
+		end
+	end
+
+	local function finish(ev: any, champion: Team?)
+		local d = ev.data
+		-- champion, then by round reached, then points in the losing game, then seed
+		local order = table.clone(d.teams)
+		table.sort(order, function(a: Team, b: Team)
+			if a == champion then
+				return true
+			elseif b == champion then
+				return false
+			end
+			local ra, rb = a.out or math.huge, b.out or math.huge
+			if ra ~= rb then
+				return ra > rb
+			end
+			if a.lostPoints ~= b.lostPoints then
+				return a.lostPoints > b.lostPoints
+			end
+			return a.seed < b.seed
+		end)
+		local lines = {}
+		for place, team in order do
+			if place <= 4 then
+				table.insert(lines, string.format("%d. %s%s", place, team.name, if team == champion then " 🏆" elseif team.out then " (out R" .. team.out .. ")" else ""))
+			end
+			for _, p in team.players do
+				if p.Parent and ctx.isRegistered(ev, p) then
+					ctx.payPlace(ev, p, place, #order, team.played)
+					PlayerData.addStatXP(p, "BallHandling", 10)
+					if team == champion then
+						local sec = ctx.section(p)
+						if sec then
+							sec.streetballWins = (sec.streetballWins or 0) + 1
+							PlayerData.markChanged(p)
+						end
+						PlayerData.addFame(p, 15)
+					end
+				end
+			end
+		end
+		for i = 1, math.min(2, #d.log) do
+			table.insert(lines, d.log[i])
+		end
+		ctx.pushResult(ev, lines, if champion then champion.name else nil)
+		if champion then
+			ctx.announce(ctx.audience(ev), champion.name:upper() .. " WIN THE STREETBALL TOURNAMENT")
+		end
+		ctx.closeEvent(ev)
+	end
+
+	---------------------------------------------------------------------------
+	-- Handlers
+	---------------------------------------------------------------------------
+	local function pickCourt(prefer: any): Model?
+		return ctx.freeCourt(prefer or COURT_PREFER, ctx.threeCourt()) or ctx.freeCourt(prefer or COURT_PREFER, nil)
+	end
+
+	local handlers = {}
+	handlers.tip = "Be on the tournament court at check-in. Ones and twos, first to " .. S.TARGET .. "."
+
+	function handlers.available(): boolean
+		return pickCourt(nil) ~= nil
+	end
+
+	function handlers.pickVenue(): (Vector3, string?, any)
+		local court = pickCourt(nil)
+		if not court then
+			return nil :: any, nil, nil
+		end
+		return ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8), ctx.courtLabel(court), court
+	end
+
+	function handlers.goLive(ev: any): (string, string?)
+		local court = pickCourt(ev.venue)
+		if not court then
+			return "postpone", "Every court is busy with games."
+		end
+		ev.venue = court
+		ev.location = ctx.courtLabel(court)
+		ev.pos = ctx.courtCenter(court) + Vector3.new(0, 0, ctx.courtSize(court).Z / 2 + 8)
+		local center = ctx.courtCenter(court)
+		local folder = Instance.new("Folder")
+		folder.Name = "StreetballTournament"
+		folder.Parent = ctx.root
+		local banner = ctx.part({
+			name = "Banner",
+			size = Vector3.new(30, 4, 0.4),
+			cframe = CFrame.new(center + Vector3.new(0, 18, 0)),
+			color = Color3.fromRGB(20, 20, 26),
+			collide = false,
+			parent = folder,
+		})
+		for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+			ctx.surfaceText(banner, face, "🏆 STREETBALL TOURNAMENT", Color3.fromRGB(255, 170, 70))
+		end
+		local lanes: { Lane } = {}
+		for _, side in { "North", "South" } do
+			local rim = ctx.rimOf(court, side) :: Vector3
+			local dir = ctx.flat(center - rim)
+			dir = if dir.Magnitude > 0.1 then dir.Unit else Vector3.new(0, 0, 1)
+			table.insert(lanes, { side = side, rim = rim, dir = dir, key = Vector3.new(rim.X, center.Y + 0.5, rim.Z) + dir * 20, match = nil, freeAt = 0 })
+		end
+		ev.data = {
+			ev = ev,
+			court = court,
+			center = center,
+			size = ctx.courtSize(court),
+			floorY = center.Y + 0.45,
+			folder = folder,
+			lanes = lanes,
+			teams = {} :: { Team },
+			round = 0,
+			roundTeams = {} :: { Team },
+			matches = {} :: { Match },
+			bye = nil :: Team?,
+			log = {} :: { string },
+			mode = "1v1",
+		}
+		ctx.claimCourt(court, ev.name) -- only once ev.data exists, so cleanup always releases it
+		ev.state = "Checkin"
+		ev.phase = "Check-in: get on the court"
+		ev.phaseEndsAt = now() + S.CHECKIN
+		return "live", nil
+	end
+
+	local function tickMatch(ev: any, d: any, m: Match)
+		local lane = m.lane :: Lane
+		local t = now()
+		local clock = os.clock()
+		-- presence: a team with nobody left at the court forfeits
+		for _, team in { m.a, m.b } do
+			local anyone = false
+			for _, p in team.players do
+				if p.Parent and ctx.isRegistered(ev, p) then
+					if ctx.onCourt(d.court, p, 25) then
+						m.awaySince[p] = nil
+						anyone = true
+					else
+						m.awaySince[p] = m.awaySince[p] or t
+						if t - m.awaySince[p] < 10 then
+							anyone = true
+						end
+					end
+				end
+			end
+			if not anyone then
+				finishMatch(ev, m, other(m, team), "forfeit")
+				return
+			end
+		end
+
+		local ball = m.ball
+		if not ball or not Basketball.balls()[ball] then
+			-- the ball vanished (fell out of the world): new one to the side that didn't touch it last
+			local nb = Basketball.newBall(lane.key + Vector3.new(0, 3, 0))
+			nb.court = d.court
+			if ball then
+				matchBalls[ball] = nil
+			end
+			m.ball = nb
+			matchBalls[nb] = m
+			check(m, if m.lastTouch then other(m, m.lastTouch) else m.a, 0.5)
+			return
+		end
+
+		if m.checkAt then
+			if clock >= m.checkAt then
+				local to = m.checkTo or m.a
+				m.checkAt = nil
+				m.checkTo = nil
+				Basketball.moveTo(ball, lane.key + Vector3.new(0, 3, 0))
+				giveTo(m, to)
+			end
+		elseif ball.holder then
+			local team = teamOf(m, ball.holder)
+			m.lastTouch = team or m.lastTouch
+			m.looseSince = nil
+			local r = ctx.rootOf(ball.holder)
+			if r and team and not inHalf(d, lane, r.Position, 1.5) then
+				ctx.announce(matchPlayers(m), "OUT OF BOUNDS")
+				check(m, other(m, team), 0.8)
+			end
+		elseif not ball.part.Anchored then
+			local pos = ball.part.Position
+			m.looseSince = m.looseSince or clock
+			if not inHalf(d, lane, pos, 1.5) and pos.Y < d.center.Y + 4 then
+				ctx.announce(matchPlayers(m), "OUT OF BOUNDS")
+				check(m, if m.lastTouch then other(m, m.lastTouch) else m.a, 0.8)
+			elseif clock - (m.looseSince :: number) > S.LOOSE_TURNOVER then
+				check(m, if m.lastTouch then other(m, m.lastTouch) else m.a, 0.3)
+			end
+		end
+
+		if not m.done and t >= m.endsAt then
+			local sa, sb = m.score[m.a], m.score[m.b]
+			if sa ~= sb then
+				finishMatch(ev, m, if sa > sb then m.a else m.b, "time")
+			elseif not m.sudden then
+				m.sudden = true
+				m.endsAt = t + SUDDEN_LIMIT
+				ctx.announce(matchPlayers(m), "TIED! NEXT BUCKET WINS")
+				ctx.markDirty()
+			else
+				finishMatch(ev, m, if m.a.seed < m.b.seed then m.a else m.b, "seed tiebreak")
+			end
+		end
+	end
+
+	function handlers.tick(ev: any)
+		local d = ev.data
+		local court: Model = d.court
+		if not court.Parent then
+			ctx.cancelEvent(ev, "The court is gone.")
+			return
+		end
+		local t = now()
+		if ev.state == "Checkin" then
+			if t < ev.phaseEndsAt then
+				return
+			end
+			local players = {}
+			for _, p in table.clone(ev.registered) do
+				if p.Parent and ctx.onCourt(court, p, 15) then
+					table.insert(players, p)
+				else
+					ctx.dropEntrant(ev, p, "MISSED CHECK-IN", "You weren't at the court when the Streetball Tournament started.")
+				end
+			end
+			if #players < ctx.minEntrants(ev.kind) then
+				ctx.cancelEvent(ev, string.format("A tournament needs at least %d players at the court.", ctx.minEntrants(ev.kind)))
+				return
+			end
+			for i = #players, 2, -1 do
+				local j = ctx.rng:NextInteger(1, i)
+				players[i], players[j] = players[j], players[i]
+			end
+			local size = if #players >= S.TWO_V_TWO_FROM and #players % 2 == 0 then 2 else 1
+			d.mode = size .. "v" .. size
+			for i = 1, #players, size do
+				local members = {}
+				for k = i, math.min(#players, i + size - 1) do
+					table.insert(members, players[k])
+				end
+				local names = {}
+				for _, p in members do
+					table.insert(names, p.DisplayName)
+				end
+				table.insert(d.teams, { id = #d.teams + 1, players = members, name = table.concat(names, " & "), seed = #d.teams + 1, out = nil, lostPoints = 0, played = false })
+			end
+			d.round = 1
+			buildRound(d, d.teams)
+			ev.state = "Running"
+			ev.phase = string.format("Round 1 · %s", d.mode)
+			ev.phaseEndsAt = 0
+			ctx.announce(players, string.format("%d TEAMS · %s · FIRST TO %d", #d.teams, d.mode, S.TARGET))
+			ctx.markDirty()
+			return
+		end
+
+		-- live games
+		for _, lane in d.lanes do
+			local m = lane.match
+			if m and not m.done then
+				tickMatch(ev, d, m)
+			end
+		end
+		-- start waiting games on free hoops
+		for _, m in d.matches do
+			if not m.done and not m.lane then
+				local lane: Lane? = nil
+				for _, l in d.lanes do
+					if not l.match and t >= l.freeAt then
+						lane = l
+						break
+					end
+				end
+				if not lane then
+					break
+				end
+				-- a team with nobody at the court forfeits on the spot
+				local aHere, bHere = false, false
+				for _, p in m.a.players do
+					aHere = aHere or present(ev, d, p)
+				end
+				for _, p in m.b.players do
+					bHere = bHere or present(ev, d, p)
+				end
+				if not aHere and not bHere then
+					m.a.played, m.b.played = false, false
+					finishMatch(ev, m, if m.a.seed < m.b.seed then m.a else m.b, "no-show")
+				elseif not aHere then
+					m.b.played = true
+					finishMatch(ev, m, m.b, "no-show")
+				elseif not bHere then
+					m.a.played = true
+					finishMatch(ev, m, m.a, "no-show")
+				else
+					startMatch(ev, m, lane)
+				end
+			end
+		end
+
+		-- round over?
+		for _, m in d.matches do
+			if not m.done then
+				return
+			end
+		end
+		local winners: { Team } = {}
+		for _, m in d.matches do
+			if m.winner then
+				table.insert(winners, m.winner)
+			end
+		end
+		if d.bye then
+			table.insert(winners, d.bye)
+		end
+		if #winners <= 1 then
+			finish(ev, winners[1])
+			return
+		end
+		d.round += 1
+		buildRound(d, winners)
+		ev.phase = if #winners == 2 then "Final · " .. d.mode else string.format("Round %d · %s", d.round, d.mode)
+		ctx.announce(ctx.audience(ev), if #winners == 2 then "THE FINAL IS NEXT" else "ROUND " .. d.round)
+		ctx.markDirty()
+	end
+
+	function handlers.live(ev: any, viewer: Player): any
+		local d = ev.data
+		local lines = {}
+		local status
+		local out: any = { lines = lines, endsAt = ev.phaseEndsAt }
+		if ev.state == "Checkin" then
+			local here = 0
+			for _, p in ev.registered do
+				if ctx.onCourt(d.court, p, 15) then
+					here += 1
+				end
+			end
+			table.insert(lines, string.format("%d / %d players at %s", here, #ev.registered, ctx.courtLabel(d.court)))
+			table.insert(lines, string.format("%d+ players (even) plays 2v2, otherwise 1v1.", S.TWO_V_TWO_FROM))
+			status = if ctx.isRegistered(ev, viewer)
+				then (if ctx.onCourt(d.court, viewer, 15) then "Checked in. Warm up!" else "Get to the court!")
+				else "Check-in is open"
+		else
+			local mine: Match? = nil
+			for _, lane in d.lanes do
+				local m = lane.match
+				if m then
+					local left = math.max(0, m.endsAt - now())
+					table.insert(lines, string.format("%s hoop: %s %d-%d %s · %s", lane.side, m.a.name, m.score[m.a], m.score[m.b], m.b.name, if m.sudden then "next bucket" else EC.formatIn(left)))
+					if teamOf(m, viewer) then
+						mine = m
+					end
+				end
+			end
+			local waiting = {}
+			for _, m in d.matches do
+				if not m.done and not m.lane then
+					table.insert(waiting, m.a.name .. " vs " .. m.b.name)
+				end
+			end
+			if #waiting > 0 then
+				table.insert(lines, "Up next: " .. table.concat(waiting, " · "))
+			end
+			if d.bye then
+				table.insert(lines, "Bye: " .. d.bye.name)
+			end
+			for i = 1, math.min(2, #d.log) do
+				table.insert(lines, d.log[i])
+			end
+			if mine then
+				local myTeam = teamOf(mine, viewer) :: Team
+				local them = other(mine, myTeam)
+				status = string.format("YOUR GAME · %d-%d vs %s", mine.score[myTeam], mine.score[them], them.name)
+				out.endsAt = mine.endsAt
+				out.highlight = true
+			elseif ctx.isRegistered(ev, viewer) then
+				local myTeam: Team? = nil
+				for _, team in d.teams do
+					if table.find(team.players, viewer) then
+						myTeam = team
+					end
+				end
+				if myTeam and myTeam.out then
+					status = string.format("Out in round %d. Payouts at the end.", myTeam.out)
+				elseif myTeam and d.bye == myTeam then
+					status = "Bye this round. Stay close."
+				else
+					status = "Your game is coming up. Stay at the court."
+				end
+			else
+				status = "Watching the bracket"
+			end
+		end
+		out.status = status
+		return out
+	end
+
+	function handlers.leave(ev: any, p: Player)
+		local m = playerMatch[p]
+		if m and m.ev == ev then
+			playerMatch[p] = nil
+			if m.ball and m.ball.holder == p then
+				Basketball.drop(m.ball)
+			end
+		end
+	end
+
+	function handlers.cleanup(ev: any)
+		local d = ev.data
+		for ball, m in matchBalls do
+			if m.ev == ev then
+				matchBalls[ball] = nil
+				Basketball.destroy(ball)
+			end
+		end
+		for p, m in playerMatch do
+			if m.ev == ev then
+				playerMatch[p] = nil
+			end
+		end
+		if d then
+			for _, m in d.matches or {} do
+				m.done = true
+			end
+			if d.folder then
+				d.folder:Destroy()
+			end
+			ctx.releaseCourt(d.court)
+		end
+	end
+
+	Players.PlayerRemoving:Connect(function(p)
+		playerMatch[p] = nil
+	end)
+
+	return handlers
+end
+
+return EventStreetball
+]=====])
 put(server, 'ModuleScript', 'Events', [=====[
 -- CITY GRIND: city events (spec sections 41, 57, 58, 63, 92, 114).
 -- A scheduler rotates real events every 12-20 minutes of server time. Each one
 -- is announced city-wide 5 minutes ahead and again when it starts, has a
 -- location, a start time, rewards (cash / XP / reputation, never Robux), a
--- player cap and a live participant list. Three events are fully built:
+-- player cap and a live participant list. Built in this file:
 --   * 3-Point Contest at the Neighborhood Court (only while the court is Idle)
 --   * City 5K Run on the sidewalks, checkpoints validated here
 --   * Car Meet at the Car Meet Lot: park in a bay, then everyone votes
+-- More kinds live in their own modules and plug in through the kind registry
+-- (Events.registerKind): EventDunk, EventHunt, EventPhoto, EventFashion and
+-- EventStreetball. Each gets the shared helpers in `ctx` and provides
+-- goLive / tick / live / cleanup / leave / request handlers.
 -- Plus an hourly community goal counted from every real basket in the city.
 --
 -- Remotes: EventsRequest (RemoteFunction, client -> server: action, ...)
 --          EventsUpdate  (RemoteEvent, server -> client: kind, ...)
 -- Player attribute: Event = event id while taking part in a live event.
--- Court attribute (NeighborhoodCourt): Event = true / EventName while the contest runs.
--- Saved section "events": { best5k, best3pt, joined, podiums, wins, carAwards }.
+-- Court attribute (any Court): Event = true / EventName while a court event runs.
+-- Saved section "events": { best5k, best3pt, joined, podiums, wins, carAwards,
+--   dunkBest?, caches?, photoWins?, fashionWins?, streetballWins? } (the ? fields are
+--   added lazily, so older saves without them read as 0).
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -17003,6 +23283,8 @@ type Event = {
 	announced: boolean,
 	reminded: boolean,
 	postpones: number,
+	venue: any, -- picked at schedule time by registry kinds (court model, spot...)
+	counted: { [number]: boolean }?, -- userIds whose join already counted toward "joined"
 	data: any,
 }
 
@@ -17252,11 +23534,11 @@ end
 -- Rewards ranking shared by the contest and the race. A podium place is only
 -- paid when someone finished below you, so a solo entry can't farm 1st place.
 ---------------------------------------------------------------------------
-local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligible: (Player, number) -> boolean)
+local function payPlace(ev: Event, p: Player, place: number, entrants: number, eligible: boolean)
 	local kind = EC.KINDS[ev.kind]
-	for place, p in ranked do
+	do
 		local reward = kind.podium[place]
-		if reward and entrants > place and eligible(p, place) then
+		if reward and entrants > place and eligible then
 			give(p, reward, string.format("%s: #%d", ev.name, place))
 			local sec = section(p)
 			if sec then
@@ -17271,6 +23553,60 @@ local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligib
 			give(p, kind.finisher, ev.name .. " entry")
 			Net.notify(p, ev.name:upper() .. " DONE", string.format("You placed #%d. %s", place, EC.rewardText(kind.finisher)))
 		end
+	end
+end
+
+local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligible: (Player, number) -> boolean)
+	for place, p in ranked do
+		payPlace(ev, p, place, entrants, eligible(p, place))
+	end
+end
+
+-- Takes a player out of an event before it really starts (missed check-in etc.).
+local function dropEntrant(ev: Event, p: Player, title: string, body: string)
+	local i = table.find(ev.registered, p)
+	if i then
+		table.remove(ev.registered, i)
+	end
+	if p.Parent and p:GetAttribute("Event") == ev.id then
+		setEventAttr(p, nil)
+	end
+	if p.Parent then
+		Net.notify(p, title, body)
+		Update:FireClient(p, "Closed", ev.id)
+	end
+	markDirty()
+end
+
+---------------------------------------------------------------------------
+-- Kind registry. Kinds in other modules register these handlers:
+--   available()            -> boolean      can it run on this server right now
+--   pickVenue()            -> (Vector3, string?, any?)  position, location text, venue
+--   goLive(ev)             -> (string, string?)  "live" | "postpone" | "cancel", message
+--   tick(ev)               10 Hz while live
+--   live(ev, viewer)       -> table for the live panel
+--   cleanup(ev)?           when the event closes for any reason
+--   leave(ev, player)?     a player left (quit, LEAVE, server exit)
+--   request(ev, player, action, b, c)? -> { ok, msg, ... }   Vote / Submit / Entry
+--   tip: string?           shown after joining
+---------------------------------------------------------------------------
+export type KindHandlers = {
+	available: (() -> boolean)?,
+	pickVenue: (() -> (Vector3, string?, any))?,
+	goLive: (any) -> (string, string?),
+	tick: (any) -> (),
+	live: (any, Player) -> any,
+	cleanup: ((any) -> ())?,
+	leave: ((any, Player) -> ())?,
+	request: ((any, Player, string, any, any) -> any)?,
+	tip: string?,
+}
+local registry: { [string]: KindHandlers } = {}
+
+function Events.registerKind(kindId: string, handlers: KindHandlers)
+	registry[kindId] = handlers
+	if handlers.cleanup then
+		cleanupByKind[kindId] = handlers.cleanup
 	end
 end
 
@@ -18468,6 +24804,16 @@ local function kindAvailable(kind: string): boolean
 		return court ~= nil
 	elseif kind == "CarMeet" then
 		return #meetBays > 0
+	elseif kind == "City5K" then
+		return true
+	end
+	local h = registry[kind]
+	if not h or not EC.KINDS[kind] then
+		return false -- module missing or failed to load
+	end
+	if h.available then
+		local ok, yes = pcall(h.available)
+		return ok and yes == true
 	end
 	return true
 end
@@ -18485,12 +24831,32 @@ local function pickKind(): string
 			end
 		end
 		local kind = table.remove(kindBag, 1) :: string
-		if kindAvailable(kind) then
+		-- a kind that is already scheduled waits for the next bag, so one
+		-- kind never fills the whole upcoming list
+		local queued = false
+		for _, ev in events do
+			if ev.kind == kind then
+				queued = true
+			end
+		end
+		if not queued and kindAvailable(kind) then
 			lastKind = kind
 			return kind
 		end
 	end
 	return "City5K"
+end
+
+-- Where a registry kind will happen: (position, location text, venue).
+local function venueOf(kind: string): (Vector3?, string?, any)
+	local h = registry[kind]
+	if h and h.pickVenue then
+		local ok, pos, label, venue = pcall(h.pickVenue)
+		if ok and typeof(pos) == "Vector3" then
+			return pos, label, venue
+		end
+	end
+	return nil, nil, nil
 end
 
 local function locationOf(kind: string): Vector3
@@ -18516,14 +24882,15 @@ local function schedule()
 		lastScheduledAt = startsAt
 		local kind = pickKind()
 		local info = EC.KINDS[kind]
+		local venuePos, venueLabel, venue = venueOf(kind)
 		nextId += 1
 		table.insert(events, {
 			id = "E" .. nextId,
 			kind = kind,
 			name = info.name,
 			icon = info.icon,
-			location = info.location,
-			pos = locationOf(kind),
+			location = venueLabel or info.location,
+			pos = venuePos or locationOf(kind),
 			startsAt = startsAt,
 			state = "Upcoming",
 			phase = "Upcoming",
@@ -18534,6 +24901,7 @@ local function schedule()
 			announced = false,
 			reminded = false,
 			postpones = 0,
+			venue = venue,
 			data = nil,
 		})
 		upcoming += 1
@@ -18544,8 +24912,37 @@ local function schedule()
 	end)
 end
 
+local function postpone(ev: Event, msg: string)
+	ev.postpones += 1
+	if ev.postpones > EC.MAX_POSTPONES then
+		cancelEvent(ev, msg)
+		return
+	end
+	ev.startsAt = now() + EC.POSTPONE_SECONDS
+	ev.phaseEndsAt = ev.startsAt
+	ev.reminded = false
+	for _, p in ev.registered do
+		Net.notify(p, ev.name:upper() .. " POSTPONED", msg .. " Trying again in 2 minutes.")
+	end
+	markDirty()
+end
+
 local function goLive(ev: Event)
-	if ev.kind == "ThreePoint" then
+	local h = registry[ev.kind]
+	if h then
+		local ok, status, msg = pcall(h.goLive, ev)
+		if not ok then
+			warn("[CityGrind] Event " .. ev.kind .. " failed to start:", status)
+			cancelEvent(ev, "This event couldn't be set up.")
+			return
+		elseif status == "postpone" then
+			postpone(ev, msg or "The venue is busy.")
+			return
+		elseif status ~= "live" then
+			cancelEvent(ev, msg or "This event couldn't be set up.")
+			return
+		end
+	elseif ev.kind == "ThreePoint" then
 		local m = court
 		if not m then
 			cancelEvent(ev, "The court is unavailable.")
@@ -18591,8 +24988,18 @@ local function goLive(ev: Event)
 	markDirty()
 end
 
-local TICKS = { ThreePoint = tickThree, City5K = tickRun, CarMeet = tickMeet }
-local LIVE = { ThreePoint = liveThree, City5K = liveRun, CarMeet = liveMeet }
+local TICKS: { [string]: (Event) -> () } = { ThreePoint = tickThree, City5K = tickRun, CarMeet = tickMeet }
+local LIVE: { [string]: (Event, Player) -> any } = { ThreePoint = liveThree, City5K = liveRun, CarMeet = liveMeet }
+
+local function tickFn(kind: string): ((Event) -> ())?
+	local h = registry[kind]
+	return if h then h.tick else TICKS[kind]
+end
+
+local function liveFn(kind: string): ((Event, Player) -> any)?
+	local h = registry[kind]
+	return if h then h.live else LIVE[kind]
+end
 
 local function tickSchedule()
 	local t = now()
@@ -18903,14 +25310,19 @@ local function snapshot(player: Player): any
 			wins = sec and sec.wins or 0,
 			podiums = sec and sec.podiums or 0,
 			carAwards = sec and sec.carAwards or 0,
+			dunkBest = sec and sec.dunkBest or 0,
+			caches = sec and sec.caches or 0,
+			photoWins = sec and sec.photoWins or 0,
+			fashionWins = sec and sec.fashionWins or 0,
+			streetballWins = sec and sec.streetballWins or 0,
 		},
 	}
 end
 
 local function pushLive()
 	for _, ev in events do
-		if isLive(ev) and ev.data then
-			local fn = LIVE[ev.kind]
+		local fn = liveFn(ev.kind)
+		if isLive(ev) and ev.data and fn then
 			local audience = table.clone(ev.registered)
 			for p in ev.watchers do
 				if not table.find(audience, p) then
@@ -18967,6 +25379,11 @@ local function leave(ev: Event, player: Player, quiet: boolean?)
 		elseif ev.kind == "CarMeet" then
 			ev.data.parked[player] = nil
 			refreshBayPlates(ev)
+		elseif registry[ev.kind] and registry[ev.kind].leave then
+			local ok, err = pcall((registry[ev.kind] :: any).leave, ev, player)
+			if not ok then
+				warn("[CityGrind] Event leave failed:", err)
+			end
 		end
 	end
 	if player.Parent then
@@ -18997,8 +25414,13 @@ local function join(ev: Event, player: Player): (boolean, string)
 	end
 	table.insert(ev.registered, player)
 	ev.watchers[player] = nil
+	-- leaving and re-joining the same event never counts twice (quests,
+	-- achievements and the story read "joined")
+	local counted = ev.counted or {}
+	ev.counted = counted
 	local sec = section(player)
-	if sec then
+	if sec and not counted[player.UserId] then
+		counted[player.UserId] = true
 		sec.joined += 1
 		PlayerData.markChanged(player)
 	end
@@ -19006,8 +25428,8 @@ local function join(ev: Event, player: Player): (boolean, string)
 		setEventAttr(player, ev.id)
 	end
 	markDirty()
-	local tip = if ev.kind == "CarMeet"
-		then " Bring a spawned vehicle (Garage app)."
+	local tip = if registry[ev.kind] then " " .. (registry[ev.kind].tip or "")
+		elseif ev.kind == "CarMeet" then " Bring a spawned vehicle (Garage app)."
 		elseif ev.kind == "City5K" then " Be on foot in the start box."
 		else " Be on the court at check-in."
 	if ev.state == "Upcoming" then
@@ -19028,7 +25450,7 @@ end
 ---------------------------------------------------------------------------
 -- Remote handling
 ---------------------------------------------------------------------------
-local COOLDOWNS = { List = 0.4, Join = 1, Leave = 1, Remind = 0.5, Watch = 0.5, Unwatch = 0.5, Vote = 0.25, Invite = 2 }
+local COOLDOWNS = { List = 0.4, Join = 1, Leave = 1, Remind = 0.5, Watch = 0.5, Unwatch = 0.5, Vote = 0.25, Invite = 2, Submit = 2, Entry = 0.3 }
 
 local function handle(player: Player, action: any, a: any, b: any, c: any): any
 	if type(action) ~= "string" or not COOLDOWNS[action] then
@@ -19074,8 +25496,15 @@ local function handle(player: Player, action: any, a: any, b: any, c: any): any
 		ev.watchers[player] = nil
 		markDirty()
 		return { ok = true, msg = "Stopped watching." }
-	elseif action == "Vote" then
-		if ev.kind ~= "CarMeet" or ev.state ~= "Voting" or not ev.data then
+	elseif action == "Vote" or action == "Submit" or action == "Entry" then
+		local h = registry[ev.kind]
+		if h then
+			if not h.request or not ev.data then
+				return { ok = false, msg = "Nothing to do here right now." }
+			end
+			return (h.request :: any)(ev, player, action, b, c)
+		end
+		if action ~= "Vote" or ev.kind ~= "CarMeet" or ev.state ~= "Voting" or not ev.data then
 			return { ok = false, msg = "Voting isn't open." }
 		end
 		if type(b) ~= "number" or b % 1 ~= 0 or not MEET.CATEGORIES[b] or type(c) ~= "number" then
@@ -19149,6 +25578,147 @@ function Events.isInEvent(player: Player): string?
 	return nil
 end
 
+---------------------------------------------------------------------------
+-- Shared helpers handed to the kind modules (EventDunk, EventHunt, ...)
+---------------------------------------------------------------------------
+local KIND_MODULES = {
+	DunkContest = "EventDunk",
+	TreasureHunt = "EventHunt",
+	PhotoChallenge = "EventPhoto",
+	FashionShow = "EventFashion",
+	StreetballTournament = "EventStreetball",
+}
+
+-- Courts an event may take over: public (not the gated Luxury Hills club) and
+-- at street level (not the Summit rooftop, which needs the elevator).
+local function publicCourt(m: Instance): boolean
+	return m:IsA("Model") and m.Parent ~= nil and not m.Name:find("Private") and courtCenter(m :: Model).Y < 20
+end
+
+local function courtFree(m: Model): boolean
+	return publicCourt(m) and courtIdle(m) and not m:GetAttribute("Event") and rimOf(m, "North") ~= nil and rimOf(m, "South") ~= nil
+end
+
+-- A public court that no event and no pickup game is using right now.
+-- `prefer` (a court or court names, best first) wins when free; `avoid` never.
+local function freeCourt(prefer: any, avoid: Model?): Model?
+	local wanted: { Model } = {}
+	if typeof(prefer) == "Instance" and prefer:IsA("Model") then
+		table.insert(wanted, prefer)
+	elseif type(prefer) == "table" then
+		for _, name in prefer do
+			for _, m in CollectionService:GetTagged("Court") do
+				if m:IsA("Model") and m.Name == name then
+					table.insert(wanted, m)
+				end
+			end
+		end
+	end
+	for _, m in wanted do
+		if m ~= avoid and courtFree(m) then
+			return m
+		end
+	end
+	for _, m in CollectionService:GetTagged("Court") do
+		if m:IsA("Model") and m ~= avoid and courtFree(m) then
+			return m
+		end
+	end
+	return nil
+end
+
+local function makeCtx(): any
+	return {
+		EC = EC,
+		root = root,
+		rng = rng,
+		now = now,
+		part = part,
+		surfaceText = surfaceText,
+		rootOf = rootOf,
+		humanoidOf = humanoidOf,
+		flat = flat,
+		flatDist = flatDist,
+		onFoot = onFoot,
+		notify = Net.notify,
+		notifyAll = notifyAll,
+		announce = function(players: { Player }, text: string)
+			Basketball.announce(players, text)
+		end,
+		section = section,
+		give = give,
+		payPlace = payPlace,
+		payPodium = payPodium,
+		pushResult = pushResult,
+		closeEvent = closeEvent,
+		cancelEvent = cancelEvent,
+		dropEntrant = dropEntrant,
+		isRegistered = isRegistered,
+		setEventAttr = setEventAttr,
+		markDirty = markDirty,
+		fire = function(p: Player, ...)
+			if p.Parent then
+				Update:FireClient(p, ...)
+			end
+		end,
+		audience = function(ev: Event): { Player }
+			local list = table.clone(ev.registered)
+			for p in ev.watchers do
+				if p.Parent and not table.find(list, p) then
+					table.insert(list, p)
+				end
+			end
+			return list
+		end,
+		-- courts
+		courtCenter = courtCenter,
+		courtSize = courtSize,
+		courtIdle = courtIdle,
+		onCourt = onCourt,
+		rimOf = rimOf,
+		freeCourt = freeCourt,
+		publicCourt = publicCourt,
+		minEntrants = function(kind: string): number
+			return EC.MIN_ENTRANTS[kind] or 1
+		end,
+		threeCourt = function(): Model?
+			return court
+		end,
+		claimCourt = function(m: Model, name: string)
+			m:SetAttribute("Event", true)
+			m:SetAttribute("EventName", name)
+		end,
+		releaseCourt = function(m: Model?)
+			if m then
+				m:SetAttribute("Event", nil)
+				m:SetAttribute("EventName", nil)
+			end
+		end,
+		courtLabel = function(m: Model): string
+			local n = m:GetAttribute("DisplayName")
+			return if type(n) == "string" then n else m.Name
+		end,
+	}
+end
+
+local function loadKinds()
+	local ctx = makeCtx()
+	for kindId, moduleName in KIND_MODULES do
+		local module = script.Parent:FindFirstChild(moduleName)
+		if not module then
+			warn("[CityGrind] Events: missing kind module " .. moduleName)
+			continue
+		end
+		local ok, err = pcall(function()
+			local handlers = require(module :: ModuleScript).init(ctx)
+			Events.registerKind(kindId, handlers)
+		end)
+		if not ok then
+			warn("[CityGrind] Events: " .. moduleName .. " failed to load:", err)
+		end
+	end
+end
+
 function Events.start(city: Instance)
 	Request = Net.remote("RemoteFunction", "EventsRequest")
 	Update = Net.remote("RemoteEvent", "EventsUpdate")
@@ -19165,6 +25735,16 @@ function Events.start(city: Instance)
 	buildBoards(root)
 	wrapPolicy()
 	Basketball.scored.connect(onScored)
+	loadKinds()
+
+	-- Server shutting down: close every event cleanly (venues, courts, balls).
+	game:BindToClose(function()
+		for _, ev in table.clone(events) do
+			if isLive(ev) then
+				pcall(cancelEvent, ev, "The server is shutting down.")
+			end
+		end
+	end)
 
 	Request.OnServerInvoke = function(player, action, a, b, c)
 		local ok, result = pcall(handle, player, action, a, b, c)
@@ -19216,8 +25796,9 @@ function Events.start(city: Instance)
 			local dt = task.wait(0.1)
 			tickBalls()
 			for _, ev in table.clone(events) do
-				if isLive(ev) and table.find(events, ev) then
-					local ok, err = pcall(TICKS[ev.kind], ev)
+				local fn = tickFn(ev.kind)
+				if isLive(ev) and table.find(events, ev) and fn then
+					local ok, err = pcall(fn, ev)
 					if not ok then
 						warn("[CityGrind] Event " .. ev.kind .. " failed:", err)
 						pcall(cancelEvent, ev, "Something went wrong running this event.")
@@ -23614,6 +30195,19 @@ function Media.start(_city: Instance?)
 		return success, message, data
 	end
 
+	-- Studio without API access: GetDataStore works but every request fails, so keep
+	-- photos in memory for this session instead of failing every capture.
+	if photoStore and game:GetService("RunService"):IsStudio() then
+		task.spawn(function()
+			local ok = pcall(function()
+				(photoStore :: DataStore):GetAsync("probe")
+			end)
+			if not ok then
+				photoStore = nil
+			end
+		end)
+	end
+
 	PlayerData.onLoaded(function(player: Player)
 		local s = sec(player)
 		if s then
@@ -26822,6 +33416,1029 @@ end
 
 return PlayerData
 ]=====])
+put(server, 'ModuleScript', 'Quests', [=====[
+-- CITY GRIND: daily/weekly quests, achievements and the daily login reward
+-- (spec sections 78, 79, 80, 113). Server side.
+--
+-- Everything is measured on the server from real gameplay:
+--   * saved data other systems already keep (basketball career, job shifts,
+--     gym reps, photos taken, CityGram posts, events joined / podiums, owned
+--     vehicles / homes / clothes, level, reputation, fame)
+--   * bank transactions as PlayerData logs them (cash earned, Corner Mart and
+--     Threads purchases), read through PlayerData.onPublish
+--   * Player attributes (PhoneOut, Interior, District, SubwayRides, CrewId)
+--   * Basketball.scored (every made shot on any court)
+--   * distance on foot / driving, sampled once a second with a speed cap so a
+--     teleport never counts
+-- These become "metrics" (lifetime numbers, see metric()). Daily and weekly
+-- quests count a metric's growth since the quest was handed out; achievements
+-- and Story missions compare the lifetime value. The client never reports progress.
+--
+-- Remotes: QuestsRequest (RemoteFunction, client -> server: action, a, b) -> (ok, message, state)
+--            actions: "Get" | "Claim" (list "daily"/"weekly", index) | "Reroll" (index) | "ClaimLogin"
+--          QuestsEvent (RemoteEvent, server -> client): ("State", state) | ("Achievement", id)
+-- Player attribute: Achievements (number unlocked).
+-- Saved section "quests":
+--   { day, daily = {Quest}, rerollDay, week, weekly = {Quest}, life = {counters}, districts = {[id]=true},
+--     ach = {[id]=unix time}, titles = {string}, login = { lastDay, streak } }
+--   Quest = { id, goal, base, claimed, cash, xp, rep }
+--
+-- Public API:
+--   Quests.unlock(player, achievementId) -> boolean   (grants rewards once)
+--   Quests.hasAchievement(player, achievementId) -> boolean
+--   Quests.titles(player) -> {string}                   (titles earned here, for Social)
+--   Quests.metric(player, name) -> number               (lifetime metric, used by Story)
+--   Quests.onProgress(fn(player))                       (runs after metrics may have changed)
+--   Quests.districtsAvailable() -> boolean
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local QC = require(shared:WaitForChild("QuestsConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local Quests = {}
+
+local SECTION = "quests"
+
+PlayerData.registerSection(SECTION, function()
+	return {
+		day = 0,
+		daily = {},
+		rerollDay = 0,
+		week = 0,
+		weekly = {},
+		life = {
+			shots = 0, -- made shots on any court
+			earned = 0, -- cash earned (no transfers, refunds or quest rewards)
+			runM = 0, -- metres on foot
+			driveM = 0, -- metres driven
+			drinks = 0, -- Corner Mart purchases (incl. the vending machine)
+			threads = 0, -- Threads Clothing purchases
+			phone = 0, -- times the phone was taken out
+			apartment = 0, -- times entering an apartment
+			subway = 0, -- subway rides
+			subwayDowntown = 0, -- subway rides that ended Downtown
+			crew = 0, -- 1 once in a crew
+			viral = 0, -- CityTok videos that went viral
+			tokPosts = 0, -- CityTok posts made
+			friends = 0, -- most friends at once
+			questsDone = 0,
+			loginCycles = 0, -- full 7-day login streaks
+		},
+		districts = {},
+		ach = {},
+		titles = {},
+		login = { lastDay = 0, streak = 0 },
+	}
+end)
+
+local function sec(player: Player): any
+	return PlayerData.section(player, SECTION)
+end
+
+---------------------------------------------------------------------------
+-- Optional sibling modules / configs (required lazily, never fatal)
+---------------------------------------------------------------------------
+local lazy: { [string]: any } = {}
+local function sibling(name: string): any
+	if lazy[name] == nil then
+		lazy[name] = false
+		local module = script.Parent:FindFirstChild(name)
+		if module and module:IsA("ModuleScript") then
+			local ok, result = pcall(require, module)
+			if ok and type(result) == "table" then
+				lazy[name] = result
+			end
+		end
+	end
+	return lazy[name] or nil
+end
+
+local function sharedModule(name: string): any
+	local key = "shared:" .. name
+	if lazy[key] == nil then
+		lazy[key] = false
+		local module = shared:FindFirstChild(name)
+		if module and module:IsA("ModuleScript") then
+			local ok, result = pcall(require, module)
+			if ok and type(result) == "table" then
+				lazy[key] = result
+			end
+		end
+	end
+	return lazy[key] or nil
+end
+
+local cityModel: Instance? = nil
+
+function Quests.districtsAvailable(): boolean
+	local city = cityModel or workspace:FindFirstChild("City")
+	local folder = city and city:FindFirstChild("Districts")
+	return folder ~= nil and #folder:GetChildren() > 0
+end
+
+---------------------------------------------------------------------------
+-- Time
+---------------------------------------------------------------------------
+local function utcDay(): number
+	return os.time() // 86400
+end
+
+-- ISO weeks start on Monday; 1 Jan 1970 was a Thursday.
+local function isoWeek(): number
+	return (utcDay() + 3) // 7
+end
+
+---------------------------------------------------------------------------
+-- Metrics
+---------------------------------------------------------------------------
+local function count(t: any): number
+	local n = 0
+	if type(t) == "table" then
+		for _ in t do
+			n += 1
+		end
+	end
+	return n
+end
+
+local function rankIndex(rep: number): number
+	local index = 1
+	for i, rank in Config.REPUTATION_RANKS do
+		if rep >= rank.min then
+			index = i
+		end
+	end
+	return index
+end
+
+local function homeTierIndex(data: any): number
+	local apartments = data.sections.apartments
+	local AC = sharedModule("ApartmentsConfig")
+	if type(apartments) ~= "table" or type(apartments.ownedTiers) ~= "table" or not AC then
+		return 1
+	end
+	local best = 1
+	for i, tier in AC.TIERS do
+		if apartments.ownedTiers[tier.id] then
+			best = math.max(best, i)
+		end
+	end
+	return best
+end
+
+local BASKETBALL = { points = true, threes = true, dunks = true, blocks = true, steals = true, games = true, wins = true }
+
+-- The lifetime value of a metric for this player (0 when unknown).
+function Quests.metric(player: Player, name: string): number
+	local data = PlayerData.get(player)
+	if not data then
+		return 0
+	end
+	local s = data.sections
+	if BASKETBALL[name] then
+		return data.basketball[name] or 0
+	elseif name == "jobs" or name == "jobLevel" then
+		local total, best = 0, 0
+		if type(s.jobs) == "table" then
+			for _, j in s.jobs do
+				if type(j) == "table" then
+					total += j.shifts or 0
+					best = math.max(best, j.level or 0)
+				end
+			end
+		end
+		return if name == "jobs" then total else best
+	elseif name == "reps" then
+		return type(s.gym) == "table" and s.gym.totalReps or 0
+	elseif name == "level" then
+		return data.level
+	elseif name == "rep" then
+		return data.reputation
+	elseif name == "rankIndex" then
+		return rankIndex(data.reputation)
+	elseif name == "fame" then
+		return data.fame or 0
+	elseif name == "vehicles" then
+		return type(s.vehicles) == "table" and count(s.vehicles.owned) or 0
+	elseif name == "homeTier" then
+		return homeTierIndex(data)
+	elseif name == "items" then
+		return type(s.wardrobe) == "table" and type(s.wardrobe.owned) == "table" and #s.wardrobe.owned or 0
+	elseif name == "photos" then
+		return type(s.media) == "table" and s.media.taken or 0
+	elseif name == "posts" then
+		return type(s.citygram) == "table" and s.citygram.posts or 0
+	elseif name == "events" then
+		return type(s.events) == "table" and s.events.joined or 0
+	elseif name == "podiums" then
+		return type(s.events) == "table" and s.events.podiums or 0
+	elseif name == "eventWins" then
+		return type(s.events) == "table" and s.events.wins or 0
+	elseif name == "followers" then
+		local n = player:GetAttribute("Followers")
+		return if type(n) == "number" then n else 0
+	end
+	local q = s[SECTION]
+	if not q then
+		return 0
+	end
+	if name == "districts" then
+		return count(q.districts)
+	end
+	local v = q.life[name]
+	return if type(v) == "number" then math.floor(v) else 0
+end
+local metric = Quests.metric
+
+---------------------------------------------------------------------------
+-- Session tracking
+---------------------------------------------------------------------------
+type Session = {
+	conns: { RBXScriptConnection },
+	lastTx: any, -- newest transaction table already looked at (false = none)
+	lastFame: number?,
+	tokSeen: { [any]: boolean },
+	lastPos: Vector3?,
+	lastAt: number,
+	runStuds: number,
+	driveStuds: number,
+	signature: string?,
+}
+local sessions: { [Player]: Session } = {}
+local dirty: { [Player]: boolean } = {}
+local needsSave: { [Player]: boolean } = {}
+local progressListeners: { (Player) -> () } = {}
+
+local QuestsEvent: RemoteEvent
+
+function Quests.onProgress(fn: (Player) -> ())
+	table.insert(progressListeners, fn)
+end
+
+function Quests.markDirty(player: Player)
+	dirty[player] = true
+end
+
+local function bump(player: Player, key: string, amount: number)
+	local q = sec(player)
+	if not q or amount <= 0 then
+		return
+	end
+	q.life[key] = (q.life[key] or 0) + amount
+	needsSave[player] = true
+	dirty[player] = true
+end
+
+-- Labels of incoming cash that isn't "earned": transfers, refunds, and the
+-- rewards this module and the Story pay out (so quests can't feed themselves).
+local NOT_EARNED = { "From ", "Refund", "Crew fee refund", "Welcome", "Quest", "Achievement", "Daily", "Story" }
+
+local function startsWith(s: string, prefix: string): boolean
+	return s:sub(1, #prefix) == prefix
+end
+
+local function classify(player: Player, t: any)
+	if type(t) ~= "table" or type(t.amount) ~= "number" or type(t.label) ~= "string" then
+		return
+	end
+	if t.amount > 0 then
+		for _, prefix in NOT_EARNED do
+			if startsWith(t.label, prefix) then
+				return
+			end
+		end
+		bump(player, "earned", t.amount)
+	elseif t.amount < 0 then
+		if startsWith(t.label, "Corner Mart") then
+			bump(player, "drinks", 1)
+		elseif startsWith(t.label, "Threads:") then
+			bump(player, "threads", 1)
+		end
+	end
+end
+
+-- Runs on every attribute republish; must not call markChanged itself.
+PlayerData.onPublish(function(player: Player, data: any)
+	local q = data.sections and data.sections[SECTION]
+	if not q then
+		return
+	end
+	player:SetAttribute("Achievements", count(q.ach))
+	local s = sessions[player]
+	if not s then
+		return
+	end
+
+	-- New bank transactions since last time (newest first).
+	local list = data.transactions
+	local top = list[1]
+	if s.lastTx == nil then
+		s.lastTx = top or false
+	elseif top ~= nil and top ~= s.lastTx then
+		for _, t in list do
+			if t == s.lastTx then
+				break
+			end
+			classify(player, t)
+		end
+		s.lastTx = top
+	end
+
+	-- A viral CityTok award is the only single fame jump of exactly this size.
+	local fame = data.fame or 0
+	local CT = sharedModule("CityTokConfig")
+	if s.lastFame and CT and CT.VIRAL_REWARD and fame - s.lastFame == CT.VIRAL_REWARD.fame then
+		bump(player, "viral", 1)
+	end
+	s.lastFame = fame
+
+	-- CityTok posts made: count post ids not seen before (the saved list is
+	-- capped and shrinks on delete, so its length alone can't be trusted).
+	local tok = data.sections.citytok
+	if type(tok) == "table" and type(tok.posts) == "table" then
+		local seen = s.tokSeen
+		for _, id in tok.posts do
+			if not seen[id] then
+				seen[id] = true
+				bump(player, "tokPosts", 1)
+			end
+		end
+	end
+
+	dirty[player] = true
+end)
+
+---------------------------------------------------------------------------
+-- Quest generation
+---------------------------------------------------------------------------
+local ELIGIBLE = {
+	vehicle = function(player: Player)
+		return metric(player, "vehicles") > 0
+	end,
+	notLegend = function(player: Player)
+		return metric(player, "rankIndex") < #Config.REPUTATION_RANKS
+	end,
+}
+
+local DEFS: { [string]: QC.QuestDef } = {}
+for _, def in QC.DAILY_POOL do
+	DEFS[def.id] = def
+end
+for _, def in QC.WEEKLY_POOL do
+	DEFS[def.id] = def
+end
+
+local rng = Random.new()
+
+local function goalFor(def: QC.QuestDef, level: number): number
+	local g = def.goal
+	if type(g) == "function" then
+		return g(level)
+	end
+	return g :: number
+end
+
+local function makeQuest(player: Player, def: QC.QuestDef, weekly: boolean)
+	local level = metric(player, "level")
+	local reward = if weekly then QC.weeklyReward(level) else QC.dailyReward(level)
+	return {
+		id = def.id,
+		goal = goalFor(def, level),
+		base = metric(player, def.metric),
+		claimed = false,
+		cash = reward.cash,
+		xp = reward.xp,
+		rep = reward.rep,
+	}
+end
+
+-- Pool entries this player can get that aren't already in `current`.
+local function candidates(player: Player, pool: { QC.QuestDef }, current: { any }): { QC.QuestDef }
+	local taken = {}
+	for _, quest in current do
+		taken[quest.id] = true
+	end
+	local list = {}
+	for _, def in pool do
+		local check = def.needs and ELIGIBLE[def.needs]
+		if not taken[def.id] and (not check or check(player)) then
+			table.insert(list, def)
+		end
+	end
+	return list
+end
+
+local function generate(player: Player, pool: { QC.QuestDef }, n: number, weekly: boolean): { any }
+	local out = {}
+	for _ = 1, n do
+		local options = candidates(player, pool, out)
+		if #options == 0 then
+			break
+		end
+		table.insert(out, makeQuest(player, options[rng:NextInteger(1, #options)], weekly))
+	end
+	return out
+end
+
+-- Hands out new dailies on a new UTC day and new weeklies on a new ISO week.
+local function refreshPeriods(player: Player, q: any): boolean
+	local changed = false
+	local today = utcDay()
+	if q.day ~= today then
+		q.day = today
+		q.daily = generate(player, QC.DAILY_POOL, QC.DAILY_COUNT, false)
+		changed = true
+	end
+	local week = isoWeek()
+	if q.week ~= week then
+		q.week = week
+		q.weekly = generate(player, QC.WEEKLY_POOL, QC.WEEKLY_COUNT, true)
+		changed = true
+	end
+	return changed
+end
+
+local function questText(def: QC.QuestDef, goal: number): string
+	if def.text:find("%s", 1, true) then
+		return string.format(def.text, QC.formatValue(def.metric, goal))
+	end
+	return def.text
+end
+
+local function progressOf(player: Player, quest: any): number
+	local def = DEFS[quest.id]
+	if not def then
+		return 0
+	end
+	return math.clamp(metric(player, def.metric) - (quest.base or 0), 0, quest.goal)
+end
+
+---------------------------------------------------------------------------
+-- Achievements
+---------------------------------------------------------------------------
+local function achievementListed(a: QC.Achievement): boolean
+	return a.needs ~= "districts" or Quests.districtsAvailable()
+end
+
+local function addTitle(q: any, title: string?)
+	if title and not table.find(q.titles, title) then
+		table.insert(q.titles, title)
+	end
+end
+
+function Quests.hasAchievement(player: Player, id: string): boolean
+	local q = sec(player)
+	return q ~= nil and q.ach[id] ~= nil
+end
+
+function Quests.unlock(player: Player, id: string): boolean
+	local q = sec(player)
+	local def = QC.ACHIEVEMENT_BY_ID[id]
+	if not q or not def or q.ach[id] then
+		return false
+	end
+	q.ach[id] = os.time()
+	addTitle(q, def.title)
+	PlayerData.markChanged(player)
+	if def.cash > 0 then
+		PlayerData.addCash(player, def.cash, "Achievement: " .. def.name)
+	end
+	if def.xp > 0 then
+		PlayerData.addXP(player, def.xp)
+	end
+	if QuestsEvent and player.Parent then
+		QuestsEvent:FireClient(player, "Achievement", id)
+	end
+	dirty[player] = true
+	return true
+end
+
+function Quests.titles(player: Player): { string }
+	local q = sec(player)
+	return if q then table.clone(q.titles) else {}
+end
+
+local function checkAchievements(player: Player)
+	local q = sec(player)
+	if not q then
+		return
+	end
+	for _, a in QC.ACHIEVEMENTS do
+		if a.metric and a.goal and not q.ach[a.id] and achievementListed(a) and metric(player, a.metric) >= a.goal then
+			Quests.unlock(player, a.id)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Daily login (113)
+---------------------------------------------------------------------------
+-- Which cycle day comes next, whether today is already claimed, and how many
+-- days of the current cycle are done.
+local function loginStatus(q: any): (number, boolean, number)
+	local L = q.login
+	local today = utcDay()
+	if L.lastDay == today then
+		return L.streak, true, L.streak
+	end
+	if L.lastDay == today - 1 and L.streak < 7 then
+		return L.streak + 1, false, L.streak
+	end
+	return 1, false, 0 -- missed a day, or a cycle just finished
+end
+
+local function loginPreview(player: Player): { any }
+	local level = metric(player, "level")
+	local out = {}
+	for _, d in QC.LOGIN_DAYS do
+		local text
+		if d.kind == "cash" then
+			text = "$" .. QC.commas(QC.loginCash(d.cash, level))
+		elseif d.kind == "xp" then
+			text = QC.commas(d.xp) .. " XP"
+		elseif d.kind == "cosmetic" then
+			text = "Free clothes"
+		elseif d.kind == "voucher" then
+			text = "Paint & Mods voucher"
+		else
+			text = "$" .. QC.commas(QC.loginCash(d.cash, level)) .. " + " .. QC.commas(d.xp) .. " XP + title"
+		end
+		table.insert(out, { day = d.day, icon = d.icon, label = d.label, text = text })
+	end
+	return out
+end
+
+local function grantLoginItem(player: Player): string?
+	local w = PlayerData.section(player, "wardrobe")
+	local SC = sharedModule("ShopsConfig")
+	if type(w) ~= "table" or type(w.owned) ~= "table" or not SC then
+		return nil
+	end
+	for _, id in QC.LOGIN_ITEMS do
+		local item = SC.ITEMS[id]
+		if item and not table.find(w.owned, id) then
+			table.insert(w.owned, id)
+			PlayerData.markChanged(player)
+			return item.name
+		end
+	end
+	return nil
+end
+
+local function claimLogin(player: Player): (boolean, string)
+	local q = sec(player)
+	if not q then
+		return false, "Your save is still loading."
+	end
+	local day, claimed = loginStatus(q)
+	if claimed then
+		return false, "Come back tomorrow for Day " .. (day % 7 + 1) .. "."
+	end
+	local d = QC.LOGIN_DAYS[day]
+	local level = metric(player, "level")
+	local label = "Daily login: Day " .. day
+	local message
+
+	q.login.lastDay = utcDay()
+	q.login.streak = day
+	PlayerData.markChanged(player)
+
+	if d.kind == "cash" then
+		local cash = QC.loginCash(d.cash, level)
+		PlayerData.addCash(player, cash, label)
+		message = "+$" .. QC.commas(cash)
+	elseif d.kind == "xp" then
+		PlayerData.addXP(player, d.xp)
+		message = "+" .. QC.commas(d.xp) .. " XP"
+	elseif d.kind == "cosmetic" then
+		local name = grantLoginItem(player)
+		if name then
+			message = name .. " added to your Closet"
+		else
+			-- already owns every reward item: pay its value instead
+			local cash = QC.loginCash(d.cash, level)
+			PlayerData.addCash(player, cash, label .. " (clothing voucher)")
+			message = "You own every reward item, so +$" .. QC.commas(cash)
+		end
+	elseif d.kind == "voucher" then
+		-- Vehicles has no unlock list, so the voucher pays the underglow mod's price in cash.
+		local VC = sharedModule("VehiclesConfig")
+		local cash = (VC and VC.MOD_PRICES and VC.MOD_PRICES.glow) or 400
+		PlayerData.addCash(player, cash, "Daily: car mod voucher")
+		message = "+$" .. QC.commas(cash) .. " to spend at Paint & Mods"
+	else
+		local cash = QC.loginCash(d.cash, level)
+		PlayerData.addCash(player, cash, label)
+		PlayerData.addXP(player, d.xp)
+		PlayerData.addReputation(player, d.rep)
+		addTitle(q, d.title)
+		q.life.loginCycles += 1
+		message = string.format("+$%s, +%s XP, +%d rep and the \"%s\" title", QC.commas(cash), QC.commas(d.xp), d.rep, d.title)
+	end
+	Net.notify(player, "DAY " .. day .. " REWARD", message)
+	dirty[player] = true
+	return true, message
+end
+
+---------------------------------------------------------------------------
+-- State sent to the client
+---------------------------------------------------------------------------
+local function questView(player: Player, quest: any): any
+	local def = DEFS[quest.id]
+	if not def then
+		return nil
+	end
+	return {
+		id = quest.id,
+		icon = def.icon,
+		text = questText(def, quest.goal),
+		metric = def.metric,
+		goal = quest.goal,
+		progress = progressOf(player, quest),
+		claimed = quest.claimed,
+		cash = quest.cash,
+		xp = quest.xp,
+		rep = quest.rep,
+	}
+end
+
+local function stateFor(player: Player): any
+	local q = sec(player)
+	if not q then
+		return nil
+	end
+	local daily, weekly = {}, {}
+	for _, quest in q.daily do
+		table.insert(daily, questView(player, quest))
+	end
+	for _, quest in q.weekly do
+		table.insert(weekly, questView(player, quest))
+	end
+	local ach, achProgress = {}, {}
+	for _, a in QC.ACHIEVEMENTS do
+		if achievementListed(a) then
+			if q.ach[a.id] then
+				ach[a.id] = q.ach[a.id]
+			elseif a.metric then
+				achProgress[a.id] = metric(player, a.metric)
+			end
+		end
+	end
+	local day, claimed, done = loginStatus(q)
+	return {
+		daily = daily,
+		weekly = weekly,
+		rerollAvailable = q.rerollDay ~= utcDay(),
+		ach = ach,
+		achProgress = achProgress,
+		districts = Quests.districtsAvailable(),
+		titles = table.clone(q.titles),
+		login = { day = day, claimed = claimed, done = done, days = loginPreview(player) },
+	}
+end
+
+local function withTimers(state: any): any
+	local now = os.time()
+	state.dailyResetAt = (utcDay() + 1) * 86400
+	state.weeklyResetAt = ((isoWeek() + 1) * 7 - 3) * 86400
+	state.serverNow = now
+	return state
+end
+
+local function pushState(player: Player, force: boolean?)
+	local s = sessions[player]
+	local state = stateFor(player)
+	if not s or not state or not QuestsEvent then
+		return
+	end
+	local ok, signature = pcall(HttpService.JSONEncode, HttpService, state)
+	if not force and ok and signature == s.signature then
+		return
+	end
+	s.signature = if ok then signature else nil
+	QuestsEvent:FireClient(player, "State", withTimers(state))
+end
+
+---------------------------------------------------------------------------
+-- Processing loop
+---------------------------------------------------------------------------
+local function process(player: Player)
+	local q = sec(player)
+	if not q or not sessions[player] then
+		return
+	end
+	if refreshPeriods(player, q) then
+		needsSave[player] = true
+	end
+	local friends = 0
+	local social = PlayerData.section(player, "Social")
+	if type(social) == "table" then
+		friends = count(social.friends)
+	end
+	if friends > (q.life.friends or 0) then
+		q.life.friends = friends
+		needsSave[player] = true
+	end
+	checkAchievements(player)
+	for _, fn in progressListeners do
+		local ok, err = pcall(fn, player)
+		if not ok then
+			warn("[CityGrind] Quests progress listener failed:", err)
+		end
+	end
+	if needsSave[player] then
+		needsSave[player] = nil
+		PlayerData.markChanged(player)
+	end
+	pushState(player)
+end
+
+-- Distance sampling: horizontal movement once a second, on foot or driving.
+local STUDS = QC.STUDS_PER_METRE
+local MAX_FOOT_SPEED = Config.SLIDE_SPEED * 1.3
+local MAX_DRIVE_SPEED = 260
+
+local function sample(player: Player, s: Session, now: number)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root or not root:IsA("BasePart") or humanoid.Health <= 0 then
+		s.lastPos = nil
+		return
+	end
+	local pos = root.Position
+	local prev, dt = s.lastPos, now - s.lastAt
+	s.lastPos, s.lastAt = pos, now
+	if not prev or dt <= 0 or dt > 3 or (player:GetAttribute("Interior") or "") ~= "" then
+		return
+	end
+	local d = (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(prev.X, 0, prev.Z)).Magnitude
+	if d < 1 then
+		return
+	end
+	local speed = d / dt
+	if (player:GetAttribute("Driving") or "") ~= "" then
+		if speed <= MAX_DRIVE_SPEED then
+			s.driveStuds += d
+		end
+	elseif humanoid.SeatPart == nil and speed <= MAX_FOOT_SPEED then
+		s.runStuds += d
+	end
+end
+
+local function flushDistance(player: Player, s: Session)
+	if s.runStuds >= STUDS then
+		bump(player, "runM", s.runStuds / STUDS)
+		s.runStuds = 0
+	end
+	if s.driveStuds >= STUDS then
+		bump(player, "driveM", s.driveStuds / STUDS)
+		s.driveStuds = 0
+	end
+end
+
+---------------------------------------------------------------------------
+-- Player lifecycle
+---------------------------------------------------------------------------
+local function onLoaded(player: Player)
+	if sessions[player] or not player.Parent then
+		return
+	end
+	local data = PlayerData.get(player)
+	local tok = data and data.sections.citytok
+	local s: Session = {
+		conns = {},
+		lastTx = if data then (data.transactions[1] or false) else nil,
+		lastFame = data and data.fame,
+		tokSeen = {},
+		lastPos = nil,
+		lastAt = os.clock(),
+		runStuds = 0,
+		driveStuds = 0,
+		signature = nil,
+	}
+	if type(tok) == "table" and type(tok.posts) == "table" then
+		for _, id in tok.posts do
+			s.tokSeen[id] = true
+		end
+	end
+	sessions[player] = s
+
+	local function watch(attr: string, fn: (any) -> ())
+		table.insert(s.conns, player:GetAttributeChangedSignal(attr):Connect(function()
+			fn(player:GetAttribute(attr))
+		end))
+	end
+	watch("PhoneOut", function(v)
+		if v == true then
+			bump(player, "phone", 1)
+		end
+	end)
+	watch("Interior", function(v)
+		if v == "Apartment" then
+			bump(player, "apartment", 1)
+		end
+	end)
+	local function visit(v: any)
+		local q = sec(player)
+		if q and type(v) == "string" and v ~= "" and v ~= "Outskirts" and not q.districts[v] then
+			q.districts[v] = true
+			needsSave[player] = true
+			dirty[player] = true
+		end
+	end
+	watch("District", visit)
+	visit(player:GetAttribute("District"))
+	local rides = player:GetAttribute("SubwayRides") or 0
+	watch("SubwayRides", function(v)
+		if type(v) == "number" and v > rides then
+			bump(player, "subway", v - rides)
+			-- the destination attribute may be written right after the counter
+			task.defer(function()
+				if player:GetAttribute("LastSubwayStation") == "Downtown" then
+					bump(player, "subwayDowntown", 1)
+				end
+			end)
+		end
+		rides = if type(v) == "number" then v else rides
+	end)
+	local function crew(v: any)
+		local q = sec(player)
+		if q and type(v) == "string" and v ~= "" and q.life.crew < 1 then
+			q.life.crew = 1
+			needsSave[player] = true
+			dirty[player] = true
+		end
+	end
+	watch("CrewId", crew)
+	crew(player:GetAttribute("CrewId"))
+	watch("Followers", function()
+		dirty[player] = true
+	end)
+
+	dirty[player] = true
+	process(player)
+	dirty[player] = nil
+	pushState(player, true)
+end
+
+local function onRemoving(player: Player)
+	local s = sessions[player]
+	if s then
+		flushDistance(player, s)
+		for _, c in s.conns do
+			c:Disconnect()
+		end
+	end
+	sessions[player] = nil
+	dirty[player] = nil
+	needsSave[player] = nil
+end
+
+---------------------------------------------------------------------------
+-- Remote handling
+---------------------------------------------------------------------------
+local function handle(player: Player, action: any, a: any, b: any): (boolean, string?)
+	local q = sec(player)
+	if not q or not sessions[player] then
+		return false, "Your save is still loading."
+	end
+	if refreshPeriods(player, q) then
+		PlayerData.markChanged(player)
+	end
+	if action == "Get" then
+		return true, nil
+	elseif action == "Claim" then
+		local list = if a == "daily" then q.daily elseif a == "weekly" then q.weekly else nil
+		if not list or type(b) ~= "number" or b % 1 ~= 0 then
+			return false, "Unknown quest."
+		end
+		local quest = list[b]
+		if not quest then
+			return false, "Unknown quest."
+		end
+		if quest.claimed then
+			return false, "Already claimed."
+		end
+		if progressOf(player, quest) < quest.goal then
+			return false, "Not finished yet."
+		end
+		local def = DEFS[quest.id]
+		quest.claimed = true
+		q.life.questsDone += 1
+		PlayerData.markChanged(player)
+		local label = (if a == "weekly" then "Quest (weekly): " else "Quest: ") .. questText(def, quest.goal)
+		PlayerData.addCash(player, quest.cash, label)
+		PlayerData.addXP(player, quest.xp)
+		PlayerData.addReputation(player, quest.rep)
+		dirty[player] = true
+		return true, string.format("+$%s  +%s XP  +%d rep", QC.commas(quest.cash), QC.commas(quest.xp), quest.rep)
+	elseif action == "Reroll" then
+		if q.rerollDay == utcDay() then
+			return false, "You already used today's free reroll."
+		end
+		local quest = type(a) == "number" and a % 1 == 0 and q.daily[a]
+		if not quest then
+			return false, "Unknown quest."
+		end
+		if quest.claimed then
+			return false, "That quest is already claimed."
+		end
+		local options = candidates(player, QC.DAILY_POOL, q.daily)
+		if #options == 0 then
+			return false, "No other quests available right now."
+		end
+		q.daily[a] = makeQuest(player, options[rng:NextInteger(1, #options)], false)
+		q.rerollDay = utcDay()
+		PlayerData.markChanged(player)
+		dirty[player] = true
+		return true, "New quest: " .. questText(DEFS[q.daily[a].id], q.daily[a].goal)
+	elseif action == "ClaimLogin" then
+		return claimLogin(player)
+	end
+	return false, "Unknown action."
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Quests.start(city: Instance)
+	cityModel = city
+	QuestsEvent = Net.remote("RemoteEvent", "QuestsEvent")
+	local Request = Net.remote("RemoteFunction", "QuestsRequest")
+
+	Request.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+		if type(action) ~= "string" or not Net.allow(player, "QuestsRequest", 0.25) then
+			return false, "Slow down.", nil
+		end
+		local ok, msg = handle(player, action, a, b)
+		if ok and action ~= "Get" then
+			process(player) -- reflect the claim immediately
+		end
+		local state = stateFor(player)
+		return ok, msg, state and withTimers(state)
+	end
+
+	-- Every made shot on any court (pickup games or just shooting around).
+	local Basketball = sibling("Basketball")
+	if Basketball and Basketball.scored then
+		Basketball.scored.connect(function(_ball, _hoop, shot)
+			local shooter = type(shot) == "table" and shot.shooter
+			if typeof(shooter) == "Instance" and shooter:IsA("Player") then
+				bump(shooter, "shots", 1)
+			end
+		end)
+	end
+
+	PlayerData.onLoaded(onLoaded)
+	Players.PlayerRemoving:Connect(onRemoving)
+
+	-- Debounced processing of changed players.
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			for player in table.clone(dirty) do
+				dirty[player] = nil
+				if player.Parent then
+					local ok, err = pcall(process, player)
+					if not ok then
+						warn("[CityGrind] Quests process failed:", err)
+					end
+				end
+			end
+		end
+	end)
+
+	-- Distance sampling + periodic refresh (day rollover, followers, districts).
+	task.spawn(function()
+		local tick = 0
+		while true do
+			task.wait(1)
+			tick += 1
+			local now = os.clock()
+			for player, s in sessions do
+				if player.Parent then
+					sample(player, s, now)
+					if tick % 10 == 0 then
+						flushDistance(player, s)
+					end
+					if tick % 30 == 0 then
+						dirty[player] = true
+					end
+				end
+			end
+		end
+	end)
+end
+
+return Quests
+]=====])
 put(server, 'ModuleScript', 'Shops', [=====[
 -- CITY GRIND: shops and character customization (sections 1, 49, 74-77, 110).
 --
@@ -29221,7 +36838,22 @@ local function titlesFor(player: Player): { string }
 	if not data then
 		return { "Newcomer" }
 	end
-	return SC.unlockedTitles(data.level, data.reputation, data.basketball.wins, data.basketball.points)
+	local list = SC.unlockedTitles(data.level, data.reputation, data.basketball.wins, data.basketball.points)
+	-- Achievement titles from Quests (optional module).
+	local Q = script.Parent:FindFirstChild("Quests")
+	if Q then
+		local ok, extra = pcall(function()
+			return (require(Q) :: any).titles(player)
+		end)
+		if ok and type(extra) == "table" then
+			for _, t in extra do
+				if type(t) == "string" and not table.find(list, t) then
+					table.insert(list, t)
+				end
+			end
+		end
+	end
+	return list
 end
 
 local function featuredValue(player: Player, id: string): string
@@ -30091,6 +37723,380 @@ end
 
 return Social
 ]=====])
+put(server, 'ModuleScript', 'Story', [=====[
+-- CITY GRIND: the story (spec sections 83, 109, 110). Server side.
+--
+-- * First join: the client plays a camera fly-over of the city (Story client).
+--   Messages.luau already sends Coach Ray's two intro texts on a first join, so
+--   this module never repeats them; it sends each chapter's mission briefing
+--   and wrap-up through Messages.sendSystem("Coach Ray", ...).
+-- * 8 chapters of real missions (shared/StoryConfig). A mission completes when
+--   its server-side metric (Quests.metric) reaches the goal; the client never
+--   reports progress. Missions that need the districts are skipped when the
+--   districts aren't built. Each mission pays a little; each chapter pays more
+--   and gets a banner + Coach Ray message. Finishing Chapter 8 unlocks the
+--   "Rise to the Top" achievement.
+--
+-- Remotes: StoryRequest (RemoteFunction, client -> server: "Get" | "CinematicDone") -> state
+--          StoryEvent   (RemoteEvent, server -> client):
+--            ("State", state) | ("Cinematic") | ("Chapter", info) | ("Mission", title, text)
+-- Player attribute: StoryCinematic (true while the intro fly-over plays).
+-- Saved section "story": { chapter, mission, cinematic, introSent, done }
+
+local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local SC = require(shared:WaitForChild("StoryConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Quests = require(script.Parent:WaitForChild("Quests"))
+
+local Story = {}
+
+local SECTION = "story"
+local CHAPTERS = SC.CHAPTERS
+
+PlayerData.registerSection(SECTION, function()
+	return {
+		chapter = 1,
+		mission = 1,
+		cinematic = false, -- intro fly-over handled (played or skipped)
+		introSent = 0, -- last chapter whose Coach Ray briefing was sent
+		done = false,
+	}
+end)
+
+local function sec(player: Player): any
+	return PlayerData.section(player, SECTION)
+end
+
+local StoryEvent: RemoteEvent
+local cityModel: Instance? = nil
+local active: { [Player]: boolean } = {} -- story running (cinematic finished)
+local loadedAt: { [Player]: number } = {}
+local signatures: { [Player]: string } = {}
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local messagesModule: any = nil
+local function coach(player: Player, text: string)
+	if messagesModule == nil then
+		messagesModule = false
+		local module = script.Parent:FindFirstChild("Messages")
+		if module then
+			local ok, result = pcall(require, module)
+			if ok and type(result) == "table" then
+				messagesModule = result
+			end
+		end
+	end
+	if messagesModule and type(messagesModule.sendSystem) == "function" and player.Parent then
+		local ok, err = pcall(messagesModule.sendSystem, player, SC.COACH, text)
+		if ok then
+			return
+		end
+		warn("[CityGrind] Story: Coach Ray message failed:", err)
+	end
+	Net.notify(player, SC.COACH, text) -- no Messages module: still tell them
+end
+
+local function available(m: SC.Mission): boolean
+	return m.needs ~= "districts" or Quests.districtsAvailable()
+end
+
+local function isComplete(player: Player, m: SC.Mission): boolean
+	if Quests.metric(player, m.metric) >= m.goal then
+		return true
+	end
+	return m.alt ~= nil and Quests.metric(player, m.alt.metric) >= m.alt.goal
+end
+
+-- Where a mission's GPS should point, worked out from the live city.
+local function placePosition(player: Player, place: string?): Vector3?
+	if not place then
+		return nil
+	end
+	local city = cityModel or workspace:FindFirstChild("City")
+	if place == "court" then
+		local best, bestDist = nil, math.huge
+		for _, court in CollectionService:GetTagged("Court") do
+			local c = court:GetAttribute("CourtCenter")
+			if typeof(c) == "Vector3" then
+				local d = Net.distance(player, c)
+				if d < bestDist or best == nil then
+					best, bestDist = c, d
+				end
+			end
+		end
+		return best
+	end
+	local points = city and city:FindFirstChild("MapPoints")
+	local point = points and points:FindFirstChild(place)
+	if point and point:IsA("BasePart") then
+		return point.Position
+	end
+	-- Districts renames the Neighborhood's "Subway Station" point to
+	-- "Subway · Neighborhood" and adds one per district: use the nearest.
+	if place == "Subway Station" and points then
+		local best, bestDist = nil, math.huge
+		for _, p in points:GetChildren() do
+			if p:IsA("BasePart") and p.Name:sub(1, 6) == "Subway" then
+				local d = Net.distance(player, p.Position)
+				if best == nil or d < bestDist then
+					best, bestDist = p.Position, d
+				end
+			end
+		end
+		if best then
+			return best
+		end
+	end
+	local districts = city and city:FindFirstChild("Districts")
+	local district = districts and districts:FindFirstChild(place)
+	local center = district and district:GetAttribute("Center")
+	if typeof(center) == "Vector3" then
+		return center
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- State for the client
+---------------------------------------------------------------------------
+local function stateFor(player: Player): any
+	local s = sec(player)
+	if not s then
+		return nil
+	end
+	local chapter = CHAPTERS[s.chapter]
+	local state: any = {
+		chapter = s.chapter,
+		mission = s.mission,
+		done = s.done,
+		active = active[player] == true,
+		chapterCount = #CHAPTERS,
+	}
+	if s.done or not chapter then
+		state.done = true
+		return state
+	end
+	local list = {}
+	for i, m in chapter.missions do
+		local status = if not available(m) then "skipped" elseif i < s.mission then "done" elseif i == s.mission then "current" else "todo"
+		table.insert(list, { status = status })
+	end
+	state.statuses = list
+	local m = chapter.missions[s.mission]
+	if m then
+		state.progress = math.min(Quests.metric(player, m.metric), m.goal)
+		state.altProgress = if m.alt then math.min(Quests.metric(player, m.alt.metric), m.alt.goal) else nil
+		local pos = placePosition(player, m.place)
+		if pos then
+			state.gps = { name = if m.place == "court" then "Basketball Court" else m.place, x = pos.X, y = pos.Y, z = pos.Z }
+		end
+	end
+	return state
+end
+
+local function pushState(player: Player, force: boolean?)
+	local state = stateFor(player)
+	if not state or not StoryEvent or not player.Parent then
+		return
+	end
+	-- the GPS spot of "court" changes as the player moves; don't resend for that alone
+	local sigState = table.clone(state)
+	sigState.gps = state.gps and state.gps.name
+	local ok, signature = pcall(HttpService.JSONEncode, HttpService, sigState)
+	if not force and ok and signatures[player] == signature then
+		return
+	end
+	signatures[player] = if ok then signature else ""
+	StoryEvent:FireClient(player, "State", state)
+end
+
+---------------------------------------------------------------------------
+-- Progression
+---------------------------------------------------------------------------
+local function briefing(player: Player, s: any)
+	local chapter = CHAPTERS[s.chapter]
+	if not chapter or s.introSent >= s.chapter then
+		return
+	end
+	s.introSent = s.chapter
+	PlayerData.markChanged(player)
+	local m = chapter.missions[s.mission]
+	local text = string.format("Chapter %d: %s. %s", s.chapter, chapter.name, chapter.intro)
+	coach(player, text)
+	if m then
+		StoryEvent:FireClient(player, "Mission", if s.chapter == 1 and s.mission == 1 then SC.FIRST_MOVE else "CHAPTER " .. s.chapter .. ": " .. chapter.name:upper(), m.text)
+	end
+end
+
+local evaluate: (Player) -> ()
+
+local function completeChapter(player: Player, s: any)
+	local index = s.chapter
+	local chapter = CHAPTERS[index]
+	PlayerData.addCash(player, chapter.cash, "Story: Chapter " .. index .. " complete")
+	PlayerData.addXP(player, chapter.xp)
+	PlayerData.addReputation(player, chapter.rep)
+	StoryEvent:FireClient(player, "Chapter", { chapter = index, name = chapter.name, cash = chapter.cash, xp = chapter.xp, rep = chapter.rep, last = index == #CHAPTERS })
+	coach(player, chapter.outro)
+	if index >= #CHAPTERS then
+		s.done = true
+		PlayerData.markChanged(player)
+		Quests.unlock(player, "story_done") -- grants the "Top of the City" title
+		return
+	end
+	s.chapter = index + 1
+	s.mission = 1
+	PlayerData.markChanged(player)
+	task.delay(7, function()
+		local now = sec(player)
+		if player.Parent and now and now.chapter == index + 1 then
+			briefing(player, now)
+			evaluate(player)
+		end
+	end)
+end
+
+-- Completes every finished (or skipped) mission in order.
+evaluate = function(player: Player)
+	local s = sec(player)
+	if not s or s.done or not active[player] then
+		return
+	end
+	if (s.introSent or 0) < s.chapter then
+		-- the chapter's briefing (sent on a delay) runs evaluate itself; don't
+		-- complete its missions before the player has even been told about them
+		pushState(player)
+		return
+	end
+	for _ = 1, 64 do -- safety bound
+		local chapter = CHAPTERS[s.chapter]
+		if not chapter then
+			s.done = true
+			PlayerData.markChanged(player)
+			break
+		end
+		local m = chapter.missions[s.mission]
+		if not m then
+			completeChapter(player, s)
+			break -- the next chapter starts after its briefing
+		elseif not available(m) then
+			s.mission += 1
+			PlayerData.markChanged(player)
+		elseif isComplete(player, m) then
+			local cash = SC.MISSION_CASH * s.chapter
+			local xp = SC.MISSION_XP * s.chapter
+			s.mission += 1
+			PlayerData.markChanged(player)
+			PlayerData.addCash(player, cash, "Story: " .. m.text)
+			PlayerData.addXP(player, xp)
+			local nextMission = chapter.missions[s.mission]
+			StoryEvent:FireClient(player, "Mission", "MISSION COMPLETE", m.text .. "  +$" .. cash .. "  +" .. xp .. " XP")
+			if nextMission and available(nextMission) then
+				Net.notify(player, "NEXT MISSION", nextMission.text)
+			end
+		else
+			break
+		end
+	end
+	pushState(player)
+end
+
+local function startStory(player: Player)
+	local s = sec(player)
+	if not s or active[player] then
+		return
+	end
+	active[player] = true
+	player:SetAttribute("StoryCinematic", false)
+	if not s.cinematic then
+		s.cinematic = true
+		PlayerData.markChanged(player)
+	end
+	pushState(player, true)
+	if s.done then
+		return
+	end
+	-- Messages sends Coach Ray's two welcome texts ~8-12 s after a first load;
+	-- the chapter briefing follows them, never replaces them.
+	local wait = math.max(3, 15 - (os.clock() - (loadedAt[player] or 0)))
+	task.delay(wait, function()
+		local now = sec(player)
+		if player.Parent and now and active[player] then
+			briefing(player, now)
+			evaluate(player)
+		end
+	end)
+end
+
+local function onLoaded(player: Player)
+	local s = sec(player)
+	local data = PlayerData.get(player)
+	if not s or not data or not player.Parent then
+		return
+	end
+	loadedAt[player] = os.clock()
+	if s.cinematic then
+		startStory(player)
+		return
+	end
+	-- Only brand-new players get the fly-over; saves from before the story skip it.
+	local brandNew = data.level <= 1 and data.xp < 100 and os.time() - (data.firstJoin or 0) < 30 * 60
+	if not brandNew then
+		startStory(player)
+		return
+	end
+	player:SetAttribute("StoryCinematic", true)
+	StoryEvent:FireClient(player, "Cinematic")
+	-- never leave the story waiting on a client that doesn't answer
+	task.delay(75, function()
+		if player.Parent and not active[player] then
+			startStory(player)
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Story.start(city: Instance)
+	cityModel = city
+	StoryEvent = Net.remote("RemoteEvent", "StoryEvent")
+	local Request = Net.remote("RemoteFunction", "StoryRequest")
+
+	Request.OnServerInvoke = function(player: Player, action: any)
+		if type(action) ~= "string" or not Net.allow(player, "StoryRequest", 0.25) then
+			return nil
+		end
+		if action == "CinematicDone" then
+			-- only meaningful while the fly-over is pending; harmless otherwise
+			if player:GetAttribute("StoryCinematic") == true then
+				startStory(player)
+			end
+		elseif action ~= "Get" then
+			return nil
+		end
+		return stateFor(player)
+	end
+
+	Quests.onProgress(evaluate)
+	PlayerData.onLoaded(onLoaded)
+	Players.PlayerRemoving:Connect(function(player)
+		active[player] = nil
+		loadedAt[player] = nil
+		signatures[player] = nil
+	end)
+end
+
+return Story
+]=====])
 put(server, 'ModuleScript', 'Vehicles', [=====[
 -- CITY GRIND: vehicles (spec sections 11, 72, 77).
 -- Budget Wheels lot (190,0,85) shows every model with a sign and a "View" prompt
@@ -30905,10 +38911,16 @@ local function findSpot(player: Player, s: Spec): CFrame?
 				continue
 			end
 			local hit = workspace:Raycast(Vector3.new(p.X, 80, p.Z), Vector3.new(0, -120, 0), rayParams)
-			if not hit or hit.Position.Y > 1.2 or hit.Position.Y < -1 then
-				continue -- roof, interior or nothing: only ground level counts
+			if not hit then
+				continue
 			end
 			local road = ROAD_NAMES[hit.Instance.Name]
+			-- ground level only (no roofs / interiors), except raised roads and the
+			-- Luxury Hills hilltop when the player is standing at that height
+			local raised = (road ~= nil or hit.Instance.Name == "HillTop") and math.abs(hit.Position.Y - (origin.Y - 3)) < 4
+			if (hit.Position.Y > 1.2 or hit.Position.Y < -1) and not raised then
+				continue
+			end
 			local dir = lookFlat
 			if road == "x" then
 				dir = Vector3.new(if lookFlat.X < 0 then -1 else 1, 0, 0)
@@ -31361,7 +39373,8 @@ local function sanityStep(dt: number)
 			continue
 		end
 		local pos = chassis.Position
-		if pos.Y < -40 or math.abs(pos.X) > 1000 or math.abs(pos.Z) > 1000 or pos.Y > 500 then
+		local wlo, whi = VC.WORLD_MIN, VC.WORLD_MAX
+		if pos.Y < wlo.Y or pos.Y > whi.Y or pos.X < wlo.X or pos.X > whi.X or pos.Z < wlo.Z or pos.Z > whi.Z or (pos.Z > 525 and pos.Y < -6) then
 			despawn(owner)
 			Net.notify(owner, "GARAGE", "Your vehicle was towed back to the garage.")
 			continue
@@ -31454,6 +39467,1179 @@ end
 
 return Vehicles
 ]=====])
+put(server, 'ModuleScript', 'World', [=====[
+-- CITY GRIND: the living world (spec 65, 66, 81, 82, 89). Server side.
+--
+-- * Collectibles (81): four sets hidden around every district at hand-picked
+--   spots (WorldConfig.SPOTS). Each spot is checked at build time with a
+--   raycast (a floor below) and an overlap test (nothing solid where you'd
+--   stand); bad spots are skipped. Items are server parts under City.World.
+--   Collectibles; each client hides the ones it already owns. The server
+--   validates every pickup (touch or client proximity remote) by distance.
+-- * Secrets (82): parts tagged "SecretArea" (attribute SecretId, DisplayName,
+--   built by Districts). Once a second the server checks whether each player
+--   stands inside one; the first visit pays once. Secrets are never on the map.
+-- * Weather (66): server state machine. Workspace attributes Weather (id),
+--   WeatherEnds (server time), WeatherGrip (vehicle grip multiplier).
+-- * NPC pedestrians (65, 89): ~24 server-owned rigs walking a sidewalk graph
+--   built from the map, following daily schedules, sleeping (anchored) when no
+--   player is within 250 studs, and recognising famous players (turn, wave,
+--   speech bubble) with cooldowns. Tag "CityNPC" (the client animates legs).
+--
+-- Remotes: WorldRequest (RemoteFunction, client -> server: "Get") -> state?
+--          WorldCollect (RemoteEvent, client -> server: id)
+--          WorldEvent   (RemoteEvent, server -> client):
+--            ("State", state) | ("Collected", id) | ("Secret", id, name)
+-- Player attributes: Collectibles (number found), SecretsFound (number found).
+-- Saved section "world": { c = {[spotId]=true}, sets = {[setId]=true}, all = bool,
+--                          secrets = {[secretId]=unix time} }
+--
+-- Public API:
+--   World.weather() -> string                 current weather id
+--   World.collectedCount(player) -> number
+--   World.secretsFound(player) -> number
+
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local WC = require(shared:WaitForChild("WorldConfig"))
+local DC = require(shared:WaitForChild("DistrictsConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+
+local World = {}
+
+local SECTION = "world"
+
+PlayerData.registerSection(SECTION, function()
+	return { c = {}, sets = {}, all = false, secrets = {} }
+end)
+
+local function sec(player: Player): any
+	return PlayerData.section(player, SECTION)
+end
+
+local V = Vector3.new
+
+local root: Folder
+local WorldEvent: RemoteEvent
+
+-- Lazily required sibling (Quests is optional; never error if it is missing).
+local function sibling(name: string): any
+	local mod = script.Parent:FindFirstChild(name)
+	if not mod then
+		return nil
+	end
+	local ok, result = pcall(require, mod)
+	return if ok then result else nil
+end
+
+-- Unlocks an achievement through Quests when it exists there.
+local function unlock(player: Player, id: string)
+	local Quests = sibling("Quests")
+	if Quests and Quests.unlock then
+		pcall(Quests.unlock, player, id)
+	end
+end
+
+local function rootPart(player: Player): BasePart?
+	local character = player.Character
+	local r = character and character:FindFirstChild("HumanoidRootPart")
+	return if r and r:IsA("BasePart") then r else nil
+end
+
+local function count(t: { [any]: any }): number
+	local n = 0
+	for _ in t do
+		n += 1
+	end
+	return n
+end
+
+---------------------------------------------------------------------------
+-- Geometry checks shared by collectibles and the NPC sidewalk graph
+---------------------------------------------------------------------------
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.RespectCanCollide = true
+
+local overlapParams = OverlapParams.new()
+overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+overlapParams.RespectCanCollide = true
+
+local probe: BasePart -- invisible box used for exact overlap tests at build time
+
+local function setFilters(extra: { Instance })
+	local list: { Instance } = { root }
+	for _, i in extra do
+		table.insert(list, i)
+	end
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	rayParams.FilterDescendantsInstances = list
+	overlapParams.FilterDescendantsInstances = list
+end
+
+-- True when a box of `size` centred at `center` touches nothing solid.
+local function clear(center: Vector3, size: Vector3): boolean
+	probe.Size = size
+	probe.CFrame = CFrame.new(center)
+	return #Workspace:GetPartsInPart(probe, overlapParams) == 0
+end
+
+---------------------------------------------------------------------------
+-- Collectibles (81)
+---------------------------------------------------------------------------
+type Item = { id: string, set: string, district: string, center: Vector3, model: Model }
+local items: { [string]: Item } = {}
+local secretNames: { [string]: string } = {} -- SecretId -> DisplayName (filled from the tagged parts)
+local itemList: { Item } = {}
+local setTotals: { [string]: number } = {}
+
+local function visualPart(parent: Instance, name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?, shape: Enum.PartType?): BasePart
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	if shape then
+		p.Shape = shape
+	end
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p:SetAttribute("Spin", true)
+	p.Parent = parent
+	return p
+end
+
+-- The look of one item of each set, built around `c`.
+local function buildLook(model: Model, set: string, c: CFrame)
+	local color = (WC.SET_BY_ID[set] :: WC.CollectibleSet).color
+	if set == "Balls" then
+		local ball = visualPart(model, "Ball", V(1.9, 1.9, 1.9), c, Color3.fromRGB(255, 190, 40), Enum.Material.Metal, Enum.PartType.Ball)
+		ball.Reflectance = 0.25
+		for _, a in { 0, math.pi / 2 } do
+			visualPart(model, "Seam", V(0.08, 1.95, 1.95), c * CFrame.Angles(0, a, 0), Color3.fromRGB(60, 40, 20), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+		end
+	elseif set == "Tags" then
+		visualPart(model, "Can", V(1.7, 0.85, 0.85), c * CFrame.Angles(0, 0, math.pi / 2), color, Enum.Material.Metal, Enum.PartType.Cylinder)
+		visualPart(model, "Cap", V(0.7, 0.7, 0.7), c * CFrame.new(0, 1.05, 0), Color3.fromRGB(240, 240, 245), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+		visualPart(model, "Label", V(0.9, 0.6, 0.9), c * CFrame.new(0, -0.1, 0), Color3.fromRGB(30, 30, 35), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+	elseif set == "Sneakers" then
+		visualPart(model, "Sole", V(0.9, 0.35, 2), c * CFrame.new(0, -0.45, 0), Color3.fromRGB(245, 245, 245))
+		visualPart(model, "Upper", V(0.85, 0.75, 1.35), c * CFrame.new(0, 0.1, 0.3), color)
+		visualPart(model, "Toe", V(0.85, 0.5, 0.7), c * CFrame.new(0, -0.03, -0.65), color)
+		visualPart(model, "Swoosh", V(0.88, 0.18, 1), c * CFrame.new(0, 0, 0.15), Color3.fromRGB(255, 90, 60))
+	else
+		visualPart(model, "Shell", V(2, 1.25, 0.3), c, Color3.fromRGB(25, 25, 30))
+		visualPart(model, "Label", V(1.6, 0.55, 0.34), c * CFrame.new(0, 0.2, 0), color)
+		for _, x in { -0.45, 0.45 } do
+			visualPart(model, "Reel", V(0.36, 0.36, 0.36), c * CFrame.new(x, -0.25, 0) * CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(240, 240, 240), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+		end
+	end
+end
+
+local function buildCollectibles()
+	local folder = Instance.new("Folder")
+	folder.Name = "Collectibles"
+	folder.Parent = root
+	local skipped = {}
+	for _, spot in WC.SPOTS do
+		if not WC.SET_BY_ID[spot.set] or items[spot.id] then
+			continue
+		end
+		local hit = Workspace:Raycast(spot.pos, V(0, -30, 0), rayParams)
+		if not hit or hit.Normal.Y < 0.7 then
+			table.insert(skipped, spot.id)
+			continue
+		end
+		local floorY = hit.Position.Y
+		-- room to stand: nothing solid from just above the floor to head height
+		if not clear(V(spot.pos.X, floorY + 3.1, spot.pos.Z), V(2.4, 5, 2.4)) then
+			table.insert(skipped, spot.id)
+			continue
+		end
+		local center = V(spot.pos.X, floorY + 2.2, spot.pos.Z)
+		local model = Instance.new("Model")
+		model.Name = spot.id
+		model:SetAttribute("Id", spot.id)
+		model:SetAttribute("Set", spot.set)
+		model:SetAttribute("Center", center)
+		local hitbox = Instance.new("Part")
+		hitbox.Name = "Hitbox"
+		hitbox.Anchored = true
+		hitbox.CanCollide = false
+		hitbox.CanQuery = false
+		hitbox.CanTouch = true
+		hitbox.Transparency = 1
+		hitbox.Size = V(4, 5, 4)
+		hitbox.CFrame = CFrame.new(center + V(0, 0.3, 0))
+		hitbox.Parent = model
+		buildLook(model, spot.set, CFrame.new(center))
+		local glow = Instance.new("PointLight")
+		glow.Range = 9
+		glow.Brightness = 1.2
+		glow.Shadows = false
+		glow.Color = (WC.SET_BY_ID[spot.set] :: WC.CollectibleSet).color
+		glow.Parent = hitbox
+		local sparkle = Instance.new("ParticleEmitter")
+		sparkle.Rate = 3
+		sparkle.Lifetime = NumberRange.new(0.8, 1.4)
+		sparkle.Speed = NumberRange.new(1, 2)
+		sparkle.SpreadAngle = Vector2.new(180, 180)
+		sparkle.Size = NumberSequence.new(0.25, 0)
+		sparkle.LightEmission = 1
+		sparkle.Color = ColorSequence.new(glow.Color)
+		sparkle.Parent = hitbox
+		model.PrimaryPart = hitbox
+		model.Parent = folder
+		CollectionService:AddTag(model, "Collectible")
+
+		local item: Item = { id = spot.id, set = spot.set, district = DC.at(center), center = center, model = model }
+		items[spot.id] = item
+		table.insert(itemList, item)
+		setTotals[spot.set] = (setTotals[spot.set] or 0) + 1
+
+		hitbox.Touched:Connect(function(other)
+			local character = other.Parent
+			local player = character and Players:GetPlayerFromCharacter(character)
+			if player then
+				World.collect(player, spot.id)
+			end
+		end)
+	end
+	if #skipped > 0 then
+		warn("[CityGrind] World: skipped collectible spots (blocked or no floor): " .. table.concat(skipped, ", "))
+	end
+	print(string.format("[CityGrind] World: %d collectibles placed", #itemList))
+end
+
+-- Collected ids that still exist on this map.
+local function validCollected(w: any): number
+	local n = 0
+	for id in w.c do
+		if items[id] then
+			n += 1
+		end
+	end
+	return n
+end
+
+local function setGot(w: any, set: string): number
+	local n = 0
+	for id in w.c do
+		local item = items[id]
+		if item and item.set == set then
+			n += 1
+		end
+	end
+	return n
+end
+
+local function stateFor(player: Player): any
+	local w = sec(player)
+	if not w then
+		return nil
+	end
+	local list = {}
+	for _, item in itemList do
+		table.insert(list, { id = item.id, set = item.set, district = item.district })
+	end
+	local collected = {}
+	for id in w.c do
+		if items[id] then
+			table.insert(collected, id)
+		end
+	end
+	local found = {}
+	for id, t in w.secrets do
+		table.insert(found, { id = id, name = secretNames[id] or id, t = t })
+	end
+	return {
+		items = list,
+		collected = collected,
+		sets = w.sets,
+		secrets = found,
+		secretTotal = math.max(#WC.SECRET_IDS, count(secretNames)),
+	}
+end
+
+local function pushState(player: Player)
+	local state = stateFor(player)
+	if state and player.Parent then
+		WorldEvent:FireClient(player, "State", state)
+	end
+end
+
+local function grant(player: Player, r: { cash: number?, xp: number?, rep: number?, fame: number? }, label: string)
+	if r.cash and r.cash > 0 then
+		PlayerData.addCash(player, r.cash, label)
+	end
+	if r.xp and r.xp > 0 then
+		PlayerData.addXP(player, r.xp)
+	end
+	if r.rep and r.rep > 0 then
+		PlayerData.addReputation(player, r.rep)
+	end
+	if r.fame and r.fame > 0 then
+		PlayerData.addFame(player, r.fame)
+	end
+end
+
+function World.collect(player: Player, id: string)
+	local item = items[id]
+	if not item or not Net.alive(player) then
+		return
+	end
+	local w = sec(player)
+	if not w or w.c[id] then
+		return
+	end
+	if Net.distance(player, item.center) > WC.COLLECT_RANGE then
+		return
+	end
+	if not Net.allow(player, "WorldCollect:" .. id, 1) then
+		return
+	end
+	w.c[id] = true
+	local set = WC.SET_BY_ID[item.set] :: WC.CollectibleSet
+	PlayerData.markChanged(player)
+	grant(player, WC.ITEM_REWARD, "Collectible: " .. set.name)
+	WorldEvent:FireClient(player, "Collected", id)
+
+	local got, total = setGot(w, item.set), setTotals[item.set] or 0
+	Net.notify(player, "COLLECTIBLE FOUND", string.format("%s %s · %d/%d", set.icon, set.name, got, total))
+	unlock(player, "collect_first")
+
+	if got >= total and total > 0 and not w.sets[item.set] then
+		w.sets[item.set] = true
+		PlayerData.markChanged(player)
+		grant(player, WC.SET_REWARD, "Set complete: " .. set.name)
+		Net.notify(player, "SET COMPLETE", string.format("%s You found every %s! +$%d", set.icon, set.name, WC.SET_REWARD.cash))
+		unlock(player, "collect_set")
+		pushState(player) -- the app shows the set as complete
+	end
+	if not w.all then
+		local everything = true
+		for _, s in WC.SETS do
+			if (setTotals[s.id] or 0) > 0 and not w.sets[s.id] then
+				everything = false
+			end
+		end
+		if everything then
+			w.all = true
+			PlayerData.markChanged(player)
+			grant(player, WC.ALL_SETS_REWARD, "Every collectible found")
+			Net.notify(player, "MASTER COLLECTOR", "You found every collectible in the city!")
+			unlock(player, "collect_all")
+		end
+	end
+end
+
+function World.collectedCount(player: Player): number
+	local w = sec(player)
+	return if w then validCollected(w) else 0
+end
+
+---------------------------------------------------------------------------
+-- Secrets (82)
+---------------------------------------------------------------------------
+local secretParts: { BasePart } = {}
+
+local function refreshSecrets()
+	table.clear(secretParts)
+	for _, inst in CollectionService:GetTagged("SecretArea") do
+		if inst:IsA("BasePart") and inst:IsDescendantOf(Workspace) then
+			local id = inst:GetAttribute("SecretId")
+			if type(id) == "string" and id ~= "" then
+				table.insert(secretParts, inst)
+				local name = inst:GetAttribute("DisplayName")
+				secretNames[id] = if type(name) == "string" and name ~= "" then name else id
+			end
+		end
+	end
+end
+
+local function discover(player: Player, id: string)
+	local w = sec(player)
+	if not w or w.secrets[id] then
+		return
+	end
+	w.secrets[id] = os.time()
+	PlayerData.markChanged(player)
+	local name = secretNames[id] or id
+	grant(player, WC.SECRET_REWARD, "Secret found: " .. name)
+	local found = count(w.secrets)
+	local total = math.max(#WC.SECRET_IDS, count(secretNames))
+	Net.notify(player, "SECRET FOUND", string.format("%s · %d/%d secrets", name, found, total))
+	WorldEvent:FireClient(player, "Secret", id, name)
+	unlock(player, "secret_first")
+	if found >= total then
+		unlock(player, "secret_all")
+	end
+end
+
+local function checkSecrets()
+	for _, player in Players:GetPlayers() do
+		local r = rootPart(player)
+		local w = r and sec(player)
+		if r and w and Net.alive(player) then
+			local pos = r.Position
+			for _, part in secretParts do
+				local id = part:GetAttribute("SecretId") :: string
+				if not w.secrets[id] and part.Parent then
+					local rel = part.CFrame:PointToObjectSpace(pos)
+					local half = part.Size / 2
+					if math.abs(rel.X) <= half.X and math.abs(rel.Y) <= half.Y and math.abs(rel.Z) <= half.Z then
+						discover(player, id)
+					end
+				end
+			end
+		end
+	end
+end
+
+function World.secretsFound(player: Player): number
+	local w = sec(player)
+	return if w then count(w.secrets) else 0
+end
+
+---------------------------------------------------------------------------
+-- Weather (66)
+---------------------------------------------------------------------------
+local weatherId = "Clear"
+
+function World.weather(): string
+	return weatherId
+end
+
+local function setWeather(w: WC.Weather)
+	weatherId = w.id
+	local minutes = w.minMinutes + math.random() * (w.maxMinutes - w.minMinutes)
+	Workspace:SetAttribute("Weather", w.id)
+	Workspace:SetAttribute("WeatherEnds", Workspace:GetServerTimeNow() + minutes * 60)
+	Workspace:SetAttribute("WeatherGrip", w.grip)
+	return minutes * 60
+end
+
+local function nextWeather(): WC.Weather
+	local t = Lighting.ClockTime
+	local daytime = t >= 8 and t < 16
+	local pool = {}
+	local total = 0
+	for _, w in WC.WEATHER do
+		if w.id ~= weatherId and (daytime or not w.dayOnly) then
+			-- storms only roll in after rain or clouds so the sky builds up
+			local weight = w.weight
+			if w.id == "Storm" and weatherId ~= "Rain" and weatherId ~= "Cloudy" then
+				weight = 0
+			end
+			if weight > 0 then
+				table.insert(pool, { w = w, weight = weight })
+				total += weight
+			end
+		end
+	end
+	local roll = math.random() * total
+	for _, entry in pool do
+		roll -= entry.weight
+		if roll <= 0 then
+			return entry.w
+		end
+	end
+	return WC.WEATHER_BY_ID.Clear
+end
+
+local function runWeather()
+	local endsAt = os.clock() + setWeather(WC.WEATHER_BY_ID.Clear)
+	while true do
+		task.wait(5)
+		local t = Lighting.ClockTime
+		-- a heatwave breaks when evening comes
+		local heatOver = weatherId == "Heatwave" and (t < 8 or t >= 17)
+		if os.clock() >= endsAt or heatOver then
+			endsAt = os.clock() + setWeather(nextWeather())
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- NPC pedestrians (65) and recognition (89)
+---------------------------------------------------------------------------
+type Node = { pos: Vector3, district: string, links: { number } }
+local nodes: { Node } = {}
+local nodesByDistrict: { [string]: { number } } = {}
+
+local WALK_NAMES = { Sidewalk = true, Boardwalk = true, Path = true, PierDeck = true }
+local NODE_SPACING = 24
+local LINK_RANGE = 34
+
+type Box = { center: Vector3, half: Vector3 }
+
+local function courtBoxes(): { Box }
+	local boxes = {}
+	for _, court in CollectionService:GetTagged("Court") do
+		local c = court:GetAttribute("CourtCenter")
+		local s = court:GetAttribute("CourtSize")
+		if typeof(c) == "Vector3" and typeof(s) == "Vector3" then
+			table.insert(boxes, { center = c, half = V(s.X / 2 + 8, 0, s.Z / 2 + 8) })
+		elseif court:IsA("Model") then
+			local cf, size = court:GetBoundingBox()
+			table.insert(boxes, { center = cf.Position, half = V(size.X / 2 + 8, 0, size.Z / 2 + 8) })
+		end
+	end
+	return boxes
+end
+
+local function inBoxes(p: Vector3, boxes: { Box }): boolean
+	for _, b in boxes do
+		if math.abs(p.X - b.center.X) <= b.half.X and math.abs(p.Z - b.center.Z) <= b.half.Z and math.abs(p.Y - b.center.Y) < 30 then
+			return true
+		end
+	end
+	return false
+end
+
+local function buildGraph(city: Instance)
+	local boxes = courtBoxes()
+	local doors: { Vector3 } = {}
+	local walks: { BasePart } = {}
+	for _, d in city:GetDescendants() do
+		if d:IsA("BasePart") then
+			if d.Name == "Door" then
+				table.insert(doors, d.Position)
+			elseif WALK_NAMES[d.Name] and d.Size.Y <= 1.5 and math.abs(d.CFrame.UpVector.Y) > 0.99 and d.Position.Y < 300 then
+				table.insert(walks, d)
+			end
+		end
+	end
+	local function nearDoor(p: Vector3): boolean
+		for _, door in doors do
+			if math.abs(door.X - p.X) < 9 and math.abs(door.Z - p.Z) < 9 and math.abs(door.Y - p.Y) < 12 then
+				return true
+			end
+		end
+		return false
+	end
+
+	for _, walk in walks do
+		local cf = walk.CFrame
+		local alongX = walk.Size.X >= walk.Size.Z
+		local len = if alongX then walk.Size.X else walk.Size.Z
+		local axis = if alongX then cf.RightVector else cf.LookVector
+		local n = math.max(1, math.floor(len / NODE_SPACING))
+		local top = cf.Position + cf.UpVector * (walk.Size.Y / 2)
+		for i = 1, n do
+			local p = top + axis * (-len / 2 + (i - 0.5) * len / n)
+			if inBoxes(p, boxes) or nearDoor(p) then
+				continue
+			end
+			-- the walkway itself must be what you stand on here, with room above it
+			local hit = Workspace:Raycast(p + V(0, 4, 0), V(0, -6, 0), rayParams)
+			if not hit or hit.Instance ~= walk then
+				continue
+			end
+			if not clear(p + V(0, 2.8, 0), V(2.2, 4.4, 2.2)) then
+				continue
+			end
+			local district = DC.at(p)
+			if district ~= "Outskirts" then
+				table.insert(nodes, { pos = V(p.X, hit.Position.Y, p.Z), district = district, links = {} })
+			end
+		end
+	end
+
+	-- link neighbours that can see each other at waist height and don't cross a court
+	for i = 1, #nodes do
+		local a = nodes[i]
+		for j = i + 1, #nodes do
+			local b = nodes[j]
+			local delta = b.pos - a.pos
+			if math.abs(delta.Y) < 2 and math.abs(delta.X) <= LINK_RANGE and math.abs(delta.Z) <= LINK_RANGE and delta.Magnitude <= LINK_RANGE then
+				local blocked = inBoxes((a.pos + b.pos) / 2, boxes)
+				if not blocked then
+					blocked = Workspace:Raycast(a.pos + V(0, 2.5, 0), delta, rayParams) ~= nil
+				end
+				if not blocked then
+					table.insert(a.links, j)
+					table.insert(b.links, i)
+				end
+			end
+		end
+	end
+	for i, node in nodes do
+		if #node.links > 0 then
+			nodesByDistrict[node.district] = nodesByDistrict[node.district] or {}
+			table.insert(nodesByDistrict[node.district], i)
+		end
+	end
+	local summary = {}
+	for id, list in nodesByDistrict do
+		table.insert(summary, id .. "=" .. #list)
+	end
+	print("[CityGrind] World: sidewalk graph " .. table.concat(summary, " "))
+end
+
+type NPC = {
+	model: Model,
+	hum: Humanoid,
+	root: BasePart,
+	schedule: { string },
+	district: string,
+	node: number,
+	prev: number?,
+	target: number?,
+	asleep: boolean,
+	pauseUntil: number,
+	movedAt: number,
+	lastPos: Vector3,
+	lastProgress: number,
+	busyUntil: number,
+	cooldownUntil: number,
+	seen: { [Player]: number },
+	shoulder: Motor6D?,
+	shoulderC0: CFrame?,
+	standHeight: number,
+}
+local npcs: { NPC } = {}
+local playerReactedAt: { [Player]: number } = {}
+
+local SKIN = { Color3.fromRGB(255, 220, 190), Color3.fromRGB(234, 184, 146), Color3.fromRGB(196, 140, 100), Color3.fromRGB(150, 100, 70), Color3.fromRGB(105, 70, 50), Color3.fromRGB(70, 48, 36) }
+local SHIRT = { Color3.fromRGB(200, 60, 60), Color3.fromRGB(60, 110, 200), Color3.fromRGB(240, 240, 240), Color3.fromRGB(40, 40, 46), Color3.fromRGB(240, 190, 50), Color3.fromRGB(80, 160, 90), Color3.fromRGB(150, 80, 170), Color3.fromRGB(230, 120, 60) }
+local PANTS = { Color3.fromRGB(40, 50, 80), Color3.fromRGB(30, 30, 34), Color3.fromRGB(110, 100, 85), Color3.fromRGB(70, 80, 95), Color3.fromRGB(150, 140, 120) }
+
+-- Simple block rig (fallback when Roblox can't build an R15 body here).
+local function blockRig(): Model
+	local model = Instance.new("Model")
+	local function bp(name: string, size: Vector3, cf: CFrame): BasePart
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.CFrame = cf
+		p.CanCollide = false
+		p.Massless = true
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = model
+		return p
+	end
+	local hrp = bp("HumanoidRootPart", V(2, 2, 1), CFrame.new(0, 3, 0))
+	hrp.Transparency = 1
+	hrp.CanCollide = true
+	hrp.Massless = false
+	local torso = bp("UpperTorso", V(2, 2, 1), CFrame.new(0, 3, 0))
+	local head = bp("Head", V(1.2, 1.2, 1.2), CFrame.new(0, 4.6, 0))
+	local function motor(name: string, part0: BasePart, part1: BasePart, c0: CFrame, c1: CFrame)
+		local m = Instance.new("Motor6D")
+		m.Name = name
+		m.Part0 = part0
+		m.Part1 = part1
+		m.C0 = c0
+		m.C1 = c1
+		m.Parent = part1
+	end
+	motor("Root", hrp, torso, CFrame.new(), CFrame.new())
+	motor("Neck", torso, head, CFrame.new(0, 1, 0), CFrame.new(0, -0.6, 0))
+	for _, side in { -1, 1 } do
+		local prefix = if side > 0 then "Right" else "Left"
+		local arm = bp(prefix .. "UpperArm", V(0.9, 2, 0.9), CFrame.new(side * 1.45, 3, 0))
+		motor(prefix .. "Shoulder", torso, arm, CFrame.new(side * 1.45, 0.8, 0), CFrame.new(0, 0.8, 0))
+		local leg = bp(prefix .. "UpperLeg", V(0.95, 2, 0.95), CFrame.new(side * 0.5, 1, 0))
+		motor(prefix .. "Hip", torso, leg, CFrame.new(side * 0.5, -1, 0), CFrame.new(0, 1, 0))
+	end
+	local hum = Instance.new("Humanoid")
+	hum.RigType = Enum.HumanoidRigType.R15
+	hum.HipHeight = 2
+	hum.Parent = model
+	model.PrimaryPart = hrp
+	return model
+end
+
+local function makeTemplate(): Model
+	local ok, rig = pcall(function()
+		local desc = Instance.new("HumanoidDescription")
+		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+	end)
+	if ok and typeof(rig) == "Instance" and rig:IsA("Model") and rig:FindFirstChild("HumanoidRootPart") and rig:FindFirstChildOfClass("Humanoid") then
+		local animate = rig:FindFirstChild("Animate")
+		if animate then
+			animate:Destroy()
+		end
+		return rig
+	end
+	return blockRig()
+end
+
+local function paint(model: Model, rng: Random)
+	local skin = SKIN[rng:NextInteger(1, #SKIN)]
+	local shirt = SHIRT[rng:NextInteger(1, #SHIRT)]
+	local pants = PANTS[rng:NextInteger(1, #PANTS)]
+	for _, p in model:GetDescendants() do
+		if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+			local n = p.Name
+			if n == "Head" or n:find("Hand") then
+				p.Color = skin
+			elseif n:find("Torso") or n:find("Arm") then
+				p.Color = shirt
+			elseif n:find("Foot") then
+				p.Color = Color3.fromRGB(30, 30, 30)
+			elseif n:find("Leg") then
+				p.Color = pants
+			end
+		elseif p:IsA("BodyColors") then
+			p:Destroy()
+		end
+	end
+end
+
+local function randomNode(district: string, rng: Random, awayFromPlayers: boolean): number?
+	local list = nodesByDistrict[district]
+	if not list or #list == 0 then
+		return nil
+	end
+	for _ = 1, 8 do
+		local idx = list[rng:NextInteger(1, #list)]
+		if not awayFromPlayers then
+			return idx
+		end
+		local ok = true
+		for _, player in Players:GetPlayers() do
+			local r = rootPart(player)
+			if r and (r.Position - nodes[idx].pos).Magnitude < WC.NPC_WAKE_RANGE then
+				ok = false
+				break
+			end
+		end
+		if ok then
+			return idx
+		end
+	end
+	return nil
+end
+
+local function place(npc: NPC, idx: number)
+	npc.node = idx
+	npc.prev = nil
+	npc.target = nil
+	npc.district = nodes[idx].district
+	local p = nodes[idx].pos + V(0, npc.standHeight, 0)
+	npc.model:PivotTo(CFrame.new(p) * CFrame.Angles(0, math.random() * math.pi * 2, 0))
+	npc.lastPos = p
+end
+
+local function sleep(npc: NPC)
+	npc.asleep = true
+	npc.target = nil
+	npc.hum:MoveTo(npc.root.Position)
+	npc.root.Anchored = true
+end
+
+local function wake(npc: NPC)
+	npc.asleep = false
+	npc.root.Anchored = false
+	pcall(function()
+		npc.root:SetNetworkOwner(nil)
+	end)
+	npc.lastProgress = os.clock()
+	npc.lastPos = npc.root.Position
+end
+
+local function spawnNPCs(rng: Random)
+	local folder = Instance.new("Folder")
+	folder.Name = "NPCs"
+	folder.Parent = root
+	local template = makeTemplate()
+	local kinds = {}
+	for kind, n in WC.SCHEDULE_MIX do
+		for _ = 1, n do
+			table.insert(kinds, kind)
+		end
+	end
+	table.sort(kinds) -- deterministic order, then a seeded shuffle
+	for i = #kinds, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		kinds[i], kinds[j] = kinds[j], kinds[i]
+	end
+	local slot = WC.timeSlot(Lighting.ClockTime)
+	for i = 1, math.min(WC.NPC_COUNT, #kinds) do
+		local kind = kinds[i]
+		local schedule = WC.SCHEDULES[kind]
+		local idx = randomNode(schedule[slot], rng, false) or randomNode("Neighborhood", rng, false)
+		if not idx then
+			break
+		end
+		local model = template:Clone()
+		model.Name = "Pedestrian"
+		local hum = model:FindFirstChildOfClass("Humanoid") :: Humanoid
+		local hrp = model:FindFirstChild("HumanoidRootPart") :: BasePart
+		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+		hum.BreakJointsOnDeath = false
+		hum.WalkSpeed = rng:NextNumber(6.5, 9)
+		hum.UseJumpPower = true
+		hum.JumpPower = 30
+		-- never sit down on benches / seats along the sidewalk (would strand the NPC)
+		hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+		paint(model, rng)
+		local shoulder = model:FindFirstChild("RightShoulder", true)
+		local npc: NPC = {
+			model = model,
+			hum = hum,
+			root = hrp,
+			schedule = schedule,
+			district = nodes[idx].district,
+			node = idx,
+			asleep = true,
+			pauseUntil = 0,
+			movedAt = 0,
+			lastPos = Vector3.zero,
+			lastProgress = 0,
+			busyUntil = 0,
+			cooldownUntil = 0,
+			seen = {},
+			shoulder = if shoulder and shoulder:IsA("Motor6D") then shoulder else nil,
+			shoulderC0 = if shoulder and shoulder:IsA("Motor6D") then shoulder.C0 else nil,
+			standHeight = hum.HipHeight + hrp.Size.Y / 2 + 0.1,
+		}
+		hrp.Anchored = true
+		model:SetAttribute("Schedule", kind)
+		model.Parent = folder
+		CollectionService:AddTag(model, "CityNPC")
+		place(npc, idx)
+		table.insert(npcs, npc)
+		if i % 6 == 0 then
+			task.wait() -- spread the cloning out over a few frames
+		end
+	end
+	template:Destroy()
+	print(string.format("[CityGrind] World: %d pedestrians", #npcs))
+end
+
+local function bubble(npc: NPC, text: string)
+	local head = npc.model:FindFirstChild("Head")
+	if not head or not head:IsA("BasePart") then
+		return
+	end
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "NPCBubble"
+	gui.Size = UDim2.fromOffset(230, 46)
+	gui.StudsOffset = V(0, 2.6, 0)
+	gui.MaxDistance = 70
+	gui.LightInfluence = 0
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundColor3 = Color3.fromRGB(250, 250, 252)
+	label.TextColor3 = Color3.fromRGB(20, 20, 26)
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = text
+	label.Parent = gui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = label
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 8)
+	pad.PaddingRight = UDim.new(0, 8)
+	pad.PaddingTop = UDim.new(0, 4)
+	pad.PaddingBottom = UDim.new(0, 4)
+	pad.Parent = label
+	gui.Parent = head
+	task.delay(4, function()
+		gui:Destroy()
+	end)
+end
+
+local function wave(npc: NPC)
+	local motor, base = npc.shoulder, npc.shoulderC0
+	if not motor or not base then
+		return
+	end
+	npc.model:SetAttribute("Waving", true)
+	local info = TweenInfo.new(0.22, Enum.EasingStyle.Sine)
+	task.spawn(function()
+		local up = base * CFrame.Angles(0, 0, math.rad(150))
+		TweenService:Create(motor, info, { C0 = up }):Play()
+		task.wait(0.25)
+		for _ = 1, 3 do
+			TweenService:Create(motor, info, { C0 = base * CFrame.Angles(0, 0, math.rad(125)) }):Play()
+			task.wait(0.24)
+			TweenService:Create(motor, info, { C0 = up }):Play()
+			task.wait(0.24)
+		end
+		TweenService:Create(motor, TweenInfo.new(0.3, Enum.EasingStyle.Sine), { C0 = base }):Play()
+		task.wait(0.32)
+		if npc.model.Parent then
+			npc.model:SetAttribute("Waving", false)
+		end
+	end)
+end
+
+local function react(npc: NPC, player: Player, tier: number, ppos: Vector3, now: number)
+	npc.busyUntil = now + 3.4
+	npc.cooldownUntil = now + WC.NPC_COOLDOWN
+	npc.seen[player] = now
+	playerReactedAt[player] = now
+	npc.target = nil
+	npc.hum:MoveTo(npc.root.Position)
+	local pos = npc.root.Position
+	local look = V(ppos.X, pos.Y, ppos.Z)
+	if (look - pos).Magnitude > 0.5 then
+		npc.root.CFrame = CFrame.lookAt(pos, look)
+	end
+	local lines = WC.RECOGNIZE_LINES[tier]
+	local line = lines[math.random(1, #lines)]
+	bubble(npc, string.format(line, player.DisplayName))
+	wave(npc)
+end
+
+local function pickNext(npc: NPC, now: number)
+	local links = nodes[npc.node].links
+	if #links == 0 then
+		return
+	end
+	local choices = {}
+	for _, j in links do
+		if j ~= npc.prev then
+			table.insert(choices, j)
+		end
+	end
+	if #choices == 0 then
+		choices = links
+	end
+	npc.target = choices[math.random(1, #choices)]
+	npc.hum:MoveTo(nodes[npc.target :: number].pos)
+	npc.movedAt = now
+	npc.lastProgress = now
+	npc.lastPos = npc.root.Position
+end
+
+local function stepNPC(npc: NPC, now: number, positions: { { player: Player, pos: Vector3 } }, slot: number)
+	if not npc.model.Parent or not npc.root.Parent then
+		return
+	end
+	local pos = npc.root.Position
+	local nearest = math.huge
+	for _, entry in positions do
+		local d = (entry.pos - pos).Magnitude
+		if d < nearest then
+			nearest = d
+		end
+	end
+
+	if nearest > WC.NPC_WAKE_RANGE then
+		if not npc.asleep then
+			sleep(npc)
+		end
+		-- follow the daily schedule while nobody is watching
+		local want = npc.schedule[slot]
+		if npc.district ~= want and nodesByDistrict[want] then
+			local idx = randomNode(want, Random.new(), true)
+			if idx then
+				place(npc, idx)
+			end
+		end
+		return
+	end
+	if npc.asleep then
+		wake(npc)
+	end
+	if pos.Y < -60 then
+		place(npc, npc.node) -- fell through something: put back on the sidewalk
+		return
+	end
+	if now < npc.busyUntil then
+		return
+	end
+
+	-- recognition (89)
+	if now >= npc.cooldownUntil then
+		for _, entry in positions do
+			local player = entry.player
+			local offset = entry.pos - pos
+			if offset.Magnitude <= WC.RECOGNIZE_RANGE and math.abs(offset.Y) < 8 then
+				local rep = player:GetAttribute("Reputation")
+				local fame = player:GetAttribute("Fame")
+				local tier = WC.recognitionTier(if type(rep) == "number" then rep else 0, if type(fame) == "number" then fame else 0)
+				local lastPlayer = playerReactedAt[player] or -math.huge
+				local lastPair = npc.seen[player] or -math.huge
+				if tier > 0 and now - lastPlayer >= WC.PLAYER_COOLDOWN and now - lastPair >= WC.PAIR_COOLDOWN and (player:GetAttribute("Interior") or "") == "" then
+					-- one roll per pass: a failed roll still counts as "seen" for a while
+					npc.seen[player] = now - WC.PAIR_COOLDOWN + 20
+					if math.random() < WC.RECOGNIZE_CHANCE[tier] then
+						react(npc, player, tier, entry.pos, now)
+						return
+					end
+				end
+			end
+		end
+	end
+
+	-- walking
+	local target = npc.target
+	if target then
+		local tpos = nodes[target].pos
+		local flat = V(tpos.X - pos.X, 0, tpos.Z - pos.Z).Magnitude
+		if flat < 3 then
+			npc.prev = npc.node
+			npc.node = target
+			npc.target = nil
+			if math.random() < 0.2 then
+				npc.pauseUntil = now + 2 + math.random() * 4
+			end
+			return
+		end
+		if (pos - npc.lastPos).Magnitude > 1 then
+			npc.lastPos = pos
+			npc.lastProgress = now
+		else
+			local stuck = now - npc.lastProgress
+			if stuck > 10 and nearest > 60 then
+				place(npc, target)
+				return
+			elseif stuck > 5 then
+				-- give up on this leg and head back the other way
+				npc.target = nil
+				npc.prev = target
+				return
+			elseif stuck > 2 then
+				npc.hum.Jump = true
+			end
+		end
+		if now - npc.movedAt > 6 then
+			npc.hum:MoveTo(tpos) -- MoveTo gives up after 8 seconds
+			npc.movedAt = now
+		end
+	elseif now >= npc.pauseUntil then
+		pickNext(npc, now)
+	end
+end
+
+local function runNPCs()
+	while true do
+		local now = os.clock()
+		local positions = {}
+		for _, player in Players:GetPlayers() do
+			local r = rootPart(player)
+			if r then
+				table.insert(positions, { player = player, pos = r.Position })
+			end
+		end
+		local slot = WC.timeSlot(Lighting.ClockTime)
+		for _, npc in npcs do
+			local ok, err = pcall(stepNPC, npc, now, positions, slot)
+			if not ok then
+				warn("[CityGrind] World NPC step failed:", err)
+			end
+		end
+		task.wait(WC.NPC_TICK)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function World.start(city: Instance)
+	root = Instance.new("Folder")
+	root.Name = "World"
+	root.Parent = city
+
+	probe = Instance.new("Part")
+	probe.Name = "Probe"
+	probe.Anchored = true
+	probe.CanCollide = false
+	probe.CanTouch = false
+	probe.CanQuery = false
+	probe.Transparency = 1
+	probe.Parent = root
+
+	WorldEvent = Net.remote("RemoteEvent", "WorldEvent")
+	local WorldRequest = Net.remote("RemoteFunction", "WorldRequest")
+	local WorldCollect = Net.remote("RemoteEvent", "WorldCollect")
+
+	setFilters({})
+	refreshSecrets()
+	CollectionService:GetInstanceAddedSignal("SecretArea"):Connect(refreshSecrets)
+	CollectionService:GetInstanceRemovedSignal("SecretArea"):Connect(refreshSecrets)
+
+	local ok, err = pcall(buildCollectibles)
+	if not ok then
+		warn("[CityGrind] World collectibles failed:", err)
+	end
+
+	WorldRequest.OnServerInvoke = function(player: Player, action: any)
+		if action == "Get" and Net.allow(player, "WorldGet", 0.5) then
+			return stateFor(player)
+		end
+		return nil
+	end
+	WorldCollect.OnServerEvent:Connect(function(player: Player, id: any)
+		if type(id) == "string" and #id <= 16 then
+			World.collect(player, id)
+		end
+	end)
+
+	PlayerData.onPublish(function(player: Player, data: any)
+		local w = data.sections and data.sections[SECTION]
+		if w then
+			player:SetAttribute("Collectibles", validCollected(w))
+			player:SetAttribute("SecretsFound", count(w.secrets))
+		end
+	end)
+	PlayerData.onLoaded(function(player: Player)
+		pushState(player)
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		playerReactedAt[player] = nil
+		for _, npc in npcs do
+			npc.seen[player] = nil
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			local okSecrets, errSecrets = pcall(checkSecrets)
+			if not okSecrets then
+				warn("[CityGrind] World secrets check failed:", errSecrets)
+			end
+		end
+	end)
+
+	task.spawn(runWeather)
+
+	-- the sidewalk graph and pedestrians build after everything else has started
+	task.spawn(function()
+		task.wait(1)
+		setFilters({})
+		local okGraph, errGraph = pcall(buildGraph, city)
+		if not okGraph then
+			warn("[CityGrind] World sidewalk graph failed:", errGraph)
+			return
+		end
+		local okSpawn, errSpawn = pcall(spawnNPCs, Random.new(2024))
+		if not okSpawn then
+			warn("[CityGrind] World pedestrians failed:", errSpawn)
+		end
+		runNPCs()
+	end)
+end
+
+return World
+]=====])
 local client = put(SPS, 'LocalScript', 'CityGrindClient', [=====[
 -- CITY GRIND: client entry point (StarterPlayerScripts.CityGrindClient).
 
@@ -31471,7 +40657,7 @@ HUD.start()
 
 -- Phase 3 life systems. They start before the phone so their apps
 -- (Phone.addApp) land on the home screen.
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Subway" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -38648,6 +47834,416 @@ end
 
 return Emotes
 ]=====])
+put(client, 'ModuleScript', 'EventBallot', [=====[
+-- CITY GRIND: vote + photo-submit panels for the city event kinds that need them
+-- (Photo Challenge, Fashion Show). Driven by the live data the server pushes:
+--   data.ballot = { title, note, entries = { { key, name, detail, mine, photo? } }, voted, canVote, endsAt }
+--   data.submit = { title, note, photos = { { id, l, n, t } }, current }
+-- Every tap goes to EventsRequest ("Vote" / "Submit" / "Entry"); the server
+-- checks everything (one vote, not yourself, photo taken during the event...).
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local EC = require(shared:WaitForChild("EventsConfig"))
+local SceneSnapshot = require(shared:WaitForChild("SceneSnapshot"))
+
+local colors = UI.colors
+
+local EventBallot = {}
+
+type Request = (string, ...any) -> any
+
+local request: Request = function(_action: string, ...: any): any
+	return nil
+end
+local panel: Frame
+local titleLabel: TextLabel
+local timerLabel: TextLabel
+local noteLabel: TextLabel
+local list: ScrollingFrame
+
+local mode: string? = nil -- "ballot" | "submit"
+local eventId: string? = nil
+local current: any = nil -- the ballot / submit table being shown
+local signature = ""
+local confirmKey: any = nil
+local snapCache: { [string]: any } = {}
+
+local function optionalClient(name: string): any
+	local module = script.Parent:FindFirstChild(name)
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function clearList()
+	for _, child in list:GetChildren() do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+end
+
+local function close()
+	panel.Visible = false
+	mode = nil
+	eventId = nil
+	current = nil
+	signature = ""
+	confirmKey = nil
+end
+EventBallot.close = close
+
+-- Photo fetches go one at a time (the server rate-limits them).
+local nextFetchAt = 0
+local function throttled<T>(fn: () -> T): T
+	while os.clock() < nextFetchAt do
+		task.wait(nextFetchAt - os.clock())
+	end
+	nextFetchAt = os.clock() + 0.4
+	local result = fn()
+	nextFetchAt = os.clock() + 0.4
+	return result
+end
+
+-- Draws a snapshot into a small viewport, fetching it lazily.
+local function thumbnail(parent: Instance, cacheKey: string, fetch: () -> any, onOpen: ((any) -> ())?)
+	local view = UI.new("ViewportFrame", {
+		BackgroundColor3 = Color3.fromRGB(12, 12, 16),
+		Size = UDim2.new(0, 96, 1, -8),
+		Position = UDim2.fromOffset(4, 4),
+		Ambient = Color3.fromRGB(160, 160, 170),
+		LightColor = Color3.new(1, 1, 1),
+		Parent = parent,
+	}, { UI.corner(8) })
+	local loading = UI.label({ Text = "📷", TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Parent = view })
+	task.spawn(function()
+		local snap = snapCache[cacheKey]
+		if not snap then
+			snap = throttled(fetch)
+			if snap then
+				snapCache[cacheKey] = snap
+			end
+		end
+		if not view.Parent then
+			return
+		end
+		if not snap then
+			loading.Text = "—"
+			return
+		end
+		loading:Destroy()
+		pcall(SceneSnapshot.render, view, snap, { maxParts = 160 })
+		if onOpen then
+			local tap = UI.new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 3, Parent = view })
+			tap.Activated:Connect(function()
+				onOpen(snap)
+			end)
+		end
+	end)
+end
+
+local function openBig(snap: any, title: string, sub: string)
+	local Media = optionalClient("Media")
+	if Media and Media.openViewer then
+		pcall(Media.openViewer, { snap = snap, title = title, sub = sub, actions = {} })
+	end
+end
+
+local renderBallot: () -> ()
+
+local function castVote(key: any)
+	if not eventId or not current then
+		return
+	end
+	if confirmKey ~= key then
+		confirmKey = key
+		renderBallot()
+		return
+	end
+	confirmKey = nil
+	local result = request("Vote", eventId, key)
+	if result and result.ok then
+		current.voted = result.voted or key
+		current.canVote = false
+		HUD.push("VOTE CAST", result.msg or "Vote locked in.")
+	elseif result and result.msg then
+		HUD.push("CAN'T VOTE", result.msg)
+	end
+	renderBallot()
+end
+
+function renderBallot()
+	local b = current
+	if not b then
+		return
+	end
+	clearList()
+	titleLabel.Text = b.title or "VOTE"
+	noteLabel.Text = b.note or ""
+	for i, e in b.entries or {} do
+		local picked = b.voted == e.key
+		local height = if e.photo then 104 else 64
+		local row = UI.new("Frame", {
+			BackgroundColor3 = if picked then Color3.fromRGB(110, 70, 200) else colors.panelLight,
+			Size = UDim2.new(1, -4, 0, height),
+			LayoutOrder = i,
+			Parent = list,
+		}, { UI.corner(10) })
+		local left = 10
+		if e.photo then
+			local key = tostring(eventId) .. ":" .. tostring(e.key)
+			local evId = eventId
+			thumbnail(row, key, function()
+				local result = request("Entry", evId, e.key)
+				return if result and result.ok then result.snap else nil
+			end, function(snap)
+				openBig(snap, e.name .. "'s photo", e.detail or "")
+			end)
+			left = 108
+		end
+		UI.label({
+			Text = e.name .. (if e.mine then " (you)" else ""),
+			Font = UI.FONT_BOLD,
+			TextSize = 13,
+			Position = UDim2.fromOffset(left, 6),
+			Size = UDim2.new(1, -left - 90, 0, 16),
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = row,
+		})
+		UI.label({
+			Text = e.detail or "",
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Position = UDim2.fromOffset(left, 24),
+			Size = UDim2.new(1, -left - 90, 1, -28),
+			Parent = row,
+		})
+		local label, color
+		if picked then
+			label, color = "✓ VOTED", Color3.fromRGB(110, 70, 200)
+		elseif e.mine then
+			label, color = "YOURS", Color3.fromRGB(70, 70, 80)
+		elseif not b.canVote then
+			label, color = "—", Color3.fromRGB(70, 70, 80)
+		elseif confirmKey == e.key then
+			label, color = "CONFIRM?", Color3.fromRGB(230, 150, 40)
+		else
+			label, color = "VOTE", Color3.fromRGB(40, 170, 90)
+		end
+		local button = UI.button({
+			Text = label,
+			TextSize = 12,
+			BackgroundColor3 = color,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -8, 0.5, 0),
+			Size = UDim2.fromOffset(78, 30),
+			Parent = row,
+		})
+		if b.canVote and not e.mine and not picked then
+			button.Activated:Connect(function()
+				castVote(e.key)
+			end)
+		end
+	end
+	if #(b.entries or {}) == 0 then
+		UI.label({ Text = "No entries yet.", TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 30), Parent = list })
+	end
+end
+
+local function renderSubmit()
+	local s = current
+	if not s then
+		return
+	end
+	clearList()
+	titleLabel.Text = s.title or "SUBMIT"
+	noteLabel.Text = s.note or ""
+	local Media = optionalClient("Media")
+	local cam = UI.button({ Text = "📷  OPEN CAMERA", TextSize = 13, BackgroundColor3 = Color3.fromRGB(60, 120, 220), Size = UDim2.new(1, -4, 0, 34), LayoutOrder = 0, Parent = list })
+	cam.Activated:Connect(function()
+		if Media and Media.openCamera then
+			close()
+			local Phone = optionalClient("Phone")
+			if Phone and Phone.setOpen then
+				pcall(Phone.setOpen, false)
+			end
+			pcall(Media.openCamera)
+		else
+			HUD.push("CAMERA", "Open the Camera app on your phone.")
+		end
+	end)
+	for i, photo in s.photos or {} do
+		local entered = s.current == photo.id
+		local row = UI.new("Frame", {
+			BackgroundColor3 = if entered then Color3.fromRGB(30, 110, 70) else colors.panelLight,
+			Size = UDim2.new(1, -4, 0, 96),
+			LayoutOrder = i,
+			Parent = list,
+		}, { UI.corner(10) })
+		thumbnail(row, "own:" .. photo.id, function()
+			return if Media and Media.fetchPhoto then Media.fetchPhoto(photo.id) else nil
+		end, function(snap)
+			openBig(snap, "Your photo", tostring(photo.l or ""))
+		end)
+		UI.label({ Text = tostring(photo.l or "Photo"), Font = UI.FONT_BOLD, TextSize = 13, Position = UDim2.fromOffset(108, 8), Size = UDim2.new(1, -200, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+		UI.label({
+			Text = string.format("%d in frame · %s", tonumber(photo.n) or 0, UI.timeAgo(tonumber(photo.t) or os.time())),
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			Position = UDim2.fromOffset(108, 28),
+			Size = UDim2.new(1, -200, 0, 14),
+			Parent = row,
+		})
+		local button = UI.button({
+			Text = if entered then "✓ ENTERED" else "SUBMIT",
+			TextSize = 12,
+			BackgroundColor3 = if entered then Color3.fromRGB(30, 110, 70) else Color3.fromRGB(40, 170, 90),
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -8, 0.5, 0),
+			Size = UDim2.fromOffset(84, 30),
+			Parent = row,
+		})
+		if not entered then
+			button.Activated:Connect(function()
+				if not eventId then
+					return
+				end
+				button.Text = "…"
+				local result = request("Submit", eventId, photo.id)
+				if result and result.ok then
+					s.current = photo.id
+					HUD.push("PHOTO CHALLENGE", result.msg or "Submitted.")
+				else
+					HUD.push("NOT ACCEPTED", if result and result.msg then result.msg else "Couldn't submit that photo.")
+				end
+				renderSubmit()
+			end)
+		end
+	end
+	if #(s.photos or {}) == 0 then
+		UI.label({
+			Text = "No photos taken since the challenge started yet. Open the Camera, snap one that fits the theme, then come back here.",
+			TextSize = 12,
+			TextColor3 = colors.subtext,
+			TextWrapped = true,
+			Size = UDim2.new(1, -4, 0, 48),
+			LayoutOrder = 1,
+			Parent = list,
+		})
+	end
+end
+
+local function sigOf(kind: string, data: any): string
+	local bits = { kind }
+	if kind == "ballot" then
+		table.insert(bits, tostring(data.voted))
+		table.insert(bits, tostring(data.canVote))
+		for _, e in data.entries or {} do
+			table.insert(bits, tostring(e.key))
+		end
+	else
+		table.insert(bits, tostring(data.current))
+		for _, p in data.photos or {} do
+			table.insert(bits, tostring(p.id))
+		end
+	end
+	return table.concat(bits, "|")
+end
+
+-- Opens the panel for an event's ballot ("ballot") or photo picker ("submit").
+function EventBallot.open(kind: string, id: string, data: any)
+	if type(data) ~= "table" then
+		return
+	end
+	mode = kind
+	eventId = id
+	current = table.clone(data)
+	signature = sigOf(kind, data)
+	confirmKey = nil
+	panel.Visible = true
+	if kind == "ballot" then
+		renderBallot()
+	else
+		renderSubmit()
+	end
+end
+
+-- New live data for an event: refresh the open panel only when it changed.
+function EventBallot.update(id: string, live: any)
+	if not panel.Visible or eventId ~= id or not mode then
+		return
+	end
+	local data = if mode == "ballot" then live.ballot else live.submit
+	if type(data) ~= "table" then
+		close()
+		return
+	end
+	if current then
+		current.endsAt = data.endsAt or current.endsAt
+	end
+	local sig = sigOf(mode, data)
+	if sig ~= signature then
+		EventBallot.open(mode, id, data)
+	end
+end
+
+function EventBallot.isOpenFor(id: string): boolean
+	return panel ~= nil and panel.Visible and eventId == id
+end
+
+function EventBallot.build(gui: ScreenGui, requestFn: Request)
+	request = requestFn
+	panel = UI.new("Frame", {
+		Name = "EventBallot",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.04,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(0, 380, 0.75, 0),
+		Visible = false,
+		ZIndex = 5,
+		Parent = gui,
+	}, { UI.corner(16), UI.padding(14), UI.stroke(Color3.fromRGB(255, 120, 60), 2, 0.2) })
+	UI.new("UISizeConstraint", { MaxSize = Vector2.new(380, 560), MinSize = Vector2.new(260, 260), Parent = panel })
+	titleLabel = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 17, Size = UDim2.new(1, -40, 0, 22), TextTruncate = Enum.TextTruncate.AtEnd, Parent = panel })
+	timerLabel = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.stamina, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, -40, 0, 14), Parent = panel })
+	noteLabel = UI.label({ Text = "", TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 0, 30), Parent = panel })
+	local closeButton = UI.button({ Text = "✕", TextSize = 16, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(32, 32), Parent = panel })
+	closeButton.Activated:Connect(close)
+	list = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 74),
+		Size = UDim2.new(1, 0, 1, -74),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = panel,
+	}, { UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+	RunService.Heartbeat:Connect(function()
+		if panel.Visible and current then
+			local left = (current.endsAt or 0) - Workspace:GetServerTimeNow()
+			if mode == "ballot" then
+				timerLabel.Text = if left > 0 then "Voting closes in " .. EC.formatIn(left) else "Counting votes…"
+			else
+				timerLabel.Text = if left > 0 then "Submissions close in " .. EC.formatIn(left) else "Submissions closed"
+			end
+		end
+	end)
+end
+
+return EventBallot
+]=====])
 put(client, 'ModuleScript', 'Events', [=====[
 -- CITY GRIND: city events client (spec sections 41, 57, 58, 63, 92, 114).
 -- The Events phone app (Upcoming / Live / Results + the community goal), the
@@ -38663,6 +48259,7 @@ local Workspace = game:GetService("Workspace")
 local UI = require(script.Parent:WaitForChild("UI"))
 local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
+local EventBallot = require(script.Parent:WaitForChild("EventBallot"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local EC = require(shared:WaitForChild("EventsConfig"))
 
@@ -38719,6 +48316,7 @@ local statusLabel: TextLabel
 local linesLabel: TextLabel
 local leaveButton: TextButton
 local voteButton: TextButton
+local submitButton: TextButton
 local highlight: Highlight
 
 local liveById: { [string]: { data: any, at: number } } = {}
@@ -38762,7 +48360,8 @@ local function renderPanel()
 	statusLabel.TextColor3 = if shown.highlight then colors.stamina else colors.text
 	linesLabel.Text = table.concat(shown.lines or {}, "\n")
 	leaveButton.Text = if shown.role == "watcher" then "STOP WATCHING" else "LEAVE"
-	voteButton.Visible = shown.canVote == true
+	voteButton.Visible = shown.canVote == true or type(shown.ballot) == "table"
+	submitButton.Visible = type(shown.submit) == "table"
 	local gps = shown.gps
 	if type(gps) == "table" and type(gps.index) == "number" then
 		highlight.Adornee = gateModel(gps.index)
@@ -38811,6 +48410,7 @@ local function buildPanel()
 	local buttons = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 5, Parent = panel })
 	UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Right, Parent = buttons })
 	voteButton = UI.button({ Text = "🗳️ VOTE", TextSize = 12, BackgroundColor3 = kindColor("CarMeet"), Size = UDim2.fromOffset(80, 28), Visible = false, Parent = buttons })
+	submitButton = UI.button({ Text = "📸 SUBMIT", TextSize = 12, BackgroundColor3 = kindColor("PhotoChallenge"), Size = UDim2.fromOffset(84, 28), Visible = false, Parent = buttons })
 	leaveButton = UI.button({ Text = "LEAVE", TextSize = 12, BackgroundColor3 = colors.danger, Size = UDim2.fromOffset(110, 28), Parent = buttons })
 
 	leaveButton.Activated:Connect(function()
@@ -38827,8 +48427,17 @@ local function buildPanel()
 		Phone.refresh(APP_ID)
 	end)
 	voteButton.Activated:Connect(function()
-		if voteData then
+		local data = shown
+		if data and type(data.ballot) == "table" then
+			EventBallot.open("ballot", data.id, data.ballot)
+		elseif voteData then
 			openVote(voteData)
+		end
+	end)
+	submitButton.Activated:Connect(function()
+		local data = shown
+		if data and type(data.submit) == "table" then
+			EventBallot.open("submit", data.id, data.submit)
 		end
 	end)
 
@@ -39175,21 +48784,26 @@ end
 
 local function meCard(content: ScrollingFrame, order: number)
 	local me = snapshot.me
-	local c = Phone.card(content, 62, order)
+	local c = Phone.card(content, 78, order)
 	UI.label({ Text = "YOUR EVENT RECORD", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = c })
 	UI.label({
 		Text = string.format(
-			"5K best %s · 3PT best %s\nWins %d · Podiums %d · Car awards %d",
+			"5K best %s · 3PT best %s · Dunk best %s\nWins %d · Podiums %d · Car awards %d\nCaches %d · Photo wins %d · Fashion wins %d · Streetball titles %d",
 			if me.best5k > 0 then EC.formatTime(me.best5k) else "—",
 			if me.best3pt > 0 then tostring(me.best3pt) else "—",
+			if (me.dunkBest or 0) > 0 then tostring(me.dunkBest) else "—",
 			me.wins,
 			me.podiums,
-			me.carAwards
+			me.carAwards,
+			me.caches or 0,
+			me.photoWins or 0,
+			me.fashionWins or 0,
+			me.streetballWins or 0
 		),
 		TextSize = 12,
 		TextWrapped = true,
 		Position = UDim2.fromOffset(0, 16),
-		Size = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 46),
 		Parent = c,
 	})
 end
@@ -39284,12 +48898,19 @@ local function onUpdate(kind: string, a: any, b: any)
 		end
 	elseif kind == "Live" and type(a) == "table" and type(a.id) == "string" then
 		liveById[a.id] = { data = a, at = os.clock() }
+		if type(a.submit) == "table" then
+			a.submit.endsAt = a.endsAt
+		end
+		EventBallot.update(a.id, a)
 		if voteData and voteData.id == a.id then
 			voteData.endsAt = a.endsAt or voteData.endsAt
 		end
 		renderPanel()
 	elseif kind == "Closed" and type(a) == "string" then
 		liveById[a] = nil
+		if EventBallot.isOpenFor(a) then
+			EventBallot.close()
+		end
 		if voteData and voteData.id == a then
 			voteData = nil
 			closeVote()
@@ -39313,6 +48934,7 @@ local function setup()
 	local update = (remotes :: Instance):WaitForChild("EventsUpdate") :: RemoteEvent
 	buildPanel()
 	buildVotePanel()
+	EventBallot.build(gui, request)
 	update.OnClientEvent:Connect(onUpdate)
 
 	-- tick countdowns in the open app
@@ -45101,12 +54723,14 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local UI = require(script.Parent:WaitForChild("UI"))
 local HUD = require(script.Parent:WaitForChild("HUD"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
+local DistrictsConfig = require(shared:WaitForChild("DistrictsConfig"))
 local remotes = shared:WaitForChild("Remotes")
 
 local player = Players.LocalPlayer
@@ -45377,31 +55001,56 @@ end
 local function buildMap()
 	local _, content = appPage("Map", "Map")
 	local MAP_W = PHONE_W - 2 * SCREEN_INSET - 20
-	local WORLD_X, WORLD_Z = 600, 460
-	local scale = MAP_W / WORLD_X
-	local MAP_H = math.floor(WORLD_Z * scale)
+	local MAP_H = 300
+	-- the whole city (every district), from DistrictsConfig
+	local MIN_X, MIN_Z = DistrictsConfig.MAP_MIN.X, DistrictsConfig.MAP_MIN.Z
+	local WORLD_W = DistrictsConfig.MAP_MAX.X - MIN_X
+	local WORLD_H = DistrictsConfig.MAP_MAX.Z - MIN_Z
+	local BASE_SCALE = MAP_W / WORLD_W -- pixels per stud at zoom 1 (whole city fits)
+	local ZOOMS = { 1, 1.6, 2.5, 4, 6 }
+	local zoomIndex = 3
+	local view = Vector2.new(0, 0) -- world X/Z shown at the canvas centre
+	local follow = true -- keep the player centred until they pan
 
-	local canvas = UI.new("Frame", {
+	-- CanvasGroup so rotated shapes (curves, ramps) are clipped too
+	local canvas = UI.new("CanvasGroup", {
 		Name = "Canvas",
-		BackgroundColor3 = Color3.fromRGB(70, 120, 60),
-		ClipsDescendants = true,
+		BackgroundColor3 = Color3.fromRGB(30, 36, 44),
 		Size = UDim2.fromOffset(MAP_W, MAP_H),
 		LayoutOrder = 1,
 		Parent = content,
 	}, { UI.corner(12) })
+	local world = UI.new("Frame", { Name = "World", BackgroundTransparency = 1, Parent = canvas })
 
-	local function toMap(pos: Vector3): UDim2
-		return UDim2.fromOffset((pos.X + WORLD_X / 2) * scale, (pos.Z + WORLD_Z / 2) * scale)
+	local function frac(pos: Vector3): UDim2
+		return UDim2.fromScale((pos.X - MIN_X) / WORLD_W, (pos.Z - MIN_Z) / WORLD_H)
 	end
 
-	local function rect(cf: CFrame, size: Vector3, color: Color3, z: number)
+	local function applyView()
+		local s = BASE_SCALE * ZOOMS[zoomIndex]
+		view = Vector2.new(math.clamp(view.X, MIN_X, MIN_X + WORLD_W), math.clamp(view.Y, MIN_Z, MIN_Z + WORLD_H))
+		world.Size = UDim2.fromOffset(WORLD_W * s, WORLD_H * s)
+		world.Position = UDim2.fromOffset(MAP_W / 2 - (view.X - MIN_X) * s, MAP_H / 2 - (view.Y - MIN_Z) * s)
+	end
+
+	-- A part's footprint as a (possibly rotated) rectangle.
+	local function rect(part: BasePart, color: Color3, z: number)
+		local cf, size = part.CFrame, part.Size
+		local rv, lv = cf.RightVector, cf.LookVector
+		local w, d, rot = size.X, size.Z, 0
+		if math.abs(rv.Y) < 0.5 then
+			rot = math.deg(math.atan2(rv.Z, rv.X))
+			d = size.Z * Vector2.new(lv.X, lv.Z).Magnitude
+		end
 		UI.new("Frame", {
+			Name = "Shape",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			BackgroundColor3 = color,
-			Position = toMap(cf.Position),
-			Size = UDim2.fromOffset(math.max(2, size.X * scale), math.max(2, size.Z * scale)),
+			Position = frac(cf.Position),
+			Size = UDim2.new(w / WORLD_W, 1, d / WORLD_H, 1),
+			Rotation = rot,
 			ZIndex = z,
-			Parent = canvas,
+			Parent = world,
 		})
 	end
 
@@ -45415,42 +55064,153 @@ local function buildMap()
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Size = UDim2.fromOffset(16, 16),
 		ZIndex = 10,
-		Parent = canvas,
+		Parent = world,
 	})
 
-	local drawn = false
-	local function drawCity()
-		local city = Workspace:FindFirstChild("City")
-		if drawn or not city then
+	-- district names
+	for _, d in DistrictsConfig.LIST do
+		UI.label({
+			Name = "DistrictLabel",
+			Text = string.upper(d.name),
+			Font = UI.FONT_BLACK,
+			TextSize = 11,
+			TextColor3 = d.color,
+			TextStrokeTransparency = 0.2,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = frac(d.center),
+			Size = UDim2.fromOffset(120, 14),
+			ZIndex = 8,
+			Parent = world,
+		})
+	end
+
+	-- zoom / recentre controls (touch, mouse and gamepad friendly buttons)
+	local controls = UI.new("Frame", { Name = "Controls", BackgroundTransparency = 1, Size = UDim2.fromOffset(MAP_W, 30), LayoutOrder = 2, Parent = content })
+	local whereLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -120, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = controls })
+	local function control(text: string, x: number, fn: () -> ())
+		local b = UI.button({ Text = text, TextSize = 15, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, x, 0, 0), Size = UDim2.fromOffset(36, 30), Parent = controls })
+		b.Activated:Connect(fn)
+	end
+	control("−", -80, function()
+		zoomIndex = math.max(1, zoomIndex - 1)
+		applyView()
+	end)
+	control("+", -40, function()
+		zoomIndex = math.min(#ZOOMS, zoomIndex + 1)
+		applyView()
+	end)
+	control("◎", 0, function()
+		follow = true
+	end)
+
+	-- drag to pan, mouse wheel to zoom
+	local dragInput: InputObject? = nil
+	local dragStart = Vector3.zero
+	local dragView = view
+	canvas.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+			dragStart = input.Position
+			dragView = view
+			content.ScrollingEnabled = false
+		end
+	end)
+	canvas.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseWheel then
+			zoomIndex = math.clamp(zoomIndex + (if input.Position.Z > 0 then 1 else -1), 1, #ZOOMS)
+			applyView()
+		end
+	end)
+	canvas.MouseEnter:Connect(function()
+		content.ScrollingEnabled = false -- the wheel zooms the map instead of scrolling the list
+	end)
+	canvas.MouseLeave:Connect(function()
+		if not dragInput then
+			content.ScrollingEnabled = true
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragInput then
 			return
 		end
-		drawn = true
+		local moving = (dragInput.UserInputType == Enum.UserInputType.Touch and input == dragInput)
+			or (dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement)
+		if moving then
+			local delta = input.Position - dragStart
+			if delta.Magnitude > 4 then
+				follow = false
+			end
+			if not follow then
+				local s = BASE_SCALE * ZOOMS[zoomIndex] * (if uiScale then uiScale.Scale else 1)
+				view = dragView - Vector2.new(delta.X, delta.Y) / s
+				applyView()
+			end
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if dragInput and (input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1) then
+			dragInput = nil
+			content.ScrollingEnabled = true
+		end
+	end)
+
+	local drawnParts = -1
+	local function drawCity()
+		local city = Workspace:FindFirstChild("City")
+		if not city then
+			return
+		end
+		-- collect what the map draws; redraw only when that set changed (e.g. districts
+		-- finished streaming in), not when NPCs, vehicles or speech bubbles come and go
+		local shapes: { { part: BasePart, color: Color3, z: number } } = {}
 		for _, d in city:GetDescendants() do
-			if d:IsA("BasePart") then
-				if d.Name == "MainRoad" or d.Name == "CrossRoad" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(50, 50, 55), 2)
+			if d:IsA("BasePart") and d.Position.Y < 400 then
+				local mapColor = d:GetAttribute("MapColor")
+				if typeof(mapColor) == "Color3" then
+					local layer = d:GetAttribute("MapLayer")
+					table.insert(shapes, { part = d, color = mapColor, z = if type(layer) == "number" then layer else 2 })
+				elseif d.Name == "Ground" and d.Parent and d.Parent.Name == "Streets" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(86, 140, 70), z = 1 })
+				elseif d.Name == "MainRoad" or d.Name == "CrossRoad" then
+					table.insert(shapes, { part = d, color = Color3.fromRGB(50, 50, 55), z = 2 })
 				elseif d.Name == "Sidewalk" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(170, 170, 165), 2)
+					table.insert(shapes, { part = d, color = Color3.fromRGB(170, 170, 165), z = 2 })
 				elseif d.Name == "Body" and d.Parent and d.Parent.Parent and d.Parent.Parent.Name == "Buildings" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(200, 190, 175), 3)
+					table.insert(shapes, { part = d, color = Color3.fromRGB(200, 190, 175), z = 3 })
 				elseif d.Name == "CourtFloor" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(40, 90, 150), 3)
+					table.insert(shapes, { part = d, color = Color3.fromRGB(40, 90, 150), z = 4 })
 				elseif d.Name == "Lot" then
-					rect(d.CFrame, d.Size, Color3.fromRGB(60, 60, 66), 2)
+					table.insert(shapes, { part = d, color = Color3.fromRGB(60, 60, 66), z = 2 })
 				end
 			end
 		end
-	end
-
-	local listStart = 2
-	pages.Map.open = function()
-		drawCity()
-		for _, child in content:GetChildren() do
-			if child:IsA("GuiObject") and child ~= canvas then
+		if #shapes == drawnParts then
+			return
+		end
+		drawnParts = #shapes
+		for _, child in world:GetChildren() do
+			if child.Name == "Shape" then
 				child:Destroy()
 			end
 		end
-		for _, child in canvas:GetChildren() do
+		for _, sh in shapes do
+			rect(sh.part, sh.color, sh.z)
+		end
+	end
+
+	local listStart = 3
+	local showAll = false
+	local NEAREST = 30
+	pages.Map.open = function()
+		drawCity()
+		applyView()
+		for _, child in content:GetChildren() do
+			if child:IsA("GuiObject") and child ~= canvas and child ~= controls then
+				child:Destroy()
+			end
+		end
+		for _, child in world:GetChildren() do
 			if child.Name == "Dot" then
 				child:Destroy()
 			end
@@ -45468,7 +55228,12 @@ local function buildMap()
 			return
 		end
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-		local list = points:GetChildren()
+		local list = {}
+		for _, point in points:GetChildren() do
+			if point:IsA("BasePart") then
+				table.insert(list, point)
+			end
+		end
 		table.sort(list, function(a, b)
 			if not root then
 				return a.Name < b.Name
@@ -45476,25 +55241,35 @@ local function buildMap()
 			return (a.Position - root.Position).Magnitude < (b.Position - root.Position).Magnitude
 		end)
 		for i, point in list do
-			local row = card(content, 44, listStart + i)
-			UI.label({ Text = point.Name, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -70, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
-			local dist = if root then math.floor((point.Position - root.Position).Magnitude / 3.57) .. "m" else ""
-			UI.label({ Text = (point:GetAttribute("Category") or "Place") .. "  ·  " .. dist, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -70, 0, 14), Parent = row })
-			local go = UI.button({ Text = "GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
-			go.Activated:Connect(function()
-				setGPS(point.Name, point.Position)
-				showPage("Map")
-			end)
-			-- dot on the map
+			-- every place gets a dot; the list shows the nearest ones unless expanded
 			UI.new("Frame", {
 				Name = "Dot",
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = colors.accent,
-				Position = toMap(point.Position),
+				BackgroundColor3 = if point:GetAttribute("Category") == "Transit" then Color3.fromRGB(80, 200, 255) else colors.accent,
+				Position = frac(point.Position),
 				Size = UDim2.fromOffset(6, 6),
 				ZIndex = 6,
-				Parent = canvas,
+				Parent = world,
 			}, { UI.corner(3) })
+			if showAll or i <= NEAREST then
+				local row = card(content, 44, listStart + i)
+				UI.label({ Text = point.Name, Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -70, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+				local dist = if root then math.floor((point.Position - root.Position).Magnitude / 3.57) .. "m" else ""
+				local district = DistrictsConfig.displayName(DistrictsConfig.at(point.Position))
+				UI.label({ Text = (point:GetAttribute("Category") or "Place") .. "  ·  " .. district .. "  ·  " .. dist, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, -70, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = row })
+				local go = UI.button({ Text = "GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
+				go.Activated:Connect(function()
+					setGPS(point.Name, point.Position)
+					showPage("Map")
+				end)
+			end
+		end
+		if not showAll and #list > NEAREST then
+			local more = UI.button({ Text = string.format("Show all %d places", #list), TextSize = 13, Size = UDim2.new(1, -20, 0, 34), LayoutOrder = listStart + #list + 1, Parent = content })
+			more.Activated:Connect(function()
+				showAll = true
+				showPage("Map")
+			end)
 		end
 	end
 
@@ -45504,9 +55279,14 @@ local function buildMap()
 		end
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if root then
-			arrow.Position = toMap(root.Position)
+			arrow.Position = frac(root.Position)
 			local look = root.CFrame.LookVector
 			arrow.Rotation = math.deg(math.atan2(look.X, -look.Z))
+			if follow then
+				view = Vector2.new(root.Position.X, root.Position.Z)
+				applyView()
+			end
+			whereLabel.Text = "📍 " .. DistrictsConfig.displayName(DistrictsConfig.at(root.Position))
 		end
 	end)
 end
@@ -45699,7 +55479,7 @@ local function buildHome()
 	RunService.Heartbeat:Connect(function()
 		if isOpen and currentPage == "Home" then
 			bigClock.Text = UI.formatClock(Lighting.ClockTime):gsub(" [AP]M", "")
-			subtitle.Text = "The Neighborhood  ·  " .. (if Lighting.ClockTime >= 6 and Lighting.ClockTime < 18 then "Day" else "Night")
+			subtitle.Text = DistrictsConfig.displayName(player:GetAttribute("District")) .. "  ·  " .. (if Lighting.ClockTime >= 6 and Lighting.ClockTime < 18 then "Day" else "Night")
 		end
 	end)
 end
@@ -45900,6 +55680,580 @@ function Phone.start()
 end
 
 return Phone
+]=====])
+put(client, 'ModuleScript', 'Quests', [=====[
+-- CITY GRIND: quests client (spec 78, 79, 80, 113).
+-- The phone's Quests app (Story / Daily / Weekly / Achievements / Login tabs),
+-- the daily login popup on join and the achievement unlock banner. The server
+-- tracks and validates everything; this module only shows its state and sends taps.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SoundService = game:GetService("SoundService")
+local TweenService = game:GetService("TweenService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local QC = require(shared:WaitForChild("QuestsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Quests = {}
+
+local APP_ID = "Quests"
+local APP_COLOR = Color3.fromRGB(240, 170, 40)
+local GOLD = Color3.fromRGB(255, 200, 60)
+local TABS = { "Story", "Daily", "Weekly", "Achievements", "Login" }
+
+local state: any = nil
+local requestRemote: RemoteFunction? = nil
+local appContent: ScrollingFrame? = nil
+local tab = "Story"
+local busy = false
+local gui: ScreenGui? = nil
+local popupShown = false
+local popupEarliest = os.clock() + 5 -- give the Story a moment to start the first-join fly-over
+local achievementSound: Sound? = nil
+
+-- Fired whenever new quest state arrives (Story's tab listens too).
+Quests.changed = Instance.new("BindableEvent")
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function storyClient(): any
+	local module = script.Parent:FindFirstChild("Story")
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function duration(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	local d, h, m = seconds // 86400, (seconds % 86400) // 3600, (seconds % 3600) // 60
+	if d > 0 then
+		return string.format("%dd %dh", d, h)
+	elseif h > 0 then
+		return string.format("%dh %dm", h, m)
+	end
+	return string.format("%dm", math.max(1, m))
+end
+
+local function serverNow(): number
+	-- server sent its os.time(); keep it ticking locally
+	if state and state.serverNow and state.receivedAt then
+		return state.serverNow + (os.clock() - state.receivedAt)
+	end
+	return os.time()
+end
+
+local render: () -> ()
+local showLoginPopup: () -> ()
+
+local function setState(newState: any)
+	if type(newState) ~= "table" then
+		return
+	end
+	newState.receivedAt = os.clock()
+	if state == nil then
+		popupEarliest = math.max(popupEarliest, os.clock() + 2)
+	end
+	state = newState
+	Quests.changed:Fire()
+	if appContent and Phone.isOpen() and Phone.currentPage() == APP_ID then
+		render()
+	end
+	showLoginPopup()
+end
+
+local function request(action: string, a: any?, b: any?): (boolean, string?)
+	if not requestRemote or busy then
+		return false, nil
+	end
+	busy = true
+	local ok, success, msg, newState = pcall(function()
+		return (requestRemote :: RemoteFunction):InvokeServer(action, a, b)
+	end)
+	busy = false
+	if not ok then
+		return false, "Couldn't reach the server."
+	end
+	if newState then
+		setState(newState)
+	end
+	return success == true, msg
+end
+
+local function rewardText(cash: number?, xp: number?, rep: number?): string
+	local parts = {}
+	if cash and cash > 0 then
+		table.insert(parts, "$" .. QC.commas(cash))
+	end
+	if xp and xp > 0 then
+		table.insert(parts, QC.commas(xp) .. " XP")
+	end
+	if rep and rep > 0 then
+		table.insert(parts, rep .. " rep")
+	end
+	return table.concat(parts, "  ·  ")
+end
+
+---------------------------------------------------------------------------
+-- App: tab bar
+---------------------------------------------------------------------------
+local function tabBar(content: ScrollingFrame)
+	local bar = UI.new("Frame", { Name = "Tabs", BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 62), LayoutOrder = 0, Parent = content }, {
+		UI.new("UIGridLayout", { CellSize = UDim2.new(1 / 3, -4, 0, 28), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	for i, name in TABS do
+		local selected = name == tab
+		local b = UI.button({
+			Text = name,
+			TextSize = if #name > 8 then 10 else 12,
+			LayoutOrder = i,
+			BackgroundColor3 = if selected then APP_COLOR else colors.panelLight,
+			TextColor3 = if selected then Color3.fromRGB(25, 20, 10) else colors.text,
+			Parent = bar,
+		})
+		b.Activated:Connect(function()
+			tab = name
+			render()
+		end)
+	end
+end
+
+local function message(content: Instance, text: string, order: number)
+	local c = Phone.card(content, 50, order)
+	UI.label({ Text = text, TextSize = 13, TextColor3 = colors.subtext, TextWrapped = true, Size = UDim2.fromScale(1, 1), Parent = c })
+end
+
+---------------------------------------------------------------------------
+-- App: quests
+---------------------------------------------------------------------------
+local function questCard(content: Instance, q: any, index: number, list: string, order: number)
+	local c = Phone.card(content, 112, order)
+	local done = q.progress >= q.goal
+	if done and not q.claimed then
+		UI.stroke(GOLD, 1.5, 0.2).Parent = c
+	end
+	UI.label({ Text = q.icon, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromOffset(28, 28), Parent = c })
+	UI.label({ Text = q.text, Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, Position = UDim2.fromOffset(34, 0), Size = UDim2.new(1, -34, 0, 34), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+	local _, setFill = UI.bar({ Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 0, 8), Parent = c }, if q.claimed then colors.subtext elseif done then GOLD else colors.xp)
+	setFill(if q.goal > 0 then q.progress / q.goal else 1)
+	UI.label({
+		Text = QC.formatValue(q.metric, q.progress) .. " / " .. QC.formatValue(q.metric, q.goal),
+		TextSize = 12,
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 50),
+		Size = UDim2.new(1, 0, 0, 14),
+		Parent = c,
+	})
+	UI.label({ Text = rewardText(q.cash, q.xp, q.rep), TextSize = 12, TextColor3 = colors.cash, Font = UI.FONT_BOLD, Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+
+	local button = UI.button({ TextSize = 13, AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.fromOffset(92, 24), Parent = c })
+	if q.claimed then
+		button.Text = "CLAIMED ✓"
+		button.AutoButtonColor = false
+		button.TextColor3 = colors.subtext
+	elseif done then
+		button.Text = "CLAIM"
+		button.BackgroundColor3 = GOLD
+		button.TextColor3 = Color3.fromRGB(30, 22, 5)
+		button.Activated:Connect(function()
+			local ok, msg = request("Claim", list, index)
+			HUD.push(if ok then "QUEST COMPLETE" else "QUESTS", msg or "Try again.")
+		end)
+	elseif list == "daily" and state.rerollAvailable then
+		button.Text = "↻ REROLL"
+		button.Activated:Connect(function()
+			local ok, msg = request("Reroll", index)
+			HUD.push(if ok then "QUEST REROLLED" else "QUESTS", msg or "Try again.")
+		end)
+	else
+		button.Text = "IN PROGRESS"
+		button.AutoButtonColor = false
+		button.TextColor3 = colors.subtext
+		button.BackgroundTransparency = 0.5
+	end
+end
+
+local function renderQuests(content: ScrollingFrame, list: string)
+	local quests = if list == "daily" then state.daily else state.weekly
+	local resetAt = if list == "daily" then state.dailyResetAt else state.weeklyResetAt
+	local head = Phone.card(content, 46, 1)
+	UI.label({ Text = if list == "daily" then "DAILY QUESTS" else "WEEKLY QUESTS", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = APP_COLOR, Size = UDim2.new(1, 0, 0, 16), Parent = head })
+	local sub = "New quests in " .. duration((resetAt or 0) - serverNow())
+	if list == "daily" then
+		sub ..= if state.rerollAvailable then "  ·  1 free reroll" else "  ·  reroll used"
+	end
+	UI.label({ Text = sub, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 14), Parent = head })
+	if #quests == 0 then
+		message(content, "No quests right now. Check back after the reset.", 2)
+	end
+	for i, q in quests do
+		questCard(content, q, i, list, 1 + i)
+	end
+end
+
+---------------------------------------------------------------------------
+-- App: achievements
+---------------------------------------------------------------------------
+local function renderAchievements(content: ScrollingFrame)
+	local unlocked, total = 0, 0
+	local shown = {}
+	for _, a in QC.ACHIEVEMENTS do
+		local listed = state.ach[a.id] ~= nil or state.achProgress[a.id] ~= nil or a.metric == nil
+		if a.needs == "districts" and not state.districts and not state.ach[a.id] then
+			listed = false
+		end
+		if listed then
+			total += 1
+			if state.ach[a.id] then
+				unlocked += 1
+			end
+			table.insert(shown, a)
+		end
+	end
+
+	local head = Phone.card(content, 70, 1)
+	UI.label({ Text = string.format("%d / %d UNLOCKED", unlocked, total), Font = UI.FONT_BLACK, TextSize = 15, TextColor3 = GOLD, Size = UDim2.new(1, 0, 0, 18), Parent = head })
+	local _, setFill = UI.bar({ Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 8), Parent = head }, GOLD)
+	setFill(if total > 0 then unlocked / total else 0)
+	local titles = if #state.titles > 0 then "Titles: " .. table.concat(state.titles, ", ") else "Some achievements unlock profile titles."
+	UI.label({ Text = titles, TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(0, 32), Size = UDim2.new(1, 0, 0, 26), TextYAlignment = Enum.TextYAlignment.Top, Parent = head })
+
+	-- unlocked first (newest first), then locked by how close they are
+	table.sort(shown, function(a, b)
+		local ua, ub = state.ach[a.id], state.ach[b.id]
+		if (ua ~= nil) ~= (ub ~= nil) then
+			return ua ~= nil
+		end
+		if ua and ub then
+			return ua > ub
+		end
+		local pa = if a.goal then (state.achProgress[a.id] or 0) / a.goal else 0
+		local pb = if b.goal then (state.achProgress[b.id] or 0) / b.goal else 0
+		return pa > pb
+	end)
+
+	for i, a in shown do
+		local tierColor = QC.TIER_COLORS[a.tier] or colors.subtext
+		local got = state.ach[a.id]
+		local c = Phone.card(content, 74, 1 + i)
+		UI.stroke(tierColor, 1.2, if got then 0.1 else 0.7).Parent = c
+		UI.label({ Text = a.icon, TextSize = 24, TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = if got then 0 else 0.55, Size = UDim2.fromOffset(32, 32), Parent = c })
+		UI.label({ Text = a.name, Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = if got then colors.text else colors.subtext, Position = UDim2.fromOffset(38, 0), Size = UDim2.new(1, -96, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+		UI.label({ Text = a.tier:upper(), Font = UI.FONT_BLACK, TextSize = 10, TextColor3 = tierColor, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(60, 14), Parent = c })
+		UI.label({ Text = a.desc, TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, Position = UDim2.fromOffset(38, 17), Size = UDim2.new(1, -38, 0, 26), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+		local footer
+		if got then
+			footer = "Unlocked " .. os.date("%b %d, %Y", got) .. (if a.title then "  ·  Title: " .. a.title else "")
+		elseif a.goal then
+			local p = state.achProgress[a.id] or 0
+			footer = QC.formatValue(a.metric :: string, math.min(p, a.goal)) .. " / " .. QC.formatValue(a.metric :: string, a.goal) .. "  ·  " .. rewardText(a.cash, a.xp, 0)
+			local _, fill = UI.bar({ Position = UDim2.fromOffset(38, 44), Size = UDim2.new(1, -38, 0, 5), Parent = c }, tierColor)
+			fill(p / a.goal)
+		else
+			footer = rewardText(a.cash, a.xp, 0) .. (if a.title then "  ·  Title: " .. a.title else "")
+		end
+		UI.label({ Text = footer, TextSize = 11, Font = UI.FONT_BOLD, TextColor3 = if got then tierColor else colors.cash, Position = UDim2.fromOffset(38, 51), Size = UDim2.new(1, -38, 0, 13), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+	end
+end
+
+---------------------------------------------------------------------------
+-- Daily login tiles (app tab and popup share them)
+---------------------------------------------------------------------------
+local function loginTiles(parent: Instance, cellWidth: number)
+	local login = state.login
+	local grid = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 2 * 86 + 6), Parent = parent }, {
+		UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(cellWidth, 86), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+	})
+	for _, d in login.days do
+		local claimedDay = d.day <= login.done
+		local isNext = d.day == login.day and not login.claimed
+		local tile = UI.new("Frame", {
+			BackgroundColor3 = if isNext then Color3.fromRGB(70, 55, 20) elseif claimedDay then Color3.fromRGB(30, 50, 35) else colors.panelLight,
+			LayoutOrder = d.day,
+			Parent = grid,
+		}, { UI.corner(10), UI.padding(4) })
+		if isNext then
+			UI.stroke(GOLD, 2).Parent = tile
+		elseif d.day == 7 then
+			UI.stroke(QC.TIER_COLORS.Platinum, 1, 0.4).Parent = tile
+		end
+		UI.label({ Text = "DAY " .. d.day, Font = UI.FONT_BLACK, TextSize = 10, TextColor3 = if isNext then GOLD else colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 12), Parent = tile })
+		UI.label({ Text = if claimedDay then "✅" else d.icon, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 13), Size = UDim2.new(1, 0, 0, 26), Parent = tile })
+		UI.label({ Text = d.text, TextSize = 9, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 41), Size = UDim2.new(1, 0, 1, -41), Parent = tile })
+	end
+	return grid
+end
+
+local function loginSummary(): string
+	local login = state.login
+	if login.claimed then
+		return string.format("Day %d claimed. Next reward in %s. Miss a day and the streak restarts at Day 1.", login.day, duration((state.dailyResetAt or 0) - serverNow()))
+	end
+	return string.format("Day %d is ready to claim. Come back every day (UTC) to reach the Day 7 rare reward.", login.day)
+end
+
+local function claimLogin(after: (() -> ())?)
+	local ok, msg = request("ClaimLogin")
+	if not ok then
+		HUD.push("DAILY REWARD", msg or "Try again.")
+	end
+	if after then
+		after()
+	end
+end
+
+local function renderLogin(content: ScrollingFrame)
+	local head = Phone.card(content, 64, 1)
+	UI.label({ Text = "DAILY LOGIN", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = APP_COLOR, Size = UDim2.new(1, 0, 0, 16), Parent = head })
+	UI.label({ Text = loginSummary(), TextSize = 11, TextWrapped = true, TextColor3 = colors.subtext, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 30), Parent = head })
+	local holder = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 2 * 86 + 6), LayoutOrder = 2, Parent = content })
+	loginTiles(holder, 60)
+	if not state.login.claimed then
+		local b = UI.button({ Text = "CLAIM DAY " .. state.login.day, TextSize = 16, BackgroundColor3 = GOLD, TextColor3 = Color3.fromRGB(30, 22, 5), Size = UDim2.new(1, -20, 0, 40), LayoutOrder = 3, Parent = content })
+		b.Activated:Connect(function()
+			claimLogin()
+		end)
+	end
+	message(content, "Day 5 gives XP because every emote is already free. Day 6 pays the price of an underglow mod to spend at Paint & Mods.", 4)
+end
+
+---------------------------------------------------------------------------
+-- App render
+---------------------------------------------------------------------------
+render = function()
+	local content = appContent
+	if not content then
+		return
+	end
+	Phone.clear(content)
+	tabBar(content)
+	if tab == "Story" then
+		local S = storyClient()
+		if S and S.renderTab then
+			S.renderTab(content, 1)
+		else
+			message(content, "The story isn't available right now.", 1)
+		end
+		return
+	end
+	if not state then
+		message(content, "Loading your quests...", 1)
+		return
+	end
+	if tab == "Daily" then
+		renderQuests(content, "daily")
+	elseif tab == "Weekly" then
+		renderQuests(content, "weekly")
+	elseif tab == "Achievements" then
+		renderAchievements(content)
+	else
+		renderLogin(content)
+	end
+end
+
+-- Lets the Story client open the app on its tab.
+function Quests.open(tabName: string?)
+	if tabName and table.find(TABS, tabName) then
+		tab = tabName
+	end
+	Phone.setOpen(true)
+	Phone.showPage(APP_ID)
+end
+
+function Quests.refresh()
+	if appContent and Phone.isOpen() and Phone.currentPage() == APP_ID then
+		render()
+	end
+end
+
+---------------------------------------------------------------------------
+-- Daily login popup (on join)
+---------------------------------------------------------------------------
+showLoginPopup = function()
+	if popupShown or not gui or not state or state.login.claimed then
+		return
+	end
+	if os.clock() < popupEarliest then
+		task.delay(popupEarliest - os.clock() + 0.1, showLoginPopup)
+		return
+	end
+	if not player:GetAttribute("DataLoaded") or player:GetAttribute("StoryCinematic") == true then
+		return -- tried again when the intro fly-over ends (attribute listener)
+	end
+	popupShown = true
+	local root = gui :: ScreenGui
+	local shade = UI.new("Frame", { Name = "LoginPopup", BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.45, Size = UDim2.fromScale(1, 1), ZIndex = 10, Parent = root })
+	local panel = UI.new("Frame", {
+		BackgroundColor3 = colors.panel,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(330, 360),
+		ZIndex = 11,
+		Parent = shade,
+	}, { UI.corner(18), UI.stroke(GOLD, 2, 0.2), UI.padding(14), UI.new("UISizeConstraint", { MaxSize = Vector2.new(330, 360) }) })
+	UI.label({ Text = "DAILY REWARD", Font = UI.FONT_BLACK, TextSize = 22, TextColor3 = GOLD, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = panel })
+	UI.label({ Text = loginSummary(), TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 32), Parent = panel })
+	local holder = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 0, 2 * 86 + 6), Parent = panel })
+	loginTiles(holder, 68)
+	local function close()
+		shade:Destroy()
+	end
+	local claim = UI.button({ Text = "CLAIM DAY " .. state.login.day, TextSize = 18, BackgroundColor3 = GOLD, TextColor3 = Color3.fromRGB(30, 22, 5), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(0.62, -4, 0, 44), Parent = panel })
+	local later = UI.button({ Text = "LATER", TextSize = 15, AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.new(0.38, -4, 0, 44), Parent = panel })
+	for _, d in panel:GetDescendants() do
+		if d:IsA("GuiObject") then
+			d.ZIndex = 12
+		end
+	end
+	claim.Activated:Connect(function()
+		claim.Text = "..."
+		claimLogin(close)
+	end)
+	later.Activated:Connect(close)
+	panel.Size = UDim2.fromOffset(300, 330)
+	TweenService:Create(panel, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(330, 360) }):Play()
+end
+
+---------------------------------------------------------------------------
+-- Achievement unlocked banner (its own look, and a phone notification)
+---------------------------------------------------------------------------
+local bannerQueue: { string } = {}
+local bannerBusy = false
+
+local function showAchievement(id: string)
+	local a = QC.ACHIEVEMENT_BY_ID[id]
+	if not a or not gui then
+		return
+	end
+	local tierColor = QC.TIER_COLORS[a.tier] or GOLD
+	local banner = UI.new("Frame", {
+		Name = "Achievement",
+		BackgroundColor3 = Color3.fromRGB(22, 18, 10),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, -120),
+		Size = UDim2.fromOffset(360, 86),
+		ZIndex = 20,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(tierColor, 2.5) })
+	local gradient = UI.new("UIGradient", {
+		Color = ColorSequence.new(tierColor:Lerp(Color3.new(0, 0, 0), 0.5), Color3.fromRGB(40, 32, 12)),
+		Offset = Vector2.new(-1, 0),
+		Parent = banner,
+	})
+	local medal = UI.new("TextLabel", {
+		Text = a.icon,
+		TextSize = 34,
+		Font = UI.FONT,
+		BackgroundColor3 = tierColor,
+		Position = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(62, 62),
+		ZIndex = 21,
+		Parent = banner,
+	}, { UI.corner(31) })
+	UI.label({ Text = "ACHIEVEMENT UNLOCKED  ·  " .. a.tier:upper(), Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = tierColor, Position = UDim2.fromOffset(86, 12), Size = UDim2.new(1, -96, 0, 14), ZIndex = 21, Parent = banner })
+	UI.label({ Text = a.name, Font = UI.FONT_BLACK, TextSize = 22, Position = UDim2.fromOffset(86, 28), Size = UDim2.new(1, -96, 0, 24), TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 21, Parent = banner })
+	local reward = rewardText(a.cash, a.xp, 0) .. (if a.title then "  ·  Title: " .. a.title else "")
+	UI.label({ Text = reward, Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.cash, Position = UDim2.fromOffset(86, 54), Size = UDim2.new(1, -96, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 21, Parent = banner })
+
+	if achievementSound and player:GetAttribute("NotificationSounds") ~= false then
+		achievementSound:Play()
+	end
+	TweenService:Create(banner, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 0, 150) }):Play()
+	TweenService:Create(gradient, TweenInfo.new(1.4, Enum.EasingStyle.Sine), { Offset = Vector2.new(1, 0) }):Play()
+	TweenService:Create(medal, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, true), { Rotation = 12 }):Play()
+
+	-- phone notification (Alerts app) without a second toast
+	table.insert(HUD.notifications, 1, { title = "ACHIEVEMENT: " .. a.name:upper(), body = a.desc .. "  " .. reward, time = os.time() })
+	if #HUD.notifications > 50 then
+		table.remove(HUD.notifications)
+	end
+	HUD.unread += 1
+	HUD.notificationAdded:Fire()
+
+	task.wait(4.2)
+	local out = TweenService:Create(banner, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.new(0.5, 0, 0, -120) })
+	out:Play()
+	out.Completed:Wait()
+	banner:Destroy()
+end
+
+local function queueAchievement(id: string)
+	table.insert(bannerQueue, id)
+	if bannerBusy then
+		return
+	end
+	bannerBusy = true
+	task.spawn(function()
+		while #bannerQueue > 0 do
+			showAchievement(table.remove(bannerQueue, 1) :: string)
+		end
+		bannerBusy = false
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function setup()
+	local remotes = shared:WaitForChild("Remotes")
+	requestRemote = remotes:WaitForChild("QuestsRequest") :: RemoteFunction
+	local event = remotes:WaitForChild("QuestsEvent") :: RemoteEvent
+
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindQuests",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 8,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	achievementSound = UI.new("Sound", { SoundId = "rbxasset://sounds/electronicpingshort.wav", Volume = 0.7, PlaybackSpeed = 1.35, Parent = SoundService })
+
+	event.OnClientEvent:Connect(function(kind: any, payload: any)
+		if kind == "State" then
+			setState(payload)
+		elseif kind == "Achievement" and type(payload) == "string" then
+			queueAchievement(payload)
+		end
+	end)
+	player:GetAttributeChangedSignal("StoryCinematic"):Connect(function()
+		if player:GetAttribute("StoryCinematic") ~= true then
+			task.delay(1.5, showLoginPopup)
+		end
+	end)
+
+	if not player:GetAttribute("DataLoaded") then
+		player:GetAttributeChangedSignal("DataLoaded"):Wait()
+	end
+	local ok, success, _, newState = pcall(function()
+		return (requestRemote :: RemoteFunction):InvokeServer("Get")
+	end)
+	if ok and success and newState then
+		setState(newState)
+	end
+end
+
+function Quests.start()
+	Phone.addApp({ id = APP_ID, label = "Quests", icon = "📜", color = APP_COLOR }, function(content: ScrollingFrame)
+		appContent = content
+		render()
+		return function()
+			render()
+			task.spawn(request, "Get")
+		end
+	end)
+	task.spawn(setup)
+end
+
+return Quests
 ]=====])
 put(client, 'ModuleScript', 'Shops', [=====[
 -- CITY GRIND: shop panels, try-on preview, mirror camera, Closet phone app
@@ -48607,6 +58961,882 @@ end
 
 return Social
 ]=====])
+put(client, 'ModuleScript', 'Story', [=====[
+-- CITY GRIND: story client (spec 83, 109, 110).
+--   * First-join cinematic: a letterboxed camera fly-over of the city built
+--     from what exists at runtime (a court, Downtown, Budget Wheels, the Beach,
+--     Luxury, Maple Court), with the two captions and a SKIP button, then the
+--     camera returns to the player.
+--   * Mission tracker under the stats card (collapsible) with GPS.
+--   * Mission / chapter banners (chapter complete = cutscene-lite).
+--   * Story.renderTab(content, order) fills the Quests app's Story tab.
+-- The server decides every mission; this only shows its state.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local SC = require(shared:WaitForChild("StoryConfig"))
+local QC = require(shared:WaitForChild("QuestsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Story = {}
+
+local ACCENT = Color3.fromRGB(255, 200, 60)
+
+local state: any = nil
+local requestRemote: RemoteFunction? = nil
+local gui: ScreenGui? = nil
+local collapsed = false
+local cinematicPlaying = false
+local cinematicDone = false
+
+Story.changed = Instance.new("BindableEvent")
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function questsClient(): any
+	local module = script.Parent:FindFirstChild("Quests")
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function currentMission(): (SC.Chapter?, SC.Mission?)
+	if not state or state.done then
+		return nil, nil
+	end
+	local chapter = SC.CHAPTERS[state.chapter]
+	return chapter, chapter and chapter.missions[state.mission]
+end
+
+local function progressText(m: SC.Mission): string
+	local p = state.progress or 0
+	if m.goal <= 1 and not m.alt then
+		return if p >= m.goal then "Done" else "Not yet"
+	end
+	local text = QC.formatValue(m.metric, p) .. " / " .. QC.formatValue(m.metric, m.goal)
+	if m.alt then
+		text ..= "   (" .. QC.formatValue(m.alt.metric, state.altProgress or 0) .. " / " .. QC.formatValue(m.alt.metric, m.alt.goal) .. ")"
+	end
+	return text
+end
+
+local function setGPS()
+	if state and state.gps then
+		Phone.setGPS(state.gps.name, Vector3.new(state.gps.x, state.gps.y, state.gps.z))
+	end
+end
+
+---------------------------------------------------------------------------
+-- Mission tracker (under the HUD stats card)
+---------------------------------------------------------------------------
+local refreshTracker: () -> ()
+
+local function buildTracker(root: ScreenGui)
+	local panel = UI.new("Frame", {
+		Name = "StoryTracker",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.15,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -12, 0, 112),
+		Size = UDim2.fromOffset(230, 32),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Visible = false,
+		Parent = root,
+	}, { UI.corner(12), UI.padding(8), UI.stroke(ACCENT, 1, 0.6) })
+	UI.new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = panel })
+
+	local header = UI.new("Frame", { Name = "Header", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 1, Parent = panel })
+	local title = UI.label({ Name = "Title", Text = "", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = ACCENT, Size = UDim2.new(1, -24, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = header })
+	local toggle = UI.button({ Name = "Toggle", Text = "–", TextSize = 14, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 4, 0, -4), Size = UDim2.fromOffset(24, 24), Parent = header })
+
+	local body = UI.new("Frame", { Name = "Body", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 2, Parent = panel })
+	UI.new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder, Parent = body })
+	local objective = UI.label({ Name = "Objective", Text = "", Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 1, Parent = body })
+	local alt = UI.label({ Name = "Alt", Text = "", TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 2, Parent = body })
+	local progress = UI.label({ Name = "Progress", Text = "", TextSize = 12, TextColor3 = colors.xp, Size = UDim2.new(1, 0, 0, 14), LayoutOrder = 3, Parent = body })
+	local buttons = UI.new("Frame", { Name = "Buttons", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), LayoutOrder = 4, Parent = body })
+	local gpsButton = UI.button({ Text = "📍 GPS", TextSize = 12, BackgroundColor3 = Color3.fromRGB(40, 110, 170), Size = UDim2.new(0.5, -3, 1, 0), Parent = buttons })
+	local moreButton = UI.button({ Text = "QUESTS", TextSize = 12, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.5, -3, 1, 0), Parent = buttons })
+
+	gpsButton.Activated:Connect(setGPS)
+	moreButton.Activated:Connect(function()
+		local Q = questsClient()
+		if Q and Q.open then
+			Q.open("Story")
+		end
+	end)
+	toggle.Activated:Connect(function()
+		collapsed = not collapsed
+		refreshTracker()
+	end)
+
+	refreshTracker = function()
+		local chapter, m = currentMission()
+		panel.Visible = chapter ~= nil and m ~= nil and state.active and not cinematicPlaying
+		if not panel.Visible or not chapter or not m then
+			return
+		end
+		title.Text = string.format("CH %d · %s", state.chapter, chapter.name:upper())
+		toggle.Text = if collapsed then "+" else "–"
+		body.Visible = not collapsed
+		objective.Text = m.text
+		alt.Text = if m.alt then m.alt.text elseif m.hint then m.hint else ""
+		alt.Visible = alt.Text ~= ""
+		progress.Text = progressText(m)
+		gpsButton.Visible = state.gps ~= nil
+		moreButton.Size = if state.gps then UDim2.new(0.5, -3, 1, 0) else UDim2.new(1, 0, 1, 0)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Banners
+---------------------------------------------------------------------------
+local function fadeOutAll(frame: Instance, seconds: number)
+	local info = TweenInfo.new(seconds)
+	for _, d in frame:GetDescendants() do
+		if d:IsA("TextLabel") then
+			TweenService:Create(d, info, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+		elseif d:IsA("UIStroke") then
+			TweenService:Create(d, info, { Transparency = 1 }):Play()
+		elseif d:IsA("Frame") then
+			TweenService:Create(d, info, { BackgroundTransparency = 1 }):Play()
+		end
+	end
+	if frame:IsA("Frame") then
+		TweenService:Create(frame, info, { BackgroundTransparency = 1 }):Play()
+	end
+end
+
+local function showMissionBanner(titleText: string, subtitle: string)
+	if not gui then
+		return
+	end
+	local holder = UI.new("Frame", {
+		Name = "MissionBanner",
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.35,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.3),
+		Size = UDim2.new(1, 0, 0, 78),
+		Parent = gui,
+	})
+	UI.new("Frame", { BackgroundColor3 = ACCENT, Size = UDim2.new(1, 0, 0, 2), Parent = holder })
+	UI.new("Frame", { BackgroundColor3 = ACCENT, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 2), Parent = holder })
+	local t = UI.label({ Text = titleText, Font = UI.FONT_BLACK, TextSize = 30, TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 0, 34), Parent = holder })
+	UI.label({ Text = subtitle, Font = UI.FONT_BOLD, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 22), Parent = holder })
+	t.TextTransparency = 1
+	TweenService:Create(t, TweenInfo.new(0.4), { TextTransparency = 0 }):Play()
+	task.wait(3.6)
+	fadeOutAll(holder, 0.5)
+	task.wait(0.55)
+	holder:Destroy()
+end
+
+-- Banners play one after another (a returning player can finish several at once).
+local bannerQueue: { { string } } = {}
+local bannerBusy = false
+local function missionBanner(titleText: string, subtitle: string)
+	table.insert(bannerQueue, { titleText, subtitle })
+	if bannerBusy then
+		return
+	end
+	bannerBusy = true
+	task.spawn(function()
+		while #bannerQueue > 0 do
+			local entry = table.remove(bannerQueue, 1) :: { string }
+			while cinematicPlaying do
+				task.wait(0.5)
+			end
+			showMissionBanner(entry[1], entry[2])
+		end
+		bannerBusy = false
+	end)
+end
+
+-- Cutscene-lite: letterbox bars slide in around a big banner.
+local function chapterBanner(info: any)
+	if not gui or type(info) ~= "table" then
+		return
+	end
+	local root = UI.new("Frame", { Name = "ChapterComplete", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 30, Parent = gui })
+	local top = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), Size = UDim2.new(1, 0, 0.13, 0), Position = UDim2.fromScale(0, -0.13), ZIndex = 30, Parent = root })
+	local bottom = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), AnchorPoint = Vector2.new(0, 1), Size = UDim2.new(1, 0, 0.13, 0), Position = UDim2.fromScale(0, 1.13), ZIndex = 30, Parent = root })
+	TweenService:Create(top, TweenInfo.new(0.5), { Position = UDim2.fromScale(0, 0) }):Play()
+	TweenService:Create(bottom, TweenInfo.new(0.5), { Position = UDim2.fromScale(0, 1) }):Play()
+
+	local heading = if info.last then "STORY COMPLETE" else "CHAPTER " .. tostring(info.chapter) .. " COMPLETE"
+	local big = UI.label({ Text = heading, Font = UI.FONT_BLACK, TextSize = 40, TextColor3 = ACCENT, TextStrokeTransparency = 0.4, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.42), Size = UDim2.new(1, 0, 0, 46), ZIndex = 31, Parent = root })
+	UI.label({ Text = tostring(info.name):upper(), Font = UI.FONT_BLACK, TextSize = 22, TextStrokeTransparency = 0.5, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, 0, 0, 28), ZIndex = 31, Parent = root })
+	UI.label({
+		Text = string.format("+$%s   +%s XP   +%d rep", QC.commas(info.cash or 0), QC.commas(info.xp or 0), info.rep or 0),
+		Font = UI.FONT_BOLD,
+		TextSize = 18,
+		TextColor3 = colors.cash,
+		TextStrokeTransparency = 0.5,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.57),
+		Size = UDim2.new(1, 0, 0, 24),
+		ZIndex = 31,
+		Parent = root,
+	})
+	local scale = UI.new("UIScale", { Scale = 0.6, Parent = big })
+	TweenService:Create(scale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	HUD.push(heading, tostring(info.name) .. " finished. Coach Ray texted you.")
+	task.delay(5, function()
+		TweenService:Create(top, TweenInfo.new(0.5), { Position = UDim2.fromScale(0, -0.13) }):Play()
+		TweenService:Create(bottom, TweenInfo.new(0.5), { Position = UDim2.fromScale(0, 1.13) }):Play()
+		for _, d in root:GetChildren() do
+			if d:IsA("TextLabel") then
+				TweenService:Create(d, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			end
+		end
+		task.wait(0.6)
+		root:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------------
+-- First-join cinematic (109)
+---------------------------------------------------------------------------
+type Shot = { focus: Vector3, radius: number, height: number }
+
+local function boxOf(inst: Instance): (Vector3?, Vector3?)
+	if inst:IsA("Model") then
+		local cf, size = inst:GetBoundingBox()
+		return cf.Position, size
+	elseif inst:IsA("BasePart") then
+		return inst.Position, inst.Size
+	end
+	return nil, nil
+end
+
+local function gatherShots(): { Shot }
+	local shots: { Shot } = {}
+	local city = Workspace:FindFirstChild("City")
+	local function add(pos: Vector3?, size: number)
+		if pos then
+			table.insert(shots, { focus = Vector3.new(pos.X, math.max(pos.Y, 0) + 4, pos.Z), radius = math.clamp(size * 0.6, 45, 220), height = math.clamp(size * 0.35, 28, 140) })
+		end
+	end
+	local function district(name: string)
+		local folder = city and city:FindFirstChild("Districts")
+		local d = folder and folder:FindFirstChild(name)
+		if not d then
+			return
+		end
+		local center, size = d:GetAttribute("Center"), d:GetAttribute("Size")
+		if typeof(center) == "Vector3" then
+			add(center, if typeof(size) == "Vector3" then math.max(size.X, size.Z) * 0.5 else 160)
+		end
+	end
+	local function building(...: string)
+		local buildings = city and city:FindFirstChild("Buildings")
+		local model
+		for _, name in { ... } do
+			model = model or (buildings and buildings:FindFirstChild(name, true))
+		end
+		if model then
+			local pos, size = boxOf(model)
+			add(pos, if size then math.max(size.X, size.Z) * 1.4 else 80)
+		end
+	end
+
+	-- a court (the Neighborhood court first if it exists)
+	local courts = CollectionService:GetTagged("Court")
+	table.sort(courts, function(a, b)
+		return a.Name < b.Name
+	end)
+	for _, court in courts do
+		local c = court:GetAttribute("CourtCenter")
+		if typeof(c) == "Vector3" and court:IsDescendantOf(Workspace) then
+			add(c, 70)
+			break
+		end
+	end
+	district("Downtown")
+	building("BudgetWheels", "Budget Wheels")
+	district("Beach")
+	district("Luxury")
+	building("Starter Apartments")
+	return shots
+end
+
+local function controls(enabled: boolean)
+	pcall(function()
+		local module = player:WaitForChild("PlayerScripts", 2) and player.PlayerScripts:FindFirstChild("PlayerModule")
+		if module then
+			local controlModule = (require :: any)(module):GetControls()
+			if enabled then
+				controlModule:Enable()
+			else
+				controlModule:Disable()
+			end
+		end
+	end)
+end
+
+local function finishCinematic()
+	if cinematicDone then
+		return
+	end
+	cinematicDone = true
+	if requestRemote then
+		local ok, result = pcall(function()
+			return (requestRemote :: RemoteFunction):InvokeServer("CinematicDone")
+		end)
+		if ok and type(result) == "table" then
+			state = result
+			Story.changed:Fire()
+		end
+	end
+	if refreshTracker then
+		refreshTracker()
+	end
+end
+
+local function playCinematic()
+	if cinematicPlaying or cinematicDone or not gui then
+		return
+	end
+	cinematicPlaying = true
+	if refreshTracker then
+		refreshTracker()
+	end
+	local camera = Workspace.CurrentCamera
+	local gathered, shots = pcall(gatherShots)
+	if not camera or not gathered or #shots == 0 then
+		cinematicPlaying = false
+		finishCinematic()
+		return
+	end
+	local root: Frame? = nil
+	-- Anything below may fail (a part removed mid-shot, a missing character):
+	-- the camera, HUD and controls are always restored afterwards.
+	local ok, err = pcall(function()
+		pcall(Phone.setOpen, false)
+		HUD.setVisible(false)
+		controls(false)
+
+		local skipped = false
+		local rootFrame = UI.new("Frame", { Name = "Cinematic", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 50, Parent = gui })
+		root = rootFrame
+		local top = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = rootFrame })
+		UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0.12, 0), ZIndex = 50, Parent = rootFrame })
+		local fader = UI.new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0, Size = UDim2.fromScale(1, 1), ZIndex = 52, Parent = rootFrame })
+		local caption = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 34, TextStrokeTransparency = 0.4, TextTransparency = 1, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.78), Size = UDim2.new(1, -40, 0, 44), ZIndex = 53, Parent = rootFrame })
+		local logo = UI.label({ Text = "CITY GRIND", Font = UI.FONT_BLACK, TextSize = 18, TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 20, 0.06, -10), Size = UDim2.fromOffset(200, 20), ZIndex = 53, Parent = top })
+		logo.TextTransparency = 0.2
+		local skip = UI.button({ Text = "SKIP  ▶▶", TextSize = 15, BackgroundColor3 = Color3.fromRGB(40, 40, 46), AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -20, 1, -16), Size = UDim2.fromOffset(110, 36), ZIndex = 54, Parent = rootFrame })
+		skip.Activated:Connect(function()
+			skipped = true
+		end)
+
+		local function say(text: string)
+			caption.Text = text
+			caption.TextTransparency = 1
+			TweenService:Create(caption, TweenInfo.new(0.8), { TextTransparency = 0 }):Play()
+		end
+		local function unsay()
+			TweenService:Create(caption, TweenInfo.new(0.6), { TextTransparency = 1 }):Play()
+		end
+		-- waits while watching for SKIP
+		local function hold(seconds: number): boolean
+			local deadline = os.clock() + seconds
+			while os.clock() < deadline do
+				if skipped then
+					return false
+				end
+				task.wait()
+			end
+			return true
+		end
+
+		camera.CameraType = Enum.CameraType.Scriptable
+		local lines = SC.CINEMATIC_LINES
+		local SHOT_TIME = 4.2
+		local lineAt = { [1] = 1, [math.max(2, #shots - 1)] = 2 }
+		for i, shot in shots do
+			if skipped then
+				break
+			end
+			local angle = math.rad(35 + i * 70)
+			local function at(a: number): CFrame
+				local offset = Vector3.new(math.cos(a) * shot.radius, shot.height, math.sin(a) * shot.radius)
+				return CFrame.lookAt(shot.focus + offset, shot.focus)
+			end
+			camera.CFrame = at(angle)
+			local move = TweenService:Create(camera, TweenInfo.new(SHOT_TIME, Enum.EasingStyle.Linear), { CFrame = at(angle + math.rad(38)) })
+			move:Play()
+			TweenService:Create(fader, TweenInfo.new(0.5), { BackgroundTransparency = 1 }):Play()
+			if lineAt[i] and lines[lineAt[i]] then
+				say(lines[lineAt[i]])
+			end
+			if not hold(SHOT_TIME - 0.5) then
+				move:Cancel()
+				break
+			end
+			if lineAt[i] then
+				unsay()
+			end
+			TweenService:Create(fader, TweenInfo.new(0.45), { BackgroundTransparency = 0 }):Play()
+			if not hold(0.5) then
+				move:Cancel()
+				break
+			end
+			move:Cancel()
+		end
+
+		-- back to the player
+		local character = player.Character
+		local head = character and character:FindFirstChild("Head")
+		if head and head:IsA("BasePart") and not skipped then
+			local target = CFrame.lookAt(head.Position - head.CFrame.LookVector * 12 + Vector3.new(0, 4, 0), head.Position)
+			camera.CFrame = CFrame.lookAt(head.Position + Vector3.new(0, 120, 60), head.Position)
+			TweenService:Create(fader, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+			local back = TweenService:Create(camera, TweenInfo.new(2.2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { CFrame = target })
+			back:Play()
+			hold(2.2)
+			back:Cancel()
+		end
+	end)
+	if not ok then
+		warn("[CityGrind] Story cinematic failed:", err)
+	end
+	local cam = Workspace.CurrentCamera or camera
+	cam.CameraType = Enum.CameraType.Custom
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		cam.CameraSubject = humanoid
+	end
+	if root then
+		root:Destroy()
+	end
+	HUD.setVisible(true)
+	controls(true)
+	cinematicPlaying = false
+	finishCinematic()
+end
+
+---------------------------------------------------------------------------
+-- Story tab in the Quests app
+---------------------------------------------------------------------------
+function Story.renderTab(content: Instance, order: number)
+	if not state then
+		local c = Phone.card(content, 44, order)
+		UI.label({ Text = "Loading your story...", TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1), Parent = c })
+		return
+	end
+	if state.done then
+		local c = Phone.card(content, 92, order)
+		UI.label({ Text = "🏙️ STORY COMPLETE", Font = UI.FONT_BLACK, TextSize = 16, TextColor3 = ACCENT, Size = UDim2.new(1, 0, 0, 20), Parent = c })
+		UI.label({ Text = "From nobody to the top of the city. Keep grinding: daily quests, weekly quests and achievements never stop.", TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 44), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+	else
+		local chapter, m = currentMission()
+		if chapter then
+			-- chapter header + mission list
+			local missions = chapter.missions
+			local head = Phone.card(content, 56 + #missions * 34, order)
+			UI.label({ Text = string.format("CHAPTER %d OF %d", state.chapter, state.chapterCount or #SC.CHAPTERS), Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = head })
+			UI.label({ Text = chapter.name:upper(), Font = UI.FONT_BLACK, TextSize = 18, TextColor3 = ACCENT, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 22), Parent = head })
+			for i, mission in missions do
+				local status = state.statuses and state.statuses[i] and state.statuses[i].status or "todo"
+				local icon = if status == "done" then "✅" elseif status == "current" then "▶️" elseif status == "skipped" then "➖" else "⬜"
+				local text = mission.text .. (if status == "skipped" then " (not in this city yet)" else "")
+				UI.label({
+					Text = icon .. "  " .. text,
+					TextSize = 12,
+					Font = if status == "current" then UI.FONT_BOLD else UI.FONT,
+					TextColor3 = if status == "current" then colors.text else colors.subtext,
+					TextWrapped = true,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					Position = UDim2.fromOffset(0, 44 + (i - 1) * 34),
+					Size = UDim2.new(1, 0, 0, 32),
+					Parent = head,
+				})
+			end
+			-- current objective
+			if m then
+				local c = Phone.card(content, 116, order + 1)
+				UI.stroke(ACCENT, 1.2, 0.3).Parent = c
+				UI.label({ Text = "CURRENT MISSION", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = ACCENT, Size = UDim2.new(1, 0, 0, 14), Parent = c })
+				UI.label({ Text = m.text, Font = UI.FONT_BOLD, TextSize = 14, TextWrapped = true, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 34), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+				local sub = progressText(m)
+				if m.alt then
+					sub ..= "\n" .. m.alt.text
+				elseif m.hint then
+					sub ..= "\n" .. m.hint
+				end
+				UI.label({ Text = sub, TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, Position = UDim2.fromOffset(0, 50), Size = UDim2.new(1, 0, 0, 30), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+				if state.gps then
+					local gps = UI.button({ Text = "📍 SET GPS: " .. state.gps.name, TextSize = 12, BackgroundColor3 = Color3.fromRGB(40, 110, 170), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 26), Parent = c })
+					gps.Activated:Connect(setGPS)
+				end
+			end
+			local reward = Phone.card(content, 40, order + 2)
+			UI.label({
+				Text = string.format("Chapter reward: $%s  ·  %s XP  ·  %d rep", QC.commas(chapter.cash), QC.commas(chapter.xp), chapter.rep),
+				TextSize = 12,
+				Font = UI.FONT_BOLD,
+				TextColor3 = colors.cash,
+				TextWrapped = true,
+				Size = UDim2.fromScale(1, 1),
+				Parent = reward,
+			})
+		end
+	end
+	-- every chapter at a glance
+	local list = Phone.card(content, 20 + #SC.CHAPTERS * 20, order + 3)
+	UI.label({ Text = "CHAPTERS", Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = list })
+	for i, chapter in SC.CHAPTERS do
+		local finished = state.done or i < state.chapter
+		local current = not state.done and i == state.chapter
+		UI.label({
+			Text = (if finished then "✅ " elseif current then "▶️ " else "🔒 ") .. i .. ". " .. chapter.name,
+			TextSize = 12,
+			Font = if current then UI.FONT_BOLD else UI.FONT,
+			TextColor3 = if current then ACCENT elseif finished then colors.text else colors.subtext,
+			Position = UDim2.fromOffset(0, 16 + (i - 1) * 20),
+			Size = UDim2.new(1, 0, 0, 18),
+			Parent = list,
+		})
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+local function onState(newState: any)
+	if type(newState) ~= "table" then
+		return
+	end
+	state = newState
+	if refreshTracker then
+		refreshTracker()
+	end
+	Story.changed:Fire()
+	local Q = questsClient()
+	if Q and Q.refresh then
+		Q.refresh()
+	end
+end
+
+local function setup()
+	local remotes = shared:WaitForChild("Remotes")
+	requestRemote = remotes:WaitForChild("StoryRequest") :: RemoteFunction
+	local event = remotes:WaitForChild("StoryEvent") :: RemoteEvent
+
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindStory",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 20,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	-- The tracker sits with the HUD (low display order) so the phone covers it.
+	local trackerGui = UI.new("ScreenGui", {
+		Name = "CityGrindStoryTracker",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 1,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildTracker(trackerGui)
+
+	event.OnClientEvent:Connect(function(kind: any, a: any, b: any)
+		if kind == "State" then
+			onState(a)
+		elseif kind == "Cinematic" then
+			task.spawn(playCinematic)
+		elseif kind == "Mission" and type(a) == "string" and type(b) == "string" then
+			missionBanner(a, b)
+		elseif kind == "Chapter" then
+			chapterBanner(a)
+		end
+	end)
+
+	if not player:GetAttribute("DataLoaded") then
+		player:GetAttributeChangedSignal("DataLoaded"):Wait()
+	end
+	local ok, result = pcall(function()
+		return (requestRemote :: RemoteFunction):InvokeServer("Get")
+	end)
+	if ok and type(result) == "table" then
+		onState(result)
+	end
+	-- the Cinematic event may have fired before we were listening
+	if player:GetAttribute("StoryCinematic") == true then
+		task.spawn(playCinematic)
+	end
+end
+
+function Story.start()
+	task.spawn(setup)
+end
+
+-- Exposed for other client modules (e.g. a future map overlay).
+function Story.state(): any
+	return state
+end
+
+return Story
+]=====])
+put(client, 'ModuleScript', 'Subway', [=====[
+-- CITY GRIND: subway client (section 11).
+-- The server opens the station picker when you use a "Take Subway" prompt
+-- (SubwayUI "Open", stationId). Picking a stop calls SubwayRide(destId); the
+-- server checks distance, cooldown, state and charges the fare, then teleports
+-- you while this screen shows the fade-to-black ride. Nothing here moves the
+-- player or touches money.
+-- Also adds a "Subway" phone app: the line map with GPS to every entrance.
+
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local DC = require(shared:WaitForChild("DistrictsConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Subway = {}
+
+local gui: ScreenGui
+local panel: Frame
+local titleLabel: TextLabel
+local fareLabel: TextLabel
+local statusLabel: TextLabel
+local list: Frame
+local overlay: Frame
+local overlayTitle: TextLabel
+local overlaySub: TextLabel
+local trainBar: Frame
+
+local rideRemote: RemoteFunction? = nil
+local fromStation: string? = nil
+local busy = false
+
+---------------------------------------------------------------------------
+-- Ride (fade to black while the server moves you)
+---------------------------------------------------------------------------
+local function fade(target: number, time: number)
+	local tween = TweenService:Create(overlay, TweenInfo.new(time, Enum.EasingStyle.Quad), { BackgroundTransparency = target })
+	tween:Play()
+	tween.Completed:Wait()
+end
+
+local function closePicker()
+	panel.Visible = false
+	fromStation = nil
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(panel) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function ride(dest: DC.Station)
+	if busy or not rideRemote then
+		return
+	end
+	busy = true
+	statusLabel.Text = "Buying a ticket…"
+	statusLabel.TextColor3 = colors.subtext
+	local remote = rideRemote :: RemoteFunction
+	local ok, success, result = pcall(function()
+		return remote:InvokeServer(dest.id)
+	end)
+	if not ok or not success then
+		statusLabel.Text = if ok and type(result) == "string" then result else "The subway is busy. Try again."
+		statusLabel.TextColor3 = colors.danger
+		busy = false
+		return
+	end
+	local rideTime = if type(result) == "number" then result else DC.SUBWAY_RIDE_TIME
+	closePicker()
+
+	-- the trip: fade out, a train rushing past, fade back in at the new station
+	overlay.Visible = true
+	overlay.BackgroundTransparency = 1
+	overlayTitle.Text = "NEXT STOP: " .. string.upper(dest.name)
+	overlaySub.Text = string.format("Fare paid $%d · stand clear of the closing doors", DC.SUBWAY_FARE)
+	trainBar.BackgroundColor3 = dest.line
+	overlayTitle.Visible = true
+	overlaySub.Visible = true
+	trainBar.Visible = true
+	local start = os.clock()
+	local conn = RunService.RenderStepped:Connect(function()
+		local t = (os.clock() - start) * 1.6 % 1
+		trainBar.Position = UDim2.fromScale(-0.6 + t * 1.6, 0.62)
+	end)
+	fade(0, math.min(0.4, rideTime * 0.2))
+	task.wait(math.max(0.2, rideTime - 0.8))
+	conn:Disconnect()
+	overlayTitle.Visible = false
+	overlaySub.Visible = false
+	trainBar.Visible = false
+	fade(1, 0.4)
+	overlay.Visible = false
+	HUD.push("SUBWAY", "Welcome to " .. DC.displayName(dest.id) .. ".")
+	busy = false
+end
+
+---------------------------------------------------------------------------
+-- Station picker
+---------------------------------------------------------------------------
+local function openPicker(stationId: string)
+	local here = DC.station(stationId)
+	if not here or busy then
+		return
+	end
+	fromStation = stationId
+	titleLabel.Text = "SUBWAY · " .. string.upper(here.name)
+	local cash = player:GetAttribute("Cash")
+	fareLabel.Text = string.format("Fare $%d per ride  ·  You have %s", DC.SUBWAY_FARE, UI.formatCash(if type(cash) == "number" then cash else 0))
+	statusLabel.Text = "Pick your stop."
+	statusLabel.TextColor3 = colors.subtext
+	for _, child in list:GetChildren() do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+	local first: GuiObject? = nil
+	for i, st in DC.STATIONS do
+		if st.id ~= stationId then
+			local row = UI.new("Frame", { BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, 0, 0, 48), LayoutOrder = i, Parent = list }, { UI.corner(10) })
+			UI.new("Frame", { BackgroundColor3 = st.line, Position = UDim2.fromOffset(10, 12), Size = UDim2.fromOffset(24, 24), Parent = row }, { UI.corner(12) })
+			UI.label({ Text = st.name, Font = UI.FONT_BOLD, TextSize = 16, Position = UDim2.fromOffset(44, 6), Size = UDim2.new(1, -140, 0, 20), Parent = row })
+			local dist = math.floor((Vector3.new(st.entrance.X, 0, st.entrance.Z) - Vector3.new(here.entrance.X, 0, here.entrance.Z)).Magnitude / 3.57)
+			UI.label({ Text = DC.displayName(st.id) .. "  ·  " .. dist .. "m away", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(44, 26), Size = UDim2.new(1, -140, 0, 16), Parent = row })
+			local go = UI.button({ Text = "RIDE $" .. DC.SUBWAY_FARE, TextSize = 14, BackgroundColor3 = st.line, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(84, 34), Parent = row })
+			go.Activated:Connect(function()
+				task.spawn(ride, st)
+			end)
+			first = first or go
+		end
+	end
+	panel.Visible = true
+	if first and GuiService:IsTenFootInterface() then
+		GuiService.SelectedObject = first
+	end
+end
+
+local function buildGui()
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindSubway",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 6,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	panel = UI.new("Frame", {
+		Name = "Picker",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(0, 340, 0.85, 0),
+		BackgroundColor3 = colors.panel,
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(16), UI.padding(14), UI.stroke(Color3.fromRGB(60, 60, 80), 1.5), UI.new("UISizeConstraint", { MaxSize = Vector2.new(340, 430) }) })
+	titleLabel = UI.label({ Text = "SUBWAY", Font = UI.FONT_BLACK, TextSize = 20, Size = UDim2.new(1, -40, 0, 26), Parent = panel })
+	local close = UI.button({ Text = "✕", TextSize = 16, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, -2), Size = UDim2.fromOffset(32, 30), BackgroundColor3 = colors.panelLight, Parent = panel })
+	close.Activated:Connect(closePicker)
+	fareLabel = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 18), Parent = panel })
+	list = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(0, 54),
+		Size = UDim2.new(1, 0, 1, -84),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		Parent = panel,
+	}, { UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+	statusLabel = UI.label({ Text = "", TextSize = 13, TextWrapped = true, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 26), Parent = panel })
+
+	overlay = UI.new("Frame", { Name = "Ride", BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Visible = false, ZIndex = 20, Parent = gui })
+	overlayTitle = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 30, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.45), Size = UDim2.new(1, -40, 0, 40), ZIndex = 21, Visible = false, Parent = overlay })
+	overlaySub = UI.label({ Text = "", TextSize = 15, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.52), Size = UDim2.new(1, -40, 0, 24), ZIndex = 21, Visible = false, Parent = overlay })
+	trainBar = UI.new("Frame", { Size = UDim2.new(0.6, 0, 0, 10), Position = UDim2.fromScale(-0.6, 0.62), ZIndex = 21, Visible = false, Parent = overlay }, { UI.corner(5) })
+end
+
+---------------------------------------------------------------------------
+-- Phone app: the line and GPS to each entrance
+---------------------------------------------------------------------------
+local function buildApp(content: ScrollingFrame): () -> ()
+	return function()
+		Phone.clear(content)
+		local intro = Phone.card(content, 64, 1)
+		UI.label({ Text = "CITY SUBWAY", Font = UI.FONT_BLACK, TextSize = 15, Size = UDim2.new(1, 0, 0, 18), Parent = intro })
+		UI.label({ Text = string.format("$%d to any district. Walk up to an entrance and use Take Subway.", DC.SUBWAY_FARE), TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 20), Size = UDim2.new(1, 0, 0, 30), Parent = intro })
+		local rides = player:GetAttribute("SubwayRides")
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		for i, st in DC.STATIONS do
+			local row = Phone.card(content, 50, 1 + i)
+			UI.new("Frame", { BackgroundColor3 = st.line, Position = UDim2.fromOffset(0, 4), Size = UDim2.fromOffset(18, 18), Parent = row }, { UI.corner(9) })
+			UI.label({ Text = st.name, Font = UI.FONT_BOLD, TextSize = 14, Position = UDim2.fromOffset(26, 0), Size = UDim2.new(1, -96, 0, 16), Parent = row })
+			local dist = if root then math.floor((root.Position - st.entrance).Magnitude / 3.57) .. "m" else ""
+			UI.label({ Text = DC.displayName(st.id) .. "  ·  " .. dist, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(26, 16), Size = UDim2.new(1, -96, 0, 14), Parent = row })
+			local go = UI.button({ Text = "GPS", TextSize = 13, BackgroundColor3 = Color3.fromRGB(40, 120, 220), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(56, 28), Parent = row })
+			go.Activated:Connect(function()
+				Phone.setGPS("Subway · " .. st.name, st.entrance)
+			end)
+		end
+		local stats = Phone.card(content, 30, 10)
+		UI.label({ Text = string.format("Rides taken this session: %d", if type(rides) == "number" then rides else 0), TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1), Parent = stats })
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Subway.start()
+	Phone.addApp({ id = "Subway", label = "Subway", icon = "🚇", color = Color3.fromRGB(40, 120, 230) }, buildApp)
+	task.spawn(function()
+		buildGui()
+		local remotes = shared:WaitForChild("Remotes")
+		local uiRemote = remotes:WaitForChild("SubwayUI") :: RemoteEvent
+		rideRemote = remotes:WaitForChild("SubwayRide") :: RemoteFunction
+		uiRemote.OnClientEvent:Connect(function(kind: any, stationId: any)
+			if kind == "Open" and type(stationId) == "string" then
+				openPicker(stationId)
+			end
+		end)
+		-- walking away from the entrance closes the picker
+		while true do
+			task.wait(0.5)
+			if panel.Visible and fromStation and not busy then
+				local st = DC.station(fromStation)
+				local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				if not st or not root or (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(st.entrance.X, 0, st.entrance.Z)).Magnitude > DC.SUBWAY_RANGE + 6 then
+					closePicker()
+				end
+			end
+		end
+	end)
+end
+
+return Subway
+]=====])
 put(client, 'ModuleScript', 'UI', [=====[
 -- CITY GRIND: tiny helpers for building UI in code.
 
@@ -49834,5 +61064,649 @@ function Vehicles.start()
 end
 
 return Vehicles
+]=====])
+put(client, 'ModuleScript', 'World', [=====[
+-- CITY GRIND: the living world, client side (spec 65, 66, 81, 82, 89).
+--   * Collectibles: spins and bobs nearby items, hides the ones this player
+--     already owns (local only), asks the server to pick one up when you walk
+--     into it (the server re-checks the distance), and the "Collection" phone
+--     app (progress per set, hints by district, secrets found, weather).
+--   * Weather: renders the server's Workspace attribute "Weather" with local
+--     Atmosphere / Clouds / ColorCorrection tweaks (never touches ClockTime, so
+--     the day/night cycle keeps working), a rain emitter that follows the camera
+--     (off under roofs and indoors) and lightning flashes in storms. Rain density
+--     follows Roblox's own graphics quality setting. A small chip shows the weather.
+--   * Pedestrians: procedural leg/arm swing for nearby "CityNPC" rigs.
+
+local CollectionService = game:GetService("CollectionService")
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local WC = require(shared:WaitForChild("WorldConfig"))
+local DC = require(shared:WaitForChild("DistrictsConfig"))
+local remotes = shared:WaitForChild("Remotes")
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local World = {}
+
+---------------------------------------------------------------------------
+-- Collectibles
+---------------------------------------------------------------------------
+type Visual = { part: BasePart, offset: CFrame }
+type ClientItem = { id: string, model: Model, center: Vector3, visuals: { Visual }, effects: { Instance }, hidden: boolean }
+local clientItems: { [string]: ClientItem } = {}
+local collected: { [string]: boolean } = {}
+local state: any = nil
+local collectRemote: RemoteEvent? = nil
+local lastAsk: { [string]: number } = {}
+
+local function setHidden(item: ClientItem, hidden: boolean)
+	item.hidden = hidden
+	for _, v in item.visuals do
+		v.part.LocalTransparencyModifier = if hidden then 1 else 0
+	end
+	for _, e in item.effects do
+		if e:IsA("ParticleEmitter") or e:IsA("PointLight") then
+			e.Enabled = not hidden
+		end
+	end
+end
+
+local function register(model: Instance)
+	if not model:IsA("Model") then
+		return
+	end
+	local id = model:GetAttribute("Id")
+	local center = model:GetAttribute("Center")
+	if type(id) ~= "string" or typeof(center) ~= "Vector3" then
+		return
+	end
+	local c = CFrame.new(center)
+	local item: ClientItem = { id = id, model = model, center = center, visuals = {}, effects = {}, hidden = false }
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") and d:GetAttribute("Spin") then
+			table.insert(item.visuals, { part = d, offset = c:ToObjectSpace(d.CFrame) })
+		elseif d:IsA("ParticleEmitter") or d:IsA("PointLight") then
+			table.insert(item.effects, d)
+		end
+	end
+	clientItems[id] = item
+	setHidden(item, collected[id] == true)
+end
+
+local function burst(position: Vector3, color: Color3)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Transparency = 1
+	p.Size = Vector3.new(1, 1, 1)
+	p.CFrame = CFrame.new(position)
+	p.Parent = Workspace.CurrentCamera
+	local e = Instance.new("ParticleEmitter")
+	e.Rate = 0
+	e.Speed = NumberRange.new(8, 16)
+	e.SpreadAngle = Vector2.new(180, 180)
+	e.Lifetime = NumberRange.new(0.4, 0.8)
+	e.Size = NumberSequence.new(0.5, 0)
+	e.LightEmission = 1
+	e.Color = ColorSequence.new(color)
+	e.Parent = p
+	e:Emit(30)
+	task.delay(1.2, function()
+		p:Destroy()
+	end)
+end
+
+local function markCollected(id: string)
+	collected[id] = true
+	local item = clientItems[id]
+	if item and not item.hidden then
+		local set = item.model:GetAttribute("Set")
+		local def = if type(set) == "string" then WC.SET_BY_ID[set] else nil
+		burst(item.center, if def then def.color else Color3.new(1, 1, 1))
+		setHidden(item, true)
+	end
+end
+
+local function applyState(s: any)
+	if type(s) ~= "table" then
+		return
+	end
+	state = s
+	table.clear(collected)
+	for _, id in s.collected or {} do
+		collected[id] = true
+	end
+	for id, item in clientItems do
+		setHidden(item, collected[id] == true)
+	end
+	Phone.refresh("Collection")
+end
+
+local function startCollectibles()
+	for _, m in CollectionService:GetTagged("Collectible") do
+		register(m)
+	end
+	CollectionService:GetInstanceAddedSignal("Collectible"):Connect(register)
+	CollectionService:GetInstanceRemovedSignal("Collectible"):Connect(function(m)
+		local id = m:GetAttribute("Id")
+		if type(id) == "string" then
+			clientItems[id] = nil
+		end
+	end)
+
+	-- spin + bob the items you can see
+	RunService.RenderStepped:Connect(function()
+		local camera = Workspace.CurrentCamera
+		if not camera then
+			return
+		end
+		local camPos = camera.CFrame.Position
+		local t = os.clock()
+		for _, item in clientItems do
+			if not item.hidden and (item.center - camPos).Magnitude < 160 then
+				local cf = CFrame.new(item.center + Vector3.new(0, math.sin(t * 2 + item.center.X) * 0.25, 0)) * CFrame.Angles(0, t * 1.6, 0)
+				for _, v in item.visuals do
+					v.part.CFrame = cf * v.offset
+				end
+			end
+		end
+	end)
+
+	-- walk into an item: ask the server (it re-checks everything)
+	task.spawn(function()
+		while true do
+			task.wait(0.25)
+			local character = player.Character
+			local hrp = character and character:FindFirstChild("HumanoidRootPart")
+			if hrp and hrp:IsA("BasePart") and collectRemote then
+				local pos = hrp.Position
+				local now = os.clock()
+				for id, item in clientItems do
+					if not collected[id] and (item.center - pos).Magnitude < 6 and now - (lastAsk[id] or 0) > 1.5 then
+						lastAsk[id] = now
+						collectRemote:FireServer(id)
+					end
+				end
+			end
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Weather
+---------------------------------------------------------------------------
+type Look = {
+	density: number, -- Atmosphere.Density offset from the base
+	haze: number,
+	cover: number, -- Clouds.Cover
+	cloudDensity: number,
+	cloudColor: Color3,
+	bright: number, -- ColorCorrection.Brightness
+	sat: number,
+	contrast: number,
+	tint: Color3,
+	rain: number, -- 0..1
+}
+
+local LOOKS: { [string]: Look } = {
+	Clear = { density = 0, haze = 0, cover = 0.35, cloudDensity = 0.3, cloudColor = Color3.fromRGB(255, 255, 255), bright = 0, sat = 0, contrast = 0, tint = Color3.new(1, 1, 1), rain = 0 },
+	Cloudy = { density = 0.06, haze = 0.6, cover = 0.75, cloudDensity = 0.6, cloudColor = Color3.fromRGB(200, 205, 212), bright = -0.03, sat = -0.12, contrast = 0, tint = Color3.fromRGB(240, 242, 248), rain = 0 },
+	Rain = { density = 0.12, haze = 1.3, cover = 0.9, cloudDensity = 0.85, cloudColor = Color3.fromRGB(150, 155, 165), bright = -0.07, sat = -0.25, contrast = 0.03, tint = Color3.fromRGB(225, 232, 245), rain = 0.7 },
+	Storm = { density = 0.18, haze = 1.8, cover = 0.96, cloudDensity = 0.95, cloudColor = Color3.fromRGB(110, 112, 125), bright = -0.12, sat = -0.35, contrast = 0.06, tint = Color3.fromRGB(210, 218, 240), rain = 1 },
+	Fog = { density = 0.32, haze = 0.9, cover = 0.6, cloudDensity = 0.5, cloudColor = Color3.fromRGB(220, 222, 226), bright = -0.02, sat = -0.18, contrast = -0.05, tint = Color3.fromRGB(240, 242, 245), rain = 0 },
+	Heatwave = { density = 0.03, haze = 1.0, cover = 0.1, cloudDensity = 0.2, cloudColor = Color3.fromRGB(255, 240, 225), bright = 0.03, sat = 0.12, contrast = 0.06, tint = Color3.fromRGB(255, 236, 212), rain = 0 },
+}
+
+local current: Look = table.clone(LOOKS.Clear)
+local atmosphere: Atmosphere? = nil
+local baseDensity, baseHaze = 0.3, 1.2
+local clouds: Clouds? = nil
+local grade: ColorCorrectionEffect
+local rainPart: BasePart
+local rainEmitter: ParticleEmitter
+local flash = 0
+local nextFlash = 0
+local covered = false
+local chip: TextLabel? = nil
+
+local function weatherId(): string
+	local id = Workspace:GetAttribute("Weather")
+	return if type(id) == "string" and LOOKS[id] then id else "Clear"
+end
+
+-- 0.25..1 from Roblox's own graphics quality slider (Automatic = full).
+local function qualityScale(): number
+	local ok, level = pcall(function()
+		return UserSettings():GetService("UserGameSettings").SavedQualityLevel.Value
+	end)
+	if not ok or type(level) ~= "number" or level <= 0 then
+		return 1
+	end
+	return math.clamp(level / 7, 0.25, 1)
+end
+
+local function isNight(): boolean
+	local t = Lighting.ClockTime
+	return t < 6.3 or t > 17.7
+end
+
+local function lerpLook(a: Look, b: Look, k: number)
+	a.density += (b.density - a.density) * k
+	a.haze += (b.haze - a.haze) * k
+	a.cover += (b.cover - a.cover) * k
+	a.cloudDensity += (b.cloudDensity - a.cloudDensity) * k
+	a.cloudColor = a.cloudColor:Lerp(b.cloudColor, k)
+	a.bright += (b.bright - a.bright) * k
+	a.sat += (b.sat - a.sat) * k
+	a.contrast += (b.contrast - a.contrast) * k
+	a.tint = a.tint:Lerp(b.tint, k)
+	a.rain += (b.rain - a.rain) * k
+end
+
+local function updateChip()
+	if not chip then
+		return
+	end
+	local def = WC.WEATHER_BY_ID[weatherId()]
+	chip.Text = if def then def.icon .. "  " .. def.label else "☀️  Clear"
+end
+
+local function startWeather()
+	grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "CityGrindWeather"
+	grade.Parent = Lighting
+
+	task.spawn(function()
+		local a = Lighting:FindFirstChildOfClass("Atmosphere") or Lighting:WaitForChild("Atmosphere", 10)
+		if a and a:IsA("Atmosphere") then
+			atmosphere = a
+			baseDensity, baseHaze = a.Density, a.Haze
+		end
+	end)
+	local terrain = Workspace:FindFirstChildOfClass("Terrain")
+	if terrain then
+		local existing = terrain:FindFirstChildOfClass("Clouds")
+		if existing then
+			clouds = existing
+		else
+			local c = Instance.new("Clouds")
+			c.Cover = 0.35
+			c.Density = 0.3
+			c.Parent = terrain
+			clouds = c
+		end
+	end
+
+	-- rain: one emitter above the camera (parts under the camera are local only)
+	rainPart = Instance.new("Part")
+	rainPart.Name = "WeatherRain"
+	rainPart.Anchored = true
+	rainPart.CanCollide = false
+	rainPart.CanQuery = false
+	rainPart.CanTouch = false
+	rainPart.Transparency = 1
+	rainPart.Size = Vector3.new(110, 1, 110)
+	rainPart.Parent = Workspace.CurrentCamera
+	rainEmitter = Instance.new("ParticleEmitter")
+	rainEmitter.EmissionDirection = Enum.NormalId.Bottom
+	rainEmitter.Speed = NumberRange.new(80, 95)
+	rainEmitter.Lifetime = NumberRange.new(0.75, 0.95)
+	rainEmitter.Size = NumberSequence.new(0.12)
+	rainEmitter.Squash = NumberSequence.new(2.5)
+	rainEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel
+	rainEmitter.Color = ColorSequence.new(Color3.fromRGB(200, 212, 235))
+	rainEmitter.Transparency = NumberSequence.new(0.35)
+	rainEmitter.LightInfluence = 1
+	rainEmitter.Acceleration = Vector3.new(2, 0, 1)
+	rainEmitter.Rate = 0
+	rainEmitter.Parent = rainPart
+
+	local roofParams = RaycastParams.new()
+	roofParams.FilterType = Enum.RaycastFilterType.Exclude
+	roofParams.RespectCanCollide = true
+
+	-- under a roof / indoors / underground: no rain on you
+	task.spawn(function()
+		while true do
+			task.wait(0.25)
+			local camera = Workspace.CurrentCamera
+			if camera then
+				local list: { Instance } = { camera }
+				if player.Character then
+					table.insert(list, player.Character)
+				end
+				roofParams.FilterDescendantsInstances = list
+				local p = camera.CFrame.Position
+				covered = p.Y > 400 or Workspace:Raycast(p, Vector3.new(0, 120, 0), roofParams) ~= nil
+			end
+		end
+	end)
+
+	Workspace:GetAttributeChangedSignal("Weather"):Connect(updateChip)
+
+	local quality = qualityScale()
+	local qualityAt = 0
+	RunService.RenderStepped:Connect(function(dt)
+		local now = os.clock()
+		if now - qualityAt > 5 then
+			qualityAt = now
+			quality = qualityScale()
+		end
+		local id = weatherId()
+		local target = LOOKS[id]
+		lerpLook(current, target, math.clamp(dt / 6, 0, 1)) -- ~6 s blends
+		local night = isNight()
+		local beach = player:GetAttribute("District") == "Beach"
+
+		if atmosphere then
+			atmosphere.Density = math.clamp(baseDensity + current.density, 0, 1)
+			atmosphere.Haze = math.clamp(baseHaze + current.haze, 0, 10)
+		end
+		if clouds then
+			clouds.Cover = current.cover
+			clouds.Density = current.cloudDensity
+			clouds.Color = current.cloudColor
+		end
+
+		-- lightning in storms
+		if id == "Storm" and now >= nextFlash then
+			nextFlash = now + 7 + math.random() * 12
+			flash = 1
+			task.delay(0.18, function()
+				flash = math.max(flash, 0.7)
+			end)
+		end
+		flash = math.max(0, flash - dt * 4)
+
+		-- grading is gentler at night so it never fights the day/night look;
+		-- a heatwave is felt most on the sand
+		local dayK = if night then 0.4 else 1
+		local heatK = if id == "Heatwave" and not night then (if beach then 1.4 else 1) else 1
+		grade.Brightness = current.bright * dayK + flash * (if night then 0.45 else 0.3)
+		grade.Saturation = current.sat * dayK * heatK
+		grade.Contrast = current.contrast * dayK
+		grade.TintColor = Color3.new(1, 1, 1):Lerp(current.tint, math.clamp(dayK * heatK, 0, 1))
+
+		local camera = Workspace.CurrentCamera
+		if camera then
+			if rainPart.Parent ~= camera then
+				rainPart.Parent = camera
+			end
+			rainPart.CFrame = CFrame.new(camera.CFrame.Position + Vector3.new(0, 38, 0))
+		end
+		rainEmitter.Rate = if covered then 0 else current.rain * 900 * quality
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Pedestrian walk cycle (procedural; Motor6D.Transform is local)
+---------------------------------------------------------------------------
+type Walker = { model: Model, root: BasePart, motors: { [string]: Motor6D }, phase: number }
+local walkers: { [Model]: Walker } = {}
+
+local function addWalker(model: Instance)
+	if not model:IsA("Model") then
+		return
+	end
+	local r = model:FindFirstChild("HumanoidRootPart")
+	if not r or not r:IsA("BasePart") then
+		return
+	end
+	local motors = {}
+	for _, name in { "RightShoulder", "LeftShoulder", "RightHip", "LeftHip" } do
+		local m = model:FindFirstChild(name, true)
+		if m and m:IsA("Motor6D") then
+			motors[name] = m
+		end
+	end
+	walkers[model] = { model = model, root = r, motors = motors, phase = math.random() * 6 }
+end
+
+local function startWalkers()
+	for _, m in CollectionService:GetTagged("CityNPC") do
+		addWalker(m)
+	end
+	CollectionService:GetInstanceAddedSignal("CityNPC"):Connect(addWalker)
+	CollectionService:GetInstanceRemovedSignal("CityNPC"):Connect(function(m)
+		walkers[m :: any] = nil
+	end)
+	RunService.PreSimulation:Connect(function(dt)
+		local camera = Workspace.CurrentCamera
+		if not camera then
+			return
+		end
+		local camPos = camera.CFrame.Position
+		for model, w in walkers do
+			if not model.Parent then
+				walkers[model] = nil
+				continue
+			end
+			if (w.root.Position - camPos).Magnitude > 140 then
+				continue
+			end
+			local v = w.root.AssemblyLinearVelocity
+			local speed = Vector3.new(v.X, 0, v.Z).Magnitude
+			w.phase += dt * speed * 0.85
+			local amp = math.clamp(speed / 8, 0, 1) * 0.6
+			local swing = math.sin(w.phase) * amp
+			local m = w.motors
+			if m.RightHip then
+				m.RightHip.Transform = CFrame.Angles(swing, 0, 0)
+			end
+			if m.LeftHip then
+				m.LeftHip.Transform = CFrame.Angles(-swing, 0, 0)
+			end
+			if m.LeftShoulder then
+				m.LeftShoulder.Transform = CFrame.Angles(swing * 0.8, 0, 0)
+			end
+			if m.RightShoulder then
+				m.RightShoulder.Transform = if model:GetAttribute("Waving") then CFrame.identity else CFrame.Angles(-swing * 0.8, 0, 0)
+			end
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Collection app (phone)
+---------------------------------------------------------------------------
+local function districtOrder(): { string }
+	local list = {}
+	for _, d in DC.LIST do
+		table.insert(list, d.id)
+	end
+	return list
+end
+
+local function buildApp(content: ScrollingFrame)
+	local function render()
+		Phone.clear(content)
+		local order = 0
+		local function nextOrder(): number
+			order += 1
+			return order
+		end
+
+		-- weather
+		local wcard = Phone.card(content, 58, nextOrder())
+		local def = WC.WEATHER_BY_ID[weatherId()]
+		local ends = Workspace:GetAttribute("WeatherEnds")
+		local minutes = if type(ends) == "number" then math.max(0, math.ceil((ends - Workspace:GetServerTimeNow()) / 60)) else nil
+		UI.label({ Text = "CITY WEATHER", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = wcard })
+		UI.label({
+			Text = (if def then def.icon .. "  " .. def.label else "Clear") .. (if minutes then string.format("  ·  changes in ~%d min", minutes) else ""),
+			Font = UI.FONT_BOLD,
+			TextSize = 14,
+			Position = UDim2.fromOffset(0, 16),
+			Size = UDim2.new(1, 0, 0, 18),
+			Parent = wcard,
+		})
+
+		if not state then
+			local c = Phone.card(content, 50, nextOrder())
+			UI.label({ Text = "Loading your collection...", TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1), Parent = c })
+			return
+		end
+
+		-- totals per set and district
+		local totals: { [string]: number } = {}
+		local byDistrict: { [string]: { [string]: { total: number, got: number } } } = {}
+		local all, allGot = 0, 0
+		for _, it in state.items or {} do
+			totals[it.set] = (totals[it.set] or 0) + 1
+			byDistrict[it.set] = byDistrict[it.set] or {}
+			local entry = byDistrict[it.set][it.district] or { total = 0, got = 0 }
+			byDistrict[it.set][it.district] = entry
+			entry.total += 1
+			all += 1
+			if collected[it.id] then
+				entry.got += 1
+				allGot += 1
+			end
+		end
+
+		local head = Phone.card(content, 64, nextOrder())
+		UI.label({ Text = "COLLECTIBLES", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = head })
+		UI.label({ Text = string.format("%d / %d found", allGot, all), Font = UI.FONT_BLACK, TextSize = 18, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 20), Parent = head })
+		UI.label({
+			Text = string.format("+$%d each · set bonus $%d", WC.ITEM_REWARD.cash, WC.SET_REWARD.cash),
+			TextSize = 11,
+			TextColor3 = colors.cash,
+			Position = UDim2.fromOffset(0, 38),
+			Size = UDim2.new(1, 0, 0, 14),
+			Parent = head,
+		})
+
+		for _, set in WC.SETS do
+			local total = totals[set.id] or 0
+			if total == 0 then
+				continue
+			end
+			local got = 0
+			local lines = {}
+			for _, did in districtOrder() do
+				local e = byDistrict[set.id] and byDistrict[set.id][did]
+				if e then
+					got += e.got
+					local left = e.total - e.got
+					table.insert(lines, string.format("%s %s: %s", if left == 0 then "✓" else "•", DC.displayName(did), if left == 0 then "all found" else left .. " left"))
+				end
+			end
+			local done = state.sets and state.sets[set.id]
+			local h = 70 + #lines * 15
+			local c = Phone.card(content, h, nextOrder())
+			UI.label({ Text = set.icon .. "  " .. set.name, Font = UI.FONT_BLACK, TextSize = 15, TextColor3 = set.color, Size = UDim2.new(1, -60, 0, 18), Parent = c })
+			UI.label({ Text = string.format("%d/%d", got, total), Font = UI.FONT_BLACK, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Right, Size = UDim2.new(1, 0, 0, 18), Parent = c })
+			UI.label({ Text = if done then "SET COMPLETE ✓" else set.blurb, TextSize = 11, TextColor3 = if done then colors.cash else colors.subtext, TextWrapped = true, Position = UDim2.fromOffset(0, 20), Size = UDim2.new(1, 0, 0, 26), Parent = c })
+			local bar, setFill = UI.bar({ Position = UDim2.fromOffset(0, 48), Size = UDim2.new(1, 0, 0, 6) }, set.color)
+			bar.Parent = c
+			setFill(got / total)
+			UI.label({
+				Text = table.concat(lines, "\n"),
+				TextSize = 12,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				Position = UDim2.fromOffset(0, 60),
+				Size = UDim2.new(1, 0, 0, #lines * 15),
+				Parent = c,
+			})
+		end
+
+		-- secrets: names only once found, never positions
+		local found = state.secrets or {}
+		local total = state.secretTotal or #WC.SECRET_IDS
+		local sc = Phone.card(content, 46 + math.max(1, #found) * 16, nextOrder())
+		UI.label({ Text = string.format("🗝️  SECRETS  %d/%d", #found, total), Font = UI.FONT_BLACK, TextSize = 14, Size = UDim2.new(1, 0, 0, 18), Parent = sc })
+		local names = {}
+		for _, s in found do
+			table.insert(names, "✓ " .. tostring(s.name))
+		end
+		UI.label({
+			Text = if #names > 0 then table.concat(names, "\n") else "Nothing yet. Old towns keep old secrets...",
+			TextSize = 12,
+			TextColor3 = if #names > 0 then colors.text else colors.subtext,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Position = UDim2.fromOffset(0, 22),
+			Size = UDim2.new(1, 0, 0, math.max(1, #found) * 16),
+			Parent = sc,
+		})
+	end
+	return render
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function World.start()
+	Phone.addApp({ id = "Collection", label = "Collection", icon = "🏆", color = Color3.fromRGB(200, 150, 40) }, function(content)
+		return buildApp(content)
+	end)
+
+	-- weather chip, left of the stats card
+	local gui = UI.new("ScreenGui", { Name = "CityGrindWorld", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = player:WaitForChild("PlayerGui") })
+	chip = UI.label({
+		Text = "☀️  Clear",
+		Font = UI.FONT_BOLD,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		BackgroundTransparency = 0.15,
+		BackgroundColor3 = colors.panel,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -252, 0, 12),
+		Size = UDim2.fromOffset(130, 30),
+		Parent = gui,
+	}, { UI.corner(12) })
+	updateChip()
+
+	startWeather()
+	startWalkers()
+	startCollectibles()
+
+	task.spawn(function()
+		local event = remotes:WaitForChild("WorldEvent", 30)
+		local request = remotes:WaitForChild("WorldRequest", 30)
+		local collect = remotes:WaitForChild("WorldCollect", 30)
+		if collect and collect:IsA("RemoteEvent") then
+			collectRemote = collect
+		end
+		if event and event:IsA("RemoteEvent") then
+			event.OnClientEvent:Connect(function(kind: any, a: any, b: any)
+				if kind == "State" then
+					applyState(a)
+				elseif kind == "Collected" and type(a) == "string" then
+					markCollected(a)
+					if state then
+						table.insert(state.collected, a)
+					end
+					Phone.refresh("Collection")
+				elseif kind == "Secret" and type(a) == "string" then
+					if state then
+						table.insert(state.secrets, { id = a, name = if type(b) == "string" then b else a })
+					end
+					Phone.refresh("Collection")
+				end
+			end)
+		end
+		if request and request:IsA("RemoteFunction") then
+			local ok, s = pcall(function()
+				return request:InvokeServer("Get")
+			end)
+			if ok and s then
+				applyState(s)
+			end
+		end
+	end)
+end
+
+return World
 ]=====])
 print('[CityGrind] Installed. Press Play to build the Neighborhood and test.')

@@ -23,6 +23,9 @@
         "CrewsConfig": {
           "$path": "src/shared/CrewsConfig.luau"
         },
+        "DistrictsConfig": {
+          "$path": "src/shared/DistrictsConfig.luau"
+        },
         "EmotesConfig": {
           "$path": "src/shared/EmotesConfig.luau"
         },
@@ -44,6 +47,9 @@
         "MusicConfig": {
           "$path": "src/shared/MusicConfig.luau"
         },
+        "QuestsConfig": {
+          "$path": "src/shared/QuestsConfig.luau"
+        },
         "Replay": {
           "$path": "src/shared/Replay.luau"
         },
@@ -56,8 +62,14 @@
         "SocialConfig": {
           "$path": "src/shared/SocialConfig.luau"
         },
+        "StoryConfig": {
+          "$path": "src/shared/StoryConfig.luau"
+        },
         "VehiclesConfig": {
           "$path": "src/shared/VehiclesConfig.luau"
+        },
+        "WorldConfig": {
+          "$path": "src/shared/WorldConfig.luau"
         }
       }
     },
@@ -91,8 +103,29 @@
         "Crews": {
           "$path": "src/server/Crews.luau"
         },
+        "Districts": {
+          "$path": "src/server/Districts.luau"
+        },
         "Emotes": {
           "$path": "src/server/Emotes.luau"
+        },
+        "EventDunk": {
+          "$path": "src/server/EventDunk.luau"
+        },
+        "EventFashion": {
+          "$path": "src/server/EventFashion.luau"
+        },
+        "EventHunt": {
+          "$path": "src/server/EventHunt.luau"
+        },
+        "EventKit": {
+          "$path": "src/server/EventKit.luau"
+        },
+        "EventPhoto": {
+          "$path": "src/server/EventPhoto.luau"
+        },
+        "EventStreetball": {
+          "$path": "src/server/EventStreetball.luau"
         },
         "Events": {
           "$path": "src/server/Events.luau"
@@ -121,14 +154,23 @@
         "PlayerData": {
           "$path": "src/server/PlayerData.luau"
         },
+        "Quests": {
+          "$path": "src/server/Quests.luau"
+        },
         "Shops": {
           "$path": "src/server/Shops.luau"
         },
         "Social": {
           "$path": "src/server/Social.luau"
         },
+        "Story": {
+          "$path": "src/server/Story.luau"
+        },
         "Vehicles": {
           "$path": "src/server/Vehicles.luau"
+        },
+        "World": {
+          "$path": "src/server/World.luau"
         }
       }
     },
@@ -163,6 +205,9 @@
           "Emotes": {
             "$path": "src/client/Emotes.luau"
           },
+          "EventBallot": {
+            "$path": "src/client/EventBallot.luau"
+          },
           "Events": {
             "$path": "src/client/Events.luau"
           },
@@ -193,17 +238,29 @@
           "Phone": {
             "$path": "src/client/Phone.luau"
           },
+          "Quests": {
+            "$path": "src/client/Quests.luau"
+          },
           "Shops": {
             "$path": "src/client/Shops.luau"
           },
           "Social": {
             "$path": "src/client/Social.luau"
           },
+          "Story": {
+            "$path": "src/client/Story.luau"
+          },
+          "Subway": {
+            "$path": "src/client/Subway.luau"
+          },
           "UI": {
             "$path": "src/client/UI.luau"
           },
           "Vehicles": {
             "$path": "src/client/Vehicles.luau"
+          },
+          "World": {
+            "$path": "src/client/World.luau"
           }
         }
       }
