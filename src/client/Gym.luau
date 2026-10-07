@@ -15,6 +15,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
@@ -198,11 +199,13 @@ local function buildPanel()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(16), UI.stroke(colors.accent, 1.5, 0.4), UI.padding(12) })
+	HUD.slot("bottomCenter", panel, 25)
 	local scale = UI.new("UIScale", { Parent = panel })
 	local function fit()
 		local cam = Workspace.CurrentCamera
 		if cam then
-			scale.Scale = math.clamp(math.min(cam.ViewportSize.X / 420, cam.ViewportSize.Y / 520), 0.6, 1)
+			-- the HUD slot already applies HUD.scale(); keep the same overall size as before
+			scale.Scale = math.clamp(math.min(cam.ViewportSize.X / 420, cam.ViewportSize.Y / 520), 0.6, 1) / math.max(HUD.scale(), 0.1)
 		end
 	end
 	fit()
@@ -536,8 +539,14 @@ local function buildOffer()
 		offerFrame.Visible = false
 		GuiService.SelectedObject = nil
 	end)
-	-- walking away closes it
-	RunService.Heartbeat:Connect(function()
+	-- walking away closes it (checked 5x a second)
+	local walkAcc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		walkAcc += dt
+		if walkAcc < 0.2 then
+			return
+		end
+		walkAcc = 0
 		if offerFrame.Visible and offerFrame:GetAttribute("OpenedAt") and os.clock() - offerFrame:GetAttribute("OpenedAt") > 1 then
 			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 			local anchor = offerFrame:GetAttribute("Anchor") :: Vector3?

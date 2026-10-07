@@ -393,6 +393,7 @@ local function buildOverlay()
 		Visible = false,
 		Parent = g,
 	}, { UI.corner(17), UI.stroke(APP_COLOR, 1.5, 0.2) })
+	HUD.slot("topCenter", c, 30)
 	chip = c
 	chipText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -60, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
 	local x = UI.button({ Text = "✕", TextSize = 14, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -5, 0.5, 0), Size = UDim2.fromOffset(40, 26), BackgroundColor3 = LOSS, Parent = c })

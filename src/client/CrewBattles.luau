@@ -388,6 +388,7 @@ local function buildGui()
 		Visible = false,
 		Parent = chipGui,
 	}, { UI.corner(12), UI.stroke(APP_COLOR, 2) })
+	HUD.slot("left", b, 30)
 	chipTop = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(6, 4), Size = UDim2.new(1, -12, 0, 24), Parent = b })
 	chipBottom = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(6, 28), Size = UDim2.new(1, -12, 0, 20), Parent = b })
 	b.Activated:Connect(function()

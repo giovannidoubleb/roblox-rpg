@@ -62,6 +62,27 @@ if districtsModule then
 	end
 end
 
+-- Static city perf pass (Phase 8), before any feature system adds its own parts:
+-- nothing listens for touches on the static scenery (only the run-route triggers,
+-- seats and spawns need them), so CanTouch goes off; small decor (< 3 studs on
+-- every axis) and invisible parts stop casting shadows. CanQuery and collisions
+-- are left alone: vehicles, spawn checks and line-of-sight raycasts use them.
+do
+	local keepTouch: { [BasePart]: boolean } = {}
+	for _, trigger in city.runTriggers do
+		keepTouch[trigger] = true
+	end
+	for _, d in city.city:GetDescendants() do
+		if d:IsA("BasePart") and d.Anchored and not keepTouch[d] and not d:IsA("Seat") and not d:IsA("VehicleSeat") and not d:IsA("SpawnLocation") then
+			d.CanTouch = false
+			local size = d.Size
+			if d.Transparency >= 0.98 or (size.X < 3 and size.Y < 3 and size.Z < 3) then
+				d.CastShadow = false
+			end
+		end
+	end
+end
+
 ---------------------------------------------------------------------------
 -- Phone: profile, bank and settings data
 ---------------------------------------------------------------------------
@@ -349,7 +370,16 @@ PlayerData.start()
 ---------------------------------------------------------------------------
 local DAY_LENGTH_SECONDS = 20 * 60
 local lampsOn: boolean? = nil
+-- ClockTime replicates to every client on each write: 10 Hz instead of every
+-- frame (the sun moves ~0.03 degrees per step, invisible).
+local clockAcc = 0
 RunService.Heartbeat:Connect(function(dt)
+	clockAcc += dt
+	if clockAcc < 0.1 then
+		return
+	end
+	dt = clockAcc
+	clockAcc = 0
 	Lighting.ClockTime = (Lighting.ClockTime + dt * 24 / DAY_LENGTH_SECONDS) % 24
 	local night = Lighting.ClockTime < 6.3 or Lighting.ClockTime > 17.7
 	if night ~= lampsOn then

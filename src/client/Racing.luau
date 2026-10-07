@@ -313,6 +313,7 @@ local function buildHud()
 		UI.stroke(Color3.fromRGB(220, 50, 60), 1.5, 0.3),
 		UI.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }),
 	})
+	HUD.slot("left", hud, 10)
 	hudTitle = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.subtext, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 13), LayoutOrder = 1, Parent = hud })
 	local top = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), LayoutOrder = 2, Parent = hud })
 	posLabel = UI.label({ Text = "P1/1", Font = UI.FONT_BLACK, TextSize = 30, Size = UDim2.new(0.55, 0, 1, 0), Parent = top })
@@ -359,6 +360,7 @@ local function buildHud()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(12), UI.padding(8), UI.stroke(colors.stamina, 1.5, 0.4) })
+	HUD.slot("left", lobbyChip, 11)
 
 	countdownLabel = UI.label({
 		Text = "",

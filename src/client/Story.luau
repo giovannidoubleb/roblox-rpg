@@ -92,6 +92,7 @@ local function buildTracker(root: ScreenGui)
 		Visible = false,
 		Parent = root,
 	}, { UI.corner(12), UI.padding(8), UI.stroke(ACCENT, 1, 0.6) })
+	HUD.slot("topRight", panel, 20)
 	UI.new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = panel })
 
 	local header = UI.new("Frame", { Name = "Header", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 1, Parent = panel })
@@ -584,15 +585,9 @@ local function setup()
 		DisplayOrder = 20,
 		Parent = player:WaitForChild("PlayerGui"),
 	})
-	-- The tracker sits with the HUD (low display order) so the phone covers it.
-	local trackerGui = UI.new("ScreenGui", {
-		Name = "CityGrindStoryTracker",
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		DisplayOrder = 1,
-		Parent = player:WaitForChild("PlayerGui"),
-	})
-	buildTracker(trackerGui)
+	-- The tracker lives in the HUD's top-right stack (under the stats card), so the
+	-- phone covers it and cinematics / photo mode hide it with the rest of the HUD.
+	buildTracker(gui :: ScreenGui)
 
 	event.OnClientEvent:Connect(function(kind: any, a: any, b: any)
 		if kind == "State" then

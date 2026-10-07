@@ -1,5 +1,7 @@
 -- CITY GRIND: tiny helpers for building UI in code.
 
+local TweenService = game:GetService("TweenService")
+
 local UI = {}
 
 UI.FONT = Enum.Font.GothamMedium
@@ -90,7 +92,56 @@ function UI.button(props: { [string]: any }, children: { Instance }?): TextButto
 	end
 	local b = UI.new("TextButton", defaults, children)
 	UI.corner(10).Parent = b
+	UI.pressFeedback(b)
 	return b
+end
+
+-- A quick "squish" when a button is pressed (mouse, touch or gamepad A).
+-- Hover / press colour already comes from AutoButtonColor. Buttons inside a
+-- list or grid layout are left alone so the press never nudges their
+-- neighbours; the UIScale is only created on the first press.
+local PRESS_IN = TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local PRESS_OUT = TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+function UI.pressFeedback(button: GuiButton)
+	local scale: UIScale? = nil
+	local function inLayout(): boolean
+		local parent = button.Parent
+		return parent ~= nil and parent:FindFirstChildWhichIsA("UIGridStyleLayout") ~= nil
+	end
+	local function press(down: boolean)
+		if down then
+			if inLayout() then
+				return
+			end
+			if not scale then
+				if button:FindFirstChildOfClass("UIScale") then
+					return -- the button scales itself; don't fight it
+				end
+				scale = UI.new("UIScale", { Name = "PressScale", Parent = button })
+			end
+		end
+		local s = scale
+		if s then
+			TweenService:Create(s, if down then PRESS_IN else PRESS_OUT, { Scale = if down then 0.94 else 1 }):Play()
+		end
+	end
+	button.InputBegan:Connect(function(input)
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch or (input.KeyCode == Enum.KeyCode.ButtonA and button.Selectable) then
+			press(true)
+		end
+	end)
+	button.InputEnded:Connect(function(input)
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch or input.KeyCode == Enum.KeyCode.ButtonA then
+			press(false)
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		if scale then
+			press(false)
+		end
+	end)
 end
 
 -- A horizontal progress bar. Returns the outer frame and a setter.
@@ -112,12 +163,31 @@ function UI.bar(props: { [string]: any }, fillColor: Color3): (Frame, (number) -
 end
 
 function UI.formatCash(n: number): string
+	return (if n < 0 then "-$" else "$") .. UI.formatNumber(math.abs(n))
+end
+
+-- 1234567 -> "1,234,567"
+function UI.formatNumber(n: number): string
 	local s = tostring(math.floor(math.abs(n)))
 	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
 	if formatted:sub(1, 1) == "," then
 		formatted = formatted:sub(2)
 	end
-	return (if n < 0 then "-$" else "$") .. formatted
+	return (if n < 0 then "-" else "") .. formatted
+end
+
+-- 950 -> "950", 12500 -> "12.5K", 3400000 -> "3.4M" (for tight chips)
+function UI.formatCompact(n: number): string
+	local a = math.abs(n)
+	local sign = if n < 0 then "-" else ""
+	if a < 10000 then
+		return sign .. UI.formatNumber(a)
+	elseif a < 1e6 then
+		return sign .. (string.format("%.1f", a / 1e3):gsub("%.0$", "")) .. "K"
+	elseif a < 1e9 then
+		return sign .. (string.format("%.1f", a / 1e6):gsub("%.0$", "")) .. "M"
+	end
+	return sign .. (string.format("%.1f", a / 1e9):gsub("%.0$", "")) .. "B"
 end
 
 function UI.formatClock(clockTime: number): string

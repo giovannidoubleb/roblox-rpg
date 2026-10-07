@@ -576,6 +576,7 @@ local function buildScreens()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(20) })
+	HUD.slot("topRight", pill, 1) -- an active call sits right under the stats card
 	pillText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -70, 1, 0), Parent = pill })
 	local pillEnd = UI.button({ Text = "END", TextSize = 12, BackgroundColor3 = RED, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(50, 28), Parent = pill })
 	pill.Activated:Connect(function()
@@ -592,12 +593,18 @@ local function buildScreens()
 		Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyScale)
 	end
 
-	-- live timer / countdown
-	RunService.Heartbeat:Connect(function()
+	-- live timer / countdown (whole seconds, so 4 Hz is plenty)
+	local timerAcc = 0
+	RunService.Heartbeat:Connect(function(dt)
 		local snap = current
 		if not snap then
 			return
 		end
+		timerAcc += dt
+		if timerAcc < 0.25 then
+			return
+		end
+		timerAcc = 0
 		if snap.state == "ringing" then
 			local left = math.max(0, math.ceil(snap.ringEndsAt - serverNow()))
 			statusLabel.Text = (if snap.outgoing then "Calling..." else "Incoming call") .. "  ·  " .. left .. "s"

@@ -184,7 +184,9 @@ function Movement.start()
 			end
 		end
 		stamina = math.min(stamina, maxS)
-		h.WalkSpeed = speed
+		if h.WalkSpeed ~= speed then
+			h.WalkSpeed = speed
+		end
 	end)
 end
 

@@ -393,7 +393,13 @@ function EventBallot.build(gui: ScreenGui, requestFn: Request)
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		Parent = panel,
 	}, { UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
-	RunService.Heartbeat:Connect(function()
+	local timerAcc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		timerAcc += dt
+		if timerAcc < 0.25 then
+			return
+		end
+		timerAcc = 0
 		if panel.Visible and current then
 			local left = (current.endsAt or 0) - Workspace:GetServerTimeNow()
 			if mode == "ballot" then

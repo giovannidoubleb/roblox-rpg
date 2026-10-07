@@ -11,6 +11,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local Config = require(shared:WaitForChild("Config"))
 local remotes = shared:WaitForChild("Remotes")
@@ -50,6 +51,7 @@ local function buildMeter()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(9), UI.stroke(Color3.new(1, 1, 1), 1.5, 0.4) })
+	HUD.slot("bottomCenter", meter, 30)
 	local zoneWidth = B.PERFECT_TOLERANCE * 2 / METER_FULL
 	local goodWidth = B.RELEASE_WINDOW * 0.6 / METER_FULL
 	UI.new("Frame", {
@@ -217,6 +219,7 @@ local function buildScoreboard()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(12), UI.padding(6) })
+	HUD.slot("topCenter", scoreboard, 10)
 	scoreText = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = scoreboard })
 	subText = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = scoreboard })
 end

@@ -256,6 +256,7 @@ local function buildHUD()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(14), UI.padding(10) })
+	HUD.slot("left", panel, 20)
 	local stroke = UI.stroke(colors.accent, 1.5, 0.35)
 	stroke.Name = "Accent"
 	stroke.Parent = panel
@@ -529,8 +530,14 @@ function Jobs.start()
 			end
 		end)
 
-		-- per-frame: timer, hot food / combo text, waypoint distance
-		RunService.RenderStepped:Connect(function()
+		-- timer, hot food / combo text, waypoint distance: 10 Hz (all whole seconds / metres)
+		local hudAcc = 0
+		RunService.Heartbeat:Connect(function(dt)
+			hudAcc += dt
+			if hudAcc < 0.1 then
+				return
+			end
+			hudAcc = 0
 			if not state then
 				return
 			end

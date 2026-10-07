@@ -15,6 +15,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local ShopsConfig = require(shared:WaitForChild("ShopsConfig"))
@@ -1025,6 +1026,7 @@ local function buildBuffChips()
 	}, {
 		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center, Padding = UDim.new(0, 6) }),
 	})
+	HUD.slot("bottomCenter", holder, 10)
 	local chips: { [string]: TextLabel } = {}
 	local function chipFor(key: string, color: Color3): TextLabel
 		if not chips[key] then
@@ -1058,6 +1060,7 @@ local function buildBuffChips()
 			local m = chipFor("meal", Color3.fromRGB(240, 240, 245))
 			m.Visible = meal ~= ""
 			m.Text = "🍔 SIT AT A TABLE TO EAT"
+			holder.Visible = b.Visible or f.Visible or m.Visible -- takes no HUD space when empty
 			task.wait(0.5)
 		end
 	end)

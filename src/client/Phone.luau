@@ -6,6 +6,7 @@
 -- added to the home screen through Phone.addApp as each one is built for real (section 118).
 
 local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -57,6 +58,53 @@ local function applyScale()
 	uiScale.Scale = fit * (player:GetAttribute("UIScale") or 1)
 end
 
+---------------------------------------------------------------------------
+-- Gamepad: the phone keeps the selection inside itself while it is open
+---------------------------------------------------------------------------
+local function usingGamepad(): boolean
+	return UserInputService:GetLastInputType().Name:sub(1, 7) == "Gamepad"
+end
+
+local function shownIn(obj: GuiObject, root: Instance): boolean
+	local node: Instance? = obj
+	while node and node ~= root do
+		if node:IsA("GuiObject") and not node.Visible then
+			return false
+		end
+		node = node.Parent
+	end
+	return node == root
+end
+
+local function selectionInPhone(): boolean
+	local sel = GuiService.SelectedObject
+	return sel ~= nil and phoneFrame ~= nil and sel:IsDescendantOf(phoneFrame)
+end
+
+-- Selects the top-most visible button of the page on screen (content first,
+-- then the header's back button).
+local function selectFirst(pageName: string)
+	local page = pages[pageName]
+	if not page or not isOpen or not usingGamepad() then
+		return
+	end
+	local best: GuiObject? = nil
+	local bestKey = math.huge
+	for _, d in page.frame:GetDescendants() do
+		if d:IsA("GuiButton") and d.Selectable and d.AbsoluteSize.X > 0 and shownIn(d, page.frame) then
+			local isBack = d.Parent ~= nil and d.Parent.Parent == page.frame and d.Text == "‹ Home"
+			local key = (if isBack then 1e7 else 0) + d.AbsolutePosition.Y * 1000 + d.AbsolutePosition.X
+			if key < bestKey then
+				bestKey = key
+				best = d
+			end
+		end
+	end
+	if best then
+		GuiService.SelectedObject = best
+	end
+end
+
 local function showPage(name: string)
 	for pageName, page in pages do
 		page.frame.Visible = pageName == name
@@ -66,10 +114,18 @@ local function showPage(name: string)
 	if page and page.open then
 		task.spawn(page.open)
 	end
+	-- the page may build its buttons asynchronously: select once they exist
+	if isOpen and usingGamepad() then
+		task.delay(0.15, function()
+			if currentPage == name and isOpen and (not selectionInPhone() or not shownIn(GuiService.SelectedObject :: GuiObject, screen)) then
+				selectFirst(name)
+			end
+		end)
+	end
 end
 
 -- Builds an app page with a header and scrolling content list.
-local function appPage(name: string, title: string): (Frame, ScrollingFrame)
+local function appPage(name: string, title: string, icon: string?, accent: Color3?): (Frame, ScrollingFrame)
 	local frame = UI.new("Frame", {
 		Name = name,
 		BackgroundColor3 = Color3.fromRGB(14, 14, 20),
@@ -95,14 +151,27 @@ local function appPage(name: string, title: string): (Frame, ScrollingFrame)
 	back.Activated:Connect(function()
 		showPage("Home")
 	end)
+	-- every app gets the same header: back, icon + title, and a thin rule in the app's colour
 	UI.label({
-		Text = title,
+		Text = if icon then icon .. "  " .. title else title,
 		Font = UI.FONT_BLACK,
 		TextSize = 18,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		Size = UDim2.fromScale(1, 1),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.new(1, -150, 1, 0),
 		Parent = header,
 	})
+	UI.new("Frame", {
+		Name = "Rule",
+		BackgroundColor3 = accent or colors.xp,
+		BackgroundTransparency = 0.35,
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, 1),
+		Size = UDim2.new(1, -24, 0, 2),
+		Parent = header,
+	}, { UI.corner(1) })
 	local content = UI.new("ScrollingFrame", {
 		Name = "Content",
 		BackgroundTransparency = 1,
@@ -149,7 +218,7 @@ end
 -- Profile app
 ---------------------------------------------------------------------------
 local function buildProfile()
-	local _, content = appPage("Profile", "Profile")
+	local _, content = appPage("Profile", "Profile", "👤", Color3.fromRGB(90, 110, 240))
 	pages.Profile.open = function()
 		clear(content)
 		local data = fetchProfile()
@@ -287,7 +356,7 @@ local function setGPS(name: string, target: Vector3)
 end
 
 local function buildMap()
-	local _, content = appPage("Map", "Map")
+	local _, content = appPage("Map", "Map", "🗺️", Color3.fromRGB(240, 150, 40))
 	local MAP_W = PHONE_W - 2 * SCREEN_INSET - 20
 	local MAP_H = 300
 	-- the whole city (every district), from DistrictsConfig
@@ -583,7 +652,7 @@ end
 -- Alerts app (section 36)
 ---------------------------------------------------------------------------
 local function buildAlerts()
-	local _, content = appPage("Alerts", "Notifications")
+	local _, content = appPage("Alerts", "Notifications", "🔔", Color3.fromRGB(230, 70, 80))
 	pages.Alerts.open = function()
 		HUD.markRead()
 		clear(content)
@@ -618,7 +687,7 @@ local function setSetting(key: string, value: any)
 end
 
 local function buildSettings()
-	local _, content = appPage("Settings", "Settings")
+	local _, content = appPage("Settings", "Settings", "⚙️", Color3.fromRGB(120, 120, 140))
 	pages.Settings.open = function()
 		clear(content)
 
@@ -817,7 +886,13 @@ local function buildHome()
 		end
 	end
 
-	RunService.Heartbeat:Connect(function()
+	local clockAcc = 1
+	RunService.Heartbeat:Connect(function(dt)
+		clockAcc += dt
+		if clockAcc < 0.5 then
+			return
+		end
+		clockAcc = 0
 		if isOpen and currentPage == "Home" then
 			bigClock.Text = UI.formatClock(Lighting.ClockTime):gsub(" [AP]M", "")
 			subtitle.Text = DistrictsConfig.displayName(player:GetAttribute("District")) .. "  ·  " .. (if Lighting.ClockTime >= 6 and Lighting.ClockTime < 18 then "Day" else "Night")
@@ -849,7 +924,8 @@ local function buildStatusBar()
 			accumulator -= 1
 			battery = if isOpen then math.max(5, battery - 0.08) else math.min(100, battery + 0.5)
 		end
-		if isOpen then
+		if isOpen and accumulator < dt + 0.001 then
+			-- once a second (right after the battery tick) is plenty for a clock
 			clock.Text = UI.formatClock(Lighting.ClockTime)
 			right.Text = string.format("▂▄▆█  %d%%", math.floor(battery))
 		end
@@ -872,7 +948,23 @@ function Phone.setOpen(open: boolean)
 	tween:Play()
 	if open then
 		showPage(currentPage)
+		-- B goes back a page (then closes the phone) while the selection is in the phone
+		ContextActionService:BindActionAtPriority("CityPhoneBack", function(_, state)
+			if state ~= Enum.UserInputState.Begin or not selectionInPhone() then
+				return Enum.ContextActionResult.Pass
+			end
+			if currentPage == "Home" then
+				Phone.setOpen(false)
+			else
+				showPage("Home")
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.ContextActionPriority.High.Value, Enum.KeyCode.ButtonB)
 	else
+		ContextActionService:UnbindAction("CityPhoneBack")
+		if selectionInPhone() then
+			GuiService.SelectedObject = nil
+		end
 		tween.Completed:Once(function()
 			if not isOpen then
 				phoneFrame.Visible = false
@@ -941,6 +1033,12 @@ function Phone.start()
 		Parent = gui,
 	}, { UI.corner(42), UI.stroke(Color3.fromRGB(70, 70, 80), 2) })
 	uiScale = UI.new("UIScale", { Parent = phoneFrame })
+	-- gamepad navigation stays inside the phone while it is open
+	phoneFrame.SelectionGroup = true
+	phoneFrame.SelectionBehaviorUp = Enum.SelectionBehavior.Stop
+	phoneFrame.SelectionBehaviorDown = Enum.SelectionBehavior.Stop
+	phoneFrame.SelectionBehaviorLeft = Enum.SelectionBehavior.Stop
+	phoneFrame.SelectionBehaviorRight = Enum.SelectionBehavior.Stop
 
 	screen = UI.new("Frame", {
 		Name = "Screen",
@@ -962,7 +1060,7 @@ function Phone.start()
 	buildAlerts()
 	buildSettings()
 	for _, app in extraApps do
-		local frame, content = appPage(app.id, app.label)
+		local frame, content = appPage(app.id, app.label, app.icon, app.color)
 		local ok, open = pcall(app.build, content, frame)
 		if ok then
 			pages[app.id].open = open
@@ -1002,7 +1100,11 @@ function Phone.start()
 	end
 	applyScale()
 
-	ContextActionService:BindAction("CityPhone", function(_, state)
+	ContextActionService:BindAction("CityPhone", function(_, state, input)
+		-- while you navigate the open phone with a gamepad, D-pad up moves the selection
+		if input.KeyCode == Enum.KeyCode.DPadUp and isOpen and selectionInPhone() then
+			return Enum.ContextActionResult.Pass
+		end
 		if state == Enum.UserInputState.Begin then
 			Phone.toggle()
 		end

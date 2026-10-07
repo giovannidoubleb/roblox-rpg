@@ -143,6 +143,7 @@ local function buildPanel()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(14), UI.padding(10), UI.stroke(APP_COLOR, 1.5, 0.4) })
+	HUD.slot("topRight", panel, 10)
 	UI.new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = panel })
 	titleLabel = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, Size = UDim2.new(1, 0, 0, 18), TextTruncate = Enum.TextTruncate.AtEnd, LayoutOrder = 1, Parent = panel })
 	local row = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 2, Parent = panel })
@@ -202,7 +203,14 @@ local function buildPanel()
 	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	highlight.Parent = gui
 
-	RunService.RenderStepped:Connect(function()
+	-- the timer shows tenths: 10 Hz, not every frame
+	local timerAcc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		timerAcc += dt
+		if timerAcc < 0.1 then
+			return
+		end
+		timerAcc = 0
 		if not panel.Visible or not shown then
 			return
 		end
@@ -320,7 +328,13 @@ local function buildVotePanel()
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		Parent = votePanel,
 	}, { UI.new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
-	RunService.Heartbeat:Connect(function()
+	local voteAcc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		voteAcc += dt
+		if voteAcc < 0.25 then
+			return
+		end
+		voteAcc = 0
 		if votePanel.Visible and voteData then
 			local left = voteData.endsAt - now()
 			voteTimer.Text = if left > 0 then "Voting closes in " .. EC.formatIn(left) else "Counting votes…"

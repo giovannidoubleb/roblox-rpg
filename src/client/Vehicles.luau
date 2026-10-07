@@ -21,6 +21,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local VC = require(shared:WaitForChild("VehiclesConfig"))
@@ -826,7 +827,7 @@ local function startDriving(model: Model, seat: VehicleSeat)
 	speedo.Visible = true
 	ContextActionService:BindAction(LIGHTS_ACTION, onLightsAction, true, Enum.KeyCode.H, Enum.KeyCode.ButtonY)
 	ContextActionService:SetTitle(LIGHTS_ACTION, "Lights")
-	ContextActionService:SetPosition(LIGHTS_ACTION, UDim2.new(1, -180, 1, -130))
+	ContextActionService:SetPosition(LIGHTS_ACTION, UDim2.new(1, -290, 1, -130)) -- clear of the Sprint button
 end
 
 -- After getting out, stand next to the vehicle instead of on top of it.
@@ -915,6 +916,7 @@ local function buildSpeedo()
 		Visible = false,
 		Parent = gui,
 	}, { UI.corner(14), UI.padding(8), UI.stroke(colors.accent, 1.5, 0.4) })
+	HUD.slot("bottomCenter", speedo, 20)
 	nameLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, -60, 0, 12), Parent = speedo })
 	speedLabel = UI.label({ Text = "0", Font = UI.FONT_BLACK, TextSize = 34, Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(78, 36), TextXAlignment = Enum.TextXAlignment.Right, Parent = speedo })
 	UI.label({ Text = "MPH", Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(82, 28), Size = UDim2.fromOffset(40, 14), Parent = speedo })
@@ -949,8 +951,9 @@ local function buildSpeedo()
 			TextSize = 11,
 			TextColor3 = colors.subtext,
 			TextXAlignment = Enum.TextXAlignment.Center,
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 1, 6),
+			-- above the panel: the HUD stacks other chips right below it
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 0, -12),
 			Size = UDim2.new(1, 40, 0, 12),
 			TextStrokeTransparency = 0.6,
 			Parent = speedo,

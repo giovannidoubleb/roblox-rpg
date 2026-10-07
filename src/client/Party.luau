@@ -287,6 +287,7 @@ local function buildPanel()
 		UI.padding(8),
 		UI.new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
+	HUD.slot("left", panel, 40)
 	local header = UI.button({ Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18), LayoutOrder = 0, Parent = panel })
 	panelTitle = UI.label({ Text = "PARTY", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = PARTY_COLOR, Size = UDim2.fromScale(1, 1), Parent = header })
 	header.Activated:Connect(function()

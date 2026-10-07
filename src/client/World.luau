@@ -604,7 +604,7 @@ function World.start()
 		Size = UDim2.fromOffset(130, 30),
 		Parent = gui,
 	}, { UI.corner(12) })
-	HUD.slot("topRight", chip, 5) -- stacks under the stats card
+	HUD.slot("topRight", chip :: TextLabel, 5) -- stacks under the stats card
 	updateChip()
 
 	startWeather()
