@@ -203,6 +203,12 @@ QuestsConfig.ACHIEVEMENTS = {
 	A("race_wins_10", "Speedway King", "Win 10 speedway races.", "👑", "Gold", nil, nil, 6000, 2000, "Speed King"),
 	A("street_king", "Street King", "Win a street race.", "🛣️", "Silver", nil, nil, 800, 300),
 	A("trial_gold", "Golden Lap", "Earn gold in the time trial.", "🥇", "Gold", nil, nil, 3000, 1000, "Gold Driver"),
+	A("crew_battle_win", "Crew Victory", "Win a crew battle with your crew.", "⚔️", "Bronze", nil, nil, 500, 200),
+	A("crew_battle_10", "Crew Warlord", "Win 10 crew battles.", "🛡️", "Gold", nil, nil, 5000, 1500, "Warlord"),
+	A("crew_battle_mvp", "Battle MVP", "Be the top scorer of a crew battle.", "🌟", "Silver", nil, nil, 1500, 500),
+	A("crew_cup_champion", "Cup Champions", "Win the weekly City Crew Cup with your crew.", "🏆", "Platinum", nil, nil, 10000, 3000, "Cup Champion"),
+	A("lb_top10", "Top 10", "Reach the top 10 of any global leaderboard.", "📈", "Gold", nil, nil, 3000, 1000),
+	A("lb_number1", "Number One", "Hold #1 on any global leaderboard.", "👑", "Platinum", nil, nil, 10000, 3000, "Number One"),
 	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
 } :: { Achievement }
 

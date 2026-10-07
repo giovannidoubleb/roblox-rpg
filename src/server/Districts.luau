@@ -698,6 +698,7 @@ end
 -- Downtown (section 6)
 ---------------------------------------------------------------------------
 local leaderboardRows: { [string]: { TextLabel } } = {}
+local leaderboardTitle: TextLabel? = nil
 local billboardTitles: { TextLabel } = {}
 local billboardBodies: { TextLabel } = {}
 
@@ -728,6 +729,7 @@ local function buildLeaderboard(pos: Vector3, dir: Vector3)
 	title.TextColor3 = Color3.fromRGB(255, 200, 60)
 	title.Text = "CITY LEADERS · THIS SERVER"
 	title.Parent = bg
+	leaderboardTitle = title
 	local stats = { { "Level", "LEVEL", Color3.fromRGB(90, 170, 255) }, { "Reputation", "REPUTATION", Color3.fromRGB(255, 120, 60) }, { "Fame", "FAME", Color3.fromRGB(255, 90, 200) } }
 	for i, stat in stats do
 		local col = Instance.new("Frame")
@@ -766,6 +768,26 @@ local function buildLeaderboard(pos: Vector3, dir: Vector3)
 end
 
 local function refreshLeaderboard()
+	-- Global boards (all servers) when the Leaderboards system runs; otherwise this server's players.
+	local lbModule = script.Parent:FindFirstChild("Leaderboards")
+	local okLb, lb = false, nil
+	if lbModule then
+		okLb, lb = pcall(require, lbModule)
+	end
+	if okLb and type(lb) == "table" and type(lb.top) == "function" then
+		local global = type(lb.isGlobal) == "function" and lb.isGlobal()
+		if leaderboardTitle then
+			leaderboardTitle.Text = if global then "CITY LEADERS · ALL SERVERS" else "CITY LEADERS · THIS SERVER"
+		end
+		for stat, rows in leaderboardRows do
+			local list = lb.top(string.lower(stat), #rows, "all") or {}
+			for r, row in rows do
+				local e = list[r]
+				row.Text = if e then string.format("%d. %s  ·  %s", r, e.name, e.text) else (if r == 1 then "Waiting for players" else "")
+			end
+		end
+		return
+	end
 	local players = Players:GetPlayers()
 	for stat, rows in leaderboardRows do
 		local list = {}

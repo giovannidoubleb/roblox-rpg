@@ -34,6 +34,8 @@ local Places = require(script.Parent:WaitForChild("Places"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
 
 local Events = {}
+-- Fired for each City 5K finisher: (player, place, timeSeconds). CrewBattles listens.
+Events.runFinished = Instance.new("BindableEvent")
 
 PlayerData.registerSection("events", function()
 	return { best5k = 0, best3pt = 0, joined = 0, podiums = 0, wins = 0, carAwards = 0 }
@@ -1129,6 +1131,7 @@ local function tickRun(ev: Event)
 			table.insert(ranked, p)
 			PlayerData.addStatXP(p, "Stamina", 30)
 			PlayerData.addStatXP(p, "Speed", 15)
+			Events.runFinished:Fire(p, place, racer.time)
 			local sec = section(p)
 			if sec and (sec.best5k == 0 or racer.time < sec.best5k) then
 				sec.best5k = racer.time
