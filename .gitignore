@@ -2,3 +2,6 @@
 *.rbxlx
 sourcemap.json
 .vscode/
+
+# The ready-to-open CITY GRIND place file is committed on purpose.
+!dist/CityGrind.rbxlx

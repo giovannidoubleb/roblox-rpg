@@ -1,28 +1,321 @@
 {
-  "name": "roblox-rpg",
+  "name": "city-grind",
   "tree": {
     "$className": "DataModel",
-
     "ReplicatedStorage": {
-      "$className": "ReplicatedStorage",
-      "Shared": {
-        "$path": "src/shared"
+      "CityGrind": {
+        "$className": "Folder",
+        "ApartmentsConfig": {
+          "$path": "src/shared/ApartmentsConfig.luau"
+        },
+        "AudioConfig": {
+          "$path": "src/shared/AudioConfig.luau"
+        },
+        "BankConfig": {
+          "$path": "src/shared/BankConfig.luau"
+        },
+        "CallsConfig": {
+          "$path": "src/shared/CallsConfig.luau"
+        },
+        "CityTokConfig": {
+          "$path": "src/shared/CityTokConfig.luau"
+        },
+        "Config": {
+          "$path": "src/shared/Config.luau"
+        },
+        "CrewBattlesConfig": {
+          "$path": "src/shared/CrewBattlesConfig.luau"
+        },
+        "CrewsConfig": {
+          "$path": "src/shared/CrewsConfig.luau"
+        },
+        "DistrictsConfig": {
+          "$path": "src/shared/DistrictsConfig.luau"
+        },
+        "EffectsConfig": {
+          "$path": "src/shared/EffectsConfig.luau"
+        },
+        "EmotesConfig": {
+          "$path": "src/shared/EmotesConfig.luau"
+        },
+        "EventsConfig": {
+          "$path": "src/shared/EventsConfig.luau"
+        },
+        "GymConfig": {
+          "$path": "src/shared/GymConfig.luau"
+        },
+        "JobsConfig": {
+          "$path": "src/shared/JobsConfig.luau"
+        },
+        "LeaderboardsConfig": {
+          "$path": "src/shared/LeaderboardsConfig.luau"
+        },
+        "MediaConfig": {
+          "$path": "src/shared/MediaConfig.luau"
+        },
+        "MessagesConfig": {
+          "$path": "src/shared/MessagesConfig.luau"
+        },
+        "MusicConfig": {
+          "$path": "src/shared/MusicConfig.luau"
+        },
+        "QuestsConfig": {
+          "$path": "src/shared/QuestsConfig.luau"
+        },
+        "RacingConfig": {
+          "$path": "src/shared/RacingConfig.luau"
+        },
+        "RankedConfig": {
+          "$path": "src/shared/RankedConfig.luau"
+        },
+        "Replay": {
+          "$path": "src/shared/Replay.luau"
+        },
+        "SceneSnapshot": {
+          "$path": "src/shared/SceneSnapshot.luau"
+        },
+        "ShopsConfig": {
+          "$path": "src/shared/ShopsConfig.luau"
+        },
+        "SocialConfig": {
+          "$path": "src/shared/SocialConfig.luau"
+        },
+        "StoryConfig": {
+          "$path": "src/shared/StoryConfig.luau"
+        },
+        "VehiclesConfig": {
+          "$path": "src/shared/VehiclesConfig.luau"
+        },
+        "WorldConfig": {
+          "$path": "src/shared/WorldConfig.luau"
+        }
       }
     },
-
     "ServerScriptService": {
-      "$className": "ServerScriptService",
-      "Server": {
-        "$path": "src/server"
+      "CityGrindServer": {
+        "$path": "src/server/Main.server.luau",
+        "AntiCheat": {
+          "$path": "src/server/AntiCheat.luau"
+        },
+        "Apartments": {
+          "$path": "src/server/Apartments.luau"
+        },
+        "Bank": {
+          "$path": "src/server/Bank.luau"
+        },
+        "Basketball": {
+          "$path": "src/server/Basketball.luau"
+        },
+        "Calls": {
+          "$path": "src/server/Calls.luau"
+        },
+        "CityBuilder": {
+          "$path": "src/server/CityBuilder.luau"
+        },
+        "CityGram": {
+          "$path": "src/server/CityGram.luau"
+        },
+        "CityTok": {
+          "$path": "src/server/CityTok.luau"
+        },
+        "CourtGames": {
+          "$path": "src/server/CourtGames.luau"
+        },
+        "CrewBattles": {
+          "$path": "src/server/CrewBattles.luau"
+        },
+        "Crews": {
+          "$path": "src/server/Crews.luau"
+        },
+        "Districts": {
+          "$path": "src/server/Districts.luau"
+        },
+        "Emotes": {
+          "$path": "src/server/Emotes.luau"
+        },
+        "EventDunk": {
+          "$path": "src/server/EventDunk.luau"
+        },
+        "EventFashion": {
+          "$path": "src/server/EventFashion.luau"
+        },
+        "EventHunt": {
+          "$path": "src/server/EventHunt.luau"
+        },
+        "EventKit": {
+          "$path": "src/server/EventKit.luau"
+        },
+        "EventPhoto": {
+          "$path": "src/server/EventPhoto.luau"
+        },
+        "EventStreetball": {
+          "$path": "src/server/EventStreetball.luau"
+        },
+        "Events": {
+          "$path": "src/server/Events.luau"
+        },
+        "Gym": {
+          "$path": "src/server/Gym.luau"
+        },
+        "Jobs": {
+          "$path": "src/server/Jobs.luau"
+        },
+        "Leaderboards": {
+          "$path": "src/server/Leaderboards.luau"
+        },
+        "Media": {
+          "$path": "src/server/Media.luau"
+        },
+        "Messages": {
+          "$path": "src/server/Messages.luau"
+        },
+        "Net": {
+          "$path": "src/server/Net.luau"
+        },
+        "Party": {
+          "$path": "src/server/Party.luau"
+        },
+        "Places": {
+          "$path": "src/server/Places.luau"
+        },
+        "PlayerData": {
+          "$path": "src/server/PlayerData.luau"
+        },
+        "Quests": {
+          "$path": "src/server/Quests.luau"
+        },
+        "Racing": {
+          "$path": "src/server/Racing.luau"
+        },
+        "Ranked": {
+          "$path": "src/server/Ranked.luau"
+        },
+        "Shops": {
+          "$path": "src/server/Shops.luau"
+        },
+        "Social": {
+          "$path": "src/server/Social.luau"
+        },
+        "Story": {
+          "$path": "src/server/Story.luau"
+        },
+        "Vehicles": {
+          "$path": "src/server/Vehicles.luau"
+        },
+        "World": {
+          "$path": "src/server/World.luau"
+        }
       }
     },
-
     "StarterPlayer": {
-      "$className": "StarterPlayer",
+      "$properties": {
+        "EnableMouseLockOption": false
+      },
       "StarterPlayerScripts": {
-        "$className": "StarterPlayerScripts",
-        "Client": {
-          "$path": "src/client"
+        "CityGrindClient": {
+          "$path": "src/client/Client.client.luau",
+          "Animation": {
+            "$path": "src/client/Animation.luau"
+          },
+          "Apartments": {
+            "$path": "src/client/Apartments.luau"
+          },
+          "Audio": {
+            "$path": "src/client/Audio.luau"
+          },
+          "Bank": {
+            "$path": "src/client/Bank.luau"
+          },
+          "Basketball": {
+            "$path": "src/client/Basketball.luau"
+          },
+          "Calls": {
+            "$path": "src/client/Calls.luau"
+          },
+          "CityGram": {
+            "$path": "src/client/CityGram.luau"
+          },
+          "CityTok": {
+            "$path": "src/client/CityTok.luau"
+          },
+          "CrewBattles": {
+            "$path": "src/client/CrewBattles.luau"
+          },
+          "Crews": {
+            "$path": "src/client/Crews.luau"
+          },
+          "Effects": {
+            "$path": "src/client/Effects.luau"
+          },
+          "Emotes": {
+            "$path": "src/client/Emotes.luau"
+          },
+          "EventBallot": {
+            "$path": "src/client/EventBallot.luau"
+          },
+          "Events": {
+            "$path": "src/client/Events.luau"
+          },
+          "Gym": {
+            "$path": "src/client/Gym.luau"
+          },
+          "HUD": {
+            "$path": "src/client/HUD.luau"
+          },
+          "Jobs": {
+            "$path": "src/client/Jobs.luau"
+          },
+          "Leaderboards": {
+            "$path": "src/client/Leaderboards.luau"
+          },
+          "Media": {
+            "$path": "src/client/Media.luau"
+          },
+          "Messages": {
+            "$path": "src/client/Messages.luau"
+          },
+          "Movement": {
+            "$path": "src/client/Movement.luau"
+          },
+          "Music": {
+            "$path": "src/client/Music.luau"
+          },
+          "Party": {
+            "$path": "src/client/Party.luau"
+          },
+          "Phone": {
+            "$path": "src/client/Phone.luau"
+          },
+          "Quests": {
+            "$path": "src/client/Quests.luau"
+          },
+          "Racing": {
+            "$path": "src/client/Racing.luau"
+          },
+          "Ranked": {
+            "$path": "src/client/Ranked.luau"
+          },
+          "Shops": {
+            "$path": "src/client/Shops.luau"
+          },
+          "Social": {
+            "$path": "src/client/Social.luau"
+          },
+          "Story": {
+            "$path": "src/client/Story.luau"
+          },
+          "Subway": {
+            "$path": "src/client/Subway.luau"
+          },
+          "UI": {
+            "$path": "src/client/UI.luau"
+          },
+          "Vehicles": {
+            "$path": "src/client/Vehicles.luau"
+          },
+          "World": {
+            "$path": "src/client/World.luau"
+          }
         }
       }
     }
