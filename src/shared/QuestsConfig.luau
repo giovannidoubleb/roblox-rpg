@@ -198,6 +198,11 @@ QuestsConfig.ACHIEVEMENTS = {
 	A("ranked_diamond", "Diamond Hooper", "Reach Diamond in ranked.", "💎", "Gold", nil, nil, 8000, 2500, "Diamond Hooper"),
 	A("ranked_legend", "City Legend", "Reach Legend in ranked.", "👑", "Platinum", nil, nil, 25000, 8000, "City Legend"),
 	A("ranked_season_reward", "Season Veteran", "Earn a ranked season reward.", "🎖️", "Silver", nil, nil, 1000, 500),
+	A("race_first", "Green Light", "Finish your first race.", "🏁", "Bronze", nil, nil, 200, 100),
+	A("race_win", "Checkered Flag", "Win a race at the City Speedway.", "🏆", "Silver", nil, nil, 1000, 400),
+	A("race_wins_10", "Speedway King", "Win 10 speedway races.", "👑", "Gold", nil, nil, 6000, 2000, "Speed King"),
+	A("street_king", "Street King", "Win a street race.", "🛣️", "Silver", nil, nil, 800, 300),
+	A("trial_gold", "Golden Lap", "Earn gold in the time trial.", "🥇", "Gold", nil, nil, 3000, 1000, "Gold Driver"),
 	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
 } :: { Achievement }
 
