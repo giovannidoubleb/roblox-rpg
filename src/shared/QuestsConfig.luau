@@ -186,6 +186,11 @@ QuestsConfig.ACHIEVEMENTS = {
 	A("explorer", "Explorer", "Visit every district of the city.", "🗺️", "Silver", "districts", 6, 2000, 800, "Explorer"),
 	A("dedicated", "Dedicated", "Claim all 7 daily login rewards in a row.", "📅", "Silver", "loginCycles", 1, 1000, 500),
 	A("quest_master", "Quest Master", "Complete 50 daily or weekly quests.", "📜", "Gold", "questsDone", 50, 5000, 2000, "Quest Master"),
+	A("collect_first", "Finders Keepers", "Find your first collectible.", "🔎", "Bronze", nil, nil, 100, 50),
+	A("collect_set", "Set Complete", "Complete a collectible set.", "🧩", "Silver", nil, nil, 1000, 400),
+	A("collect_all", "Master Collector", "Find every collectible in the city.", "🏆", "Platinum", nil, nil, 10000, 3000, "Master Collector"),
+	A("secret_first", "Off the Map", "Discover a secret place.", "🗝️", "Bronze", nil, nil, 200, 100),
+	A("secret_all", "City Secrets", "Discover every secret place.", "🕳️", "Gold", nil, nil, 5000, 1500, "Urban Explorer"),
 	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
 } :: { Achievement }
 

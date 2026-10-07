@@ -400,7 +400,10 @@ function VehiclesConfig.step(sim: Sim, dt: number, throttle: number, steer: numb
 
 		-- tyres cancel sideways sliding up to the grip limit (lets you drift at speed)
 		local slideLimit = math.abs(vr) / dt
-		local aLat = math.clamp(-vr * s.gripRate, -s.grip, s.grip)
+		-- Rain/storm lowers grip (World sets workspace WeatherGrip, 1 = dry).
+		local wet = workspace:GetAttribute("WeatherGrip")
+		wet = if type(wet) == "number" then math.clamp(wet, 0.5, 1) else 1
+		local aLat = math.clamp(-vr * s.gripRate * wet, -s.grip * wet, s.grip * wet)
 		aLat = math.clamp(aLat, -slideLimit, slideLimit)
 		force += (look * a + right * aLat) * (mass * gf)
 
