@@ -103,6 +103,8 @@ Config.WALLPAPERS = {
 }
 
 Config.UI_SCALES = { 0.8, 0.9, 1, 1.1, 1.25 }
+-- "Auto" follows Roblox's own graphics quality slider.
+Config.GRAPHICS_LEVELS = { "Auto", "Low", "Medium", "High" }
 
 -- Basketball (sections 70, 71). Distances are in studs.
 Config.Ball = {

@@ -63,7 +63,7 @@ local function defaultProfile()
 		transactions = {
 			{ t = os.time(), amount = Config.STARTING_CASH, label = "Welcome to the city" },
 		},
-		settings = { wallpaper = 1, uiScale = 1, notificationSounds = true },
+		settings = { wallpaper = 1, uiScale = 1, notificationSounds = true, graphics = "Auto", volMusic = 0.6, volSfx = 0.8, volAmbient = 0.5 },
 		firstJoin = os.time(),
 		sections = {},
 	}
@@ -122,6 +122,11 @@ local function publish(player: Player)
 	player:SetAttribute("Wallpaper", data.settings.wallpaper)
 	player:SetAttribute("UIScale", data.settings.uiScale)
 	player:SetAttribute("NotificationSounds", data.settings.notificationSounds)
+	-- Polish settings (Phase 8): read by the client Effects / Audio / Animation modules.
+	player:SetAttribute("Graphics", data.settings.graphics)
+	player:SetAttribute("VolMusic", data.settings.volMusic)
+	player:SetAttribute("VolSFX", data.settings.volSfx)
+	player:SetAttribute("VolAmbient", data.settings.volAmbient)
 	for _, stat in Config.STATS do
 		player:SetAttribute(stat, data.stats[stat])
 	end
@@ -382,6 +387,18 @@ local SETTING_VALIDATORS = {
 	end,
 	notificationSounds = function(v)
 		return type(v) == "boolean"
+	end,
+	graphics = function(v)
+		return table.find(Config.GRAPHICS_LEVELS, v) ~= nil
+	end,
+	volMusic = function(v)
+		return type(v) == "number" and v >= 0 and v <= 1 and v == v
+	end,
+	volSfx = function(v)
+		return type(v) == "number" and v >= 0 and v <= 1 and v == v
+	end,
+	volAmbient = function(v)
+		return type(v) == "number" and v >= 0 and v <= 1 and v == v
 	end,
 }
 

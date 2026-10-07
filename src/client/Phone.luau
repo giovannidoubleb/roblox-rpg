@@ -683,7 +683,60 @@ local function buildSettings()
 			showPage("Settings")
 		end)
 
-		local about = card(content, 50, 4)
+		local gfxCard = card(content, 70, 4)
+		UI.label({ Text = "GRAPHICS", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = gfxCard })
+		local currentGfx = player:GetAttribute("Graphics") or "Auto"
+		for i, level in Config.GRAPHICS_LEVELS do
+			local b = UI.button({
+				Text = level,
+				TextSize = 12,
+				BackgroundColor3 = if level == currentGfx then colors.xp else colors.panel,
+				Position = UDim2.fromOffset((i - 1) * 62, 22),
+				Size = UDim2.fromOffset(58, 28),
+				Parent = gfxCard,
+			})
+			b.Activated:Connect(function()
+				setSetting("graphics", level)
+				task.wait(0.2)
+				showPage("Settings")
+			end)
+		end
+
+		for i, vol in { { "VolMusic", "volMusic", "Music volume" }, { "VolSFX", "volSfx", "Effects volume" }, { "VolAmbient", "volAmbient", "City ambience" } } do
+			local volCard = card(content, 50, 4 + i)
+			local value = player:GetAttribute(vol[1])
+			value = if type(value) == "number" then value else 0.5
+			UI.label({ Text = vol[3], Font = UI.FONT_BOLD, TextSize = 14, Size = UDim2.new(1, -120, 1, 0), Parent = volCard })
+			UI.label({
+				Text = math.floor(value * 100 + 0.5) .. "%",
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -34, 0.5, 0),
+				Size = UDim2.fromOffset(48, 28),
+				Parent = volCard,
+			})
+			for j, step in { -0.1, 0.1 } do
+				local b = UI.button({
+					Text = if step < 0 then "−" else "+",
+					TextSize = 16,
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = if j == 1 then UDim2.new(1, -84, 0.5, 0) else UDim2.new(1, 0, 0.5, 0),
+					Size = UDim2.fromOffset(30, 28),
+					Parent = volCard,
+				})
+				b.Activated:Connect(function()
+					local nextValue = math.clamp(math.floor((value + step) * 10 + 0.5) / 10, 0, 1)
+					if nextValue ~= value then
+						setSetting(vol[2], nextValue)
+						task.wait(0.2)
+						showPage("Settings")
+					end
+				end)
+			end
+		end
+
+		local about = card(content, 50, 8)
 		UI.label({ Text = "CityPhone · " .. player.Name, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = about })
 		UI.label({ Text = "Settings are saved to your account.", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 14), Parent = about })
 	end
