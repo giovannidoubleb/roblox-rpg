@@ -78,9 +78,186 @@ EventsConfig.KINDS = {
 		},
 		finisher = { cash = 40, xp = 40, rep = 2 },
 	},
+	DunkContest = {
+		id = "DunkContest",
+		name = "Dunk Contest",
+		icon = "💥",
+		color = Color3.fromRGB(255, 70, 70),
+		location = "City court",
+		blurb = "3 dunk attempts each. Made dunks score on approach speed, hang time, take-off distance and variety.",
+		maxPlayers = 8,
+		duration = 6,
+		podium = {
+			{ cash = 260, xp = 210, rep = 10 },
+			{ cash = 160, xp = 130, rep = 6 },
+			{ cash = 100, xp = 85, rep = 4 },
+		},
+		finisher = { cash = 40, xp = 40, rep = 1 },
+	},
+	TreasureHunt = {
+		id = "TreasureHunt",
+		name = "Treasure Hunt",
+		icon = "🗝️",
+		color = Color3.fromRGB(255, 205, 60),
+		location = "All over the city",
+		blurb = "Glowing caches are hidden across the districts. Clues unlock over time. First to touch a cache claims it.",
+		maxPlayers = 16,
+		duration = 7,
+		podium = {
+			{ cash = 280, xp = 230, rep = 10 },
+			{ cash = 170, xp = 140, rep = 6 },
+			{ cash = 100, xp = 90, rep = 4 },
+		},
+		finisher = { cash = 40, xp = 50, rep = 1 },
+	},
+	PhotoChallenge = {
+		id = "PhotoChallenge",
+		name = "Photo Challenge",
+		icon = "📸",
+		color = Color3.fromRGB(80, 200, 255),
+		location = "Anywhere in the city",
+		blurb = "A theme drops when it starts. Snap a matching photo with the Camera app, submit it, then everyone votes.",
+		maxPlayers = 12,
+		duration = 7,
+		podium = {
+			{ cash = 220, xp = 180, rep = 10 },
+			{ cash = 140, xp = 110, rep = 6 },
+			{ cash = 90, xp = 75, rep = 4 },
+		},
+		finisher = { cash = 35, xp = 40, rep = 1 },
+	},
+	FashionShow = {
+		id = "FashionShow",
+		name = "Fashion Show",
+		icon = "👗",
+		color = Color3.fromRGB(255, 110, 200),
+		location = "Pop-up runway",
+		blurb = "Wear your best fit from your closet, walk the runway when it's your turn, then the crowd votes.",
+		maxPlayers = 10,
+		duration = 6,
+		podium = {
+			{ cash = 220, xp = 180, rep = 10 },
+			{ cash = 140, xp = 110, rep = 6 },
+			{ cash = 90, xp = 75, rep = 4 },
+		},
+		finisher = { cash = 35, xp = 40, rep = 1 },
+	},
+	StreetballTournament = {
+		id = "StreetballTournament",
+		name = "Streetball Tournament",
+		icon = "🏆",
+		color = Color3.fromRGB(255, 160, 60),
+		location = "City court",
+		blurb = "Knockout bracket of half-court games (1v1, or 2v2 with a big field). Ones and twos, first to 7.",
+		maxPlayers = 8,
+		duration = 10,
+		podium = {
+			{ cash = 320, xp = 260, rep = 14 },
+			{ cash = 190, xp = 160, rep = 8 },
+			{ cash = 110, xp = 100, rep = 5 },
+		},
+		finisher = { cash = 45, xp = 50, rep = 2 },
+	},
 } :: { [string]: Kind }
 
-EventsConfig.ORDER = { "ThreePoint", "City5K", "CarMeet" }
+EventsConfig.ORDER = { "ThreePoint", "City5K", "CarMeet", "DunkContest", "TreasureHunt", "PhotoChallenge", "FashionShow", "StreetballTournament" }
+
+-- Fewest checked-in entrants a kind needs; below this it is cancelled cleanly.
+EventsConfig.MIN_ENTRANTS = {
+	ThreePoint = 1,
+	City5K = 1,
+	CarMeet = 2,
+	DunkContest = 2,
+	TreasureHunt = 1,
+	PhotoChallenge = 2,
+	FashionShow = 2,
+	StreetballTournament = 2,
+}
+
+-- Dunk contest: every made dunk is scored from what the server saw.
+EventsConfig.DUNK = {
+	CHECKIN = 60,
+	READY = 3,
+	TURN = 40,
+	ATTEMPTS = 3,
+	BASE = 5, -- a made dunk
+	SPEED_FROM = 14, -- studs/s where approach points start
+	SPEED_STEP = 3, -- +1 per this many studs/s above SPEED_FROM
+	SPEED_MAX = 4,
+	AIR_PER_SECOND = 5, -- hang time points per airborne second before the release
+	AIR_MAX = 3,
+	TAKEOFF_FROM = 3, -- take-off distance from the rim where points start
+	TAKEOFF_STEP = 1.2,
+	TAKEOFF_MAX = 2,
+	NEW_ANGLE = 2, -- first dunk from a new approach (baseline / wing / straight)
+	MISS_RETURN = 2.5, -- seconds a missed ball rolls before it's handed back
+	START_DIST = 22, -- where each turn starts, from the rim toward half court
+}
+
+-- Treasure hunt
+EventsConfig.HUNT = {
+	CHECKIN = 30,
+	TIME_LIMIT = 6 * 60,
+	CACHES = 6,
+	CLUE_EVERY = 25, -- a new cache's district clue every N seconds
+	LANDMARK_AFTER = 50, -- then its landmark hint this long after that
+	BEARING_AFTER = 110, -- then a compass bearing + distance
+	TOUCH_RADIUS = 6,
+	MIN_SPACING = 70,
+	-- known open ground used when the districts have no free spot
+	FALLBACK = {
+		Vector3.new(150, 0, 190),
+		Vector3.new(-262, 0, 120),
+		Vector3.new(210, 0, -195),
+		Vector3.new(-170, 0, 205),
+		Vector3.new(-262, 0, -140),
+		Vector3.new(60, 0, 205),
+	},
+}
+
+-- Photo challenge. Themes are checked on the server against the saved
+-- snapshot (where the camera was, the time of day, who / what is in frame).
+EventsConfig.PHOTO = {
+	SHOOT = 4 * 60,
+	VOTE = 60,
+	DAY_SECONDS = 20 * 60, -- one in-game day (Main's DAY_LENGTH_SECONDS); time themes need enough of their window
+	MIN_WINDOW_HOURS = 1.2, -- in-game hours of a time theme's window that must fall inside the shoot
+	MAX_PHOTOS_LISTED = 12,
+	THEMES = {
+		{ id = "sunset", name = "Sunset at the Beach", rule = "Taken at the Beach between 16:30 and 20:00", clockFrom = 16.5, clockTo = 20 },
+		{ id = "crew", name = "Crew Pic", rule = "3 or more people in the photo" },
+		{ id = "neon", name = "Car with Neon", rule = "A car with its neon underglow on, in frame" },
+		{ id = "night", name = "Downtown After Dark", rule = "Taken Downtown at night (19:00-05:30)", clockFrom = 19, clockTo = 5.5 },
+		{ id = "hoops", name = "Court Life", rule = "Someone in frame within 40 studs of a basketball court" },
+	},
+}
+
+-- Fashion show
+EventsConfig.FASHION = {
+	CHECKIN = 90,
+	WALK = 22, -- seconds to reach the end of the runway
+	POSE = 3, -- seconds to hold at the end
+	VOTE = 50,
+	SPECTATOR_RANGE = 90,
+	RUNWAY = Vector3.new(10, 1.4, 54),
+	-- preferred pop-up spots (first open one wins); the last is a known plaza
+	SPOTS = {
+		Vector3.new(0, 0, -430),
+		Vector3.new(-40, 0, 420),
+		Vector3.new(-520, 0, 60),
+		Vector3.new(140, 0, 182),
+	},
+}
+
+-- Streetball tournament: half-court games on a reserved court.
+EventsConfig.STREETBALL = {
+	CHECKIN = 75,
+	TARGET = 7,
+	GAME_TIME = 150,
+	LOOSE_TURNOVER = 5, -- a ball nobody grabs goes to the other side
+	TWO_V_TWO_FROM = 6, -- this many (even) entrants plays 2v2
+	BETWEEN = 4, -- seconds between a game ending and the next one starting
+}
 EventsConfig.FAME_PER_CAR_AWARD = 25
 
 -- 3-point contest

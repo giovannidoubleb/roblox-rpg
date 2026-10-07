@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 local UI = require(script.Parent:WaitForChild("UI"))
 local HUD = require(script.Parent:WaitForChild("HUD"))
 local Phone = require(script.Parent:WaitForChild("Phone"))
+local EventBallot = require(script.Parent:WaitForChild("EventBallot"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local EC = require(shared:WaitForChild("EventsConfig"))
 
@@ -68,6 +69,7 @@ local statusLabel: TextLabel
 local linesLabel: TextLabel
 local leaveButton: TextButton
 local voteButton: TextButton
+local submitButton: TextButton
 local highlight: Highlight
 
 local liveById: { [string]: { data: any, at: number } } = {}
@@ -111,7 +113,8 @@ local function renderPanel()
 	statusLabel.TextColor3 = if shown.highlight then colors.stamina else colors.text
 	linesLabel.Text = table.concat(shown.lines or {}, "\n")
 	leaveButton.Text = if shown.role == "watcher" then "STOP WATCHING" else "LEAVE"
-	voteButton.Visible = shown.canVote == true
+	voteButton.Visible = shown.canVote == true or type(shown.ballot) == "table"
+	submitButton.Visible = type(shown.submit) == "table"
 	local gps = shown.gps
 	if type(gps) == "table" and type(gps.index) == "number" then
 		highlight.Adornee = gateModel(gps.index)
@@ -160,6 +163,7 @@ local function buildPanel()
 	local buttons = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 5, Parent = panel })
 	UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Right, Parent = buttons })
 	voteButton = UI.button({ Text = "🗳️ VOTE", TextSize = 12, BackgroundColor3 = kindColor("CarMeet"), Size = UDim2.fromOffset(80, 28), Visible = false, Parent = buttons })
+	submitButton = UI.button({ Text = "📸 SUBMIT", TextSize = 12, BackgroundColor3 = kindColor("PhotoChallenge"), Size = UDim2.fromOffset(84, 28), Visible = false, Parent = buttons })
 	leaveButton = UI.button({ Text = "LEAVE", TextSize = 12, BackgroundColor3 = colors.danger, Size = UDim2.fromOffset(110, 28), Parent = buttons })
 
 	leaveButton.Activated:Connect(function()
@@ -176,8 +180,17 @@ local function buildPanel()
 		Phone.refresh(APP_ID)
 	end)
 	voteButton.Activated:Connect(function()
-		if voteData then
+		local data = shown
+		if data and type(data.ballot) == "table" then
+			EventBallot.open("ballot", data.id, data.ballot)
+		elseif voteData then
 			openVote(voteData)
+		end
+	end)
+	submitButton.Activated:Connect(function()
+		local data = shown
+		if data and type(data.submit) == "table" then
+			EventBallot.open("submit", data.id, data.submit)
 		end
 	end)
 
@@ -524,21 +537,26 @@ end
 
 local function meCard(content: ScrollingFrame, order: number)
 	local me = snapshot.me
-	local c = Phone.card(content, 62, order)
+	local c = Phone.card(content, 78, order)
 	UI.label({ Text = "YOUR EVENT RECORD", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 14), Parent = c })
 	UI.label({
 		Text = string.format(
-			"5K best %s · 3PT best %s\nWins %d · Podiums %d · Car awards %d",
+			"5K best %s · 3PT best %s · Dunk best %s\nWins %d · Podiums %d · Car awards %d\nCaches %d · Photo wins %d · Fashion wins %d · Streetball titles %d",
 			if me.best5k > 0 then EC.formatTime(me.best5k) else "—",
 			if me.best3pt > 0 then tostring(me.best3pt) else "—",
+			if (me.dunkBest or 0) > 0 then tostring(me.dunkBest) else "—",
 			me.wins,
 			me.podiums,
-			me.carAwards
+			me.carAwards,
+			me.caches or 0,
+			me.photoWins or 0,
+			me.fashionWins or 0,
+			me.streetballWins or 0
 		),
 		TextSize = 12,
 		TextWrapped = true,
 		Position = UDim2.fromOffset(0, 16),
-		Size = UDim2.new(1, 0, 0, 30),
+		Size = UDim2.new(1, 0, 0, 46),
 		Parent = c,
 	})
 end
@@ -633,12 +651,19 @@ local function onUpdate(kind: string, a: any, b: any)
 		end
 	elseif kind == "Live" and type(a) == "table" and type(a.id) == "string" then
 		liveById[a.id] = { data = a, at = os.clock() }
+		if type(a.submit) == "table" then
+			a.submit.endsAt = a.endsAt
+		end
+		EventBallot.update(a.id, a)
 		if voteData and voteData.id == a.id then
 			voteData.endsAt = a.endsAt or voteData.endsAt
 		end
 		renderPanel()
 	elseif kind == "Closed" and type(a) == "string" then
 		liveById[a] = nil
+		if EventBallot.isOpenFor(a) then
+			EventBallot.close()
+		end
 		if voteData and voteData.id == a then
 			voteData = nil
 			closeVote()
@@ -662,6 +687,7 @@ local function setup()
 	local update = (remotes :: Instance):WaitForChild("EventsUpdate") :: RemoteEvent
 	buildPanel()
 	buildVotePanel()
+	EventBallot.build(gui, request)
 	update.OnClientEvent:Connect(onUpdate)
 
 	-- tick countdowns in the open app

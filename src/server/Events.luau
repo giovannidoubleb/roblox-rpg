@@ -2,17 +2,23 @@
 -- A scheduler rotates real events every 12-20 minutes of server time. Each one
 -- is announced city-wide 5 minutes ahead and again when it starts, has a
 -- location, a start time, rewards (cash / XP / reputation, never Robux), a
--- player cap and a live participant list. Three events are fully built:
+-- player cap and a live participant list. Built in this file:
 --   * 3-Point Contest at the Neighborhood Court (only while the court is Idle)
 --   * City 5K Run on the sidewalks, checkpoints validated here
 --   * Car Meet at the Car Meet Lot: park in a bay, then everyone votes
+-- More kinds live in their own modules and plug in through the kind registry
+-- (Events.registerKind): EventDunk, EventHunt, EventPhoto, EventFashion and
+-- EventStreetball. Each gets the shared helpers in `ctx` and provides
+-- goLive / tick / live / cleanup / leave / request handlers.
 -- Plus an hourly community goal counted from every real basket in the city.
 --
 -- Remotes: EventsRequest (RemoteFunction, client -> server: action, ...)
 --          EventsUpdate  (RemoteEvent, server -> client: kind, ...)
 -- Player attribute: Event = event id while taking part in a live event.
--- Court attribute (NeighborhoodCourt): Event = true / EventName while the contest runs.
--- Saved section "events": { best5k, best3pt, joined, podiums, wins, carAwards }.
+-- Court attribute (any Court): Event = true / EventName while a court event runs.
+-- Saved section "events": { best5k, best3pt, joined, podiums, wins, carAwards,
+--   dunkBest?, caches?, photoWins?, fashionWins?, streetballWins? } (the ? fields are
+--   added lazily, so older saves without them read as 0).
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -66,6 +72,7 @@ type Event = {
 	announced: boolean,
 	reminded: boolean,
 	postpones: number,
+	venue: any, -- picked at schedule time by registry kinds (court model, spot...)
 	data: any,
 }
 
@@ -315,11 +322,11 @@ end
 -- Rewards ranking shared by the contest and the race. A podium place is only
 -- paid when someone finished below you, so a solo entry can't farm 1st place.
 ---------------------------------------------------------------------------
-local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligible: (Player, number) -> boolean)
+local function payPlace(ev: Event, p: Player, place: number, entrants: number, eligible: boolean)
 	local kind = EC.KINDS[ev.kind]
-	for place, p in ranked do
+	do
 		local reward = kind.podium[place]
-		if reward and entrants > place and eligible(p, place) then
+		if reward and entrants > place and eligible then
 			give(p, reward, string.format("%s: #%d", ev.name, place))
 			local sec = section(p)
 			if sec then
@@ -334,6 +341,60 @@ local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligib
 			give(p, kind.finisher, ev.name .. " entry")
 			Net.notify(p, ev.name:upper() .. " DONE", string.format("You placed #%d. %s", place, EC.rewardText(kind.finisher)))
 		end
+	end
+end
+
+local function payPodium(ev: Event, ranked: { Player }, entrants: number, eligible: (Player, number) -> boolean)
+	for place, p in ranked do
+		payPlace(ev, p, place, entrants, eligible(p, place))
+	end
+end
+
+-- Takes a player out of an event before it really starts (missed check-in etc.).
+local function dropEntrant(ev: Event, p: Player, title: string, body: string)
+	local i = table.find(ev.registered, p)
+	if i then
+		table.remove(ev.registered, i)
+	end
+	if p.Parent and p:GetAttribute("Event") == ev.id then
+		setEventAttr(p, nil)
+	end
+	if p.Parent then
+		Net.notify(p, title, body)
+		Update:FireClient(p, "Closed", ev.id)
+	end
+	markDirty()
+end
+
+---------------------------------------------------------------------------
+-- Kind registry. Kinds in other modules register these handlers:
+--   available()            -> boolean      can it run on this server right now
+--   pickVenue()            -> (Vector3, string?, any?)  position, location text, venue
+--   goLive(ev)             -> (string, string?)  "live" | "postpone" | "cancel", message
+--   tick(ev)               10 Hz while live
+--   live(ev, viewer)       -> table for the live panel
+--   cleanup(ev)?           when the event closes for any reason
+--   leave(ev, player)?     a player left (quit, LEAVE, server exit)
+--   request(ev, player, action, b, c)? -> { ok, msg, ... }   Vote / Submit / Entry
+--   tip: string?           shown after joining
+---------------------------------------------------------------------------
+export type KindHandlers = {
+	available: (() -> boolean)?,
+	pickVenue: (() -> (Vector3, string?, any))?,
+	goLive: (any) -> (string, string?),
+	tick: (any) -> (),
+	live: (any, Player) -> any,
+	cleanup: ((any) -> ())?,
+	leave: ((any, Player) -> ())?,
+	request: ((any, Player, string, any, any) -> any)?,
+	tip: string?,
+}
+local registry: { [string]: KindHandlers } = {}
+
+function Events.registerKind(kindId: string, handlers: KindHandlers)
+	registry[kindId] = handlers
+	if handlers.cleanup then
+		cleanupByKind[kindId] = handlers.cleanup
 	end
 end
 
@@ -1531,6 +1592,16 @@ local function kindAvailable(kind: string): boolean
 		return court ~= nil
 	elseif kind == "CarMeet" then
 		return #meetBays > 0
+	elseif kind == "City5K" then
+		return true
+	end
+	local h = registry[kind]
+	if not h or not EC.KINDS[kind] then
+		return false -- module missing or failed to load
+	end
+	if h.available then
+		local ok, yes = pcall(h.available)
+		return ok and yes == true
 	end
 	return true
 end
@@ -1548,12 +1619,32 @@ local function pickKind(): string
 			end
 		end
 		local kind = table.remove(kindBag, 1) :: string
-		if kindAvailable(kind) then
+		-- a kind that is already scheduled waits for the next bag, so one
+		-- kind never fills the whole upcoming list
+		local queued = false
+		for _, ev in events do
+			if ev.kind == kind then
+				queued = true
+			end
+		end
+		if not queued and kindAvailable(kind) then
 			lastKind = kind
 			return kind
 		end
 	end
 	return "City5K"
+end
+
+-- Where a registry kind will happen: (position, location text, venue).
+local function venueOf(kind: string): (Vector3?, string?, any)
+	local h = registry[kind]
+	if h and h.pickVenue then
+		local ok, pos, label, venue = pcall(h.pickVenue)
+		if ok and typeof(pos) == "Vector3" then
+			return pos, label, venue
+		end
+	end
+	return nil, nil, nil
 end
 
 local function locationOf(kind: string): Vector3
@@ -1579,14 +1670,15 @@ local function schedule()
 		lastScheduledAt = startsAt
 		local kind = pickKind()
 		local info = EC.KINDS[kind]
+		local venuePos, venueLabel, venue = venueOf(kind)
 		nextId += 1
 		table.insert(events, {
 			id = "E" .. nextId,
 			kind = kind,
 			name = info.name,
 			icon = info.icon,
-			location = info.location,
-			pos = locationOf(kind),
+			location = venueLabel or info.location,
+			pos = venuePos or locationOf(kind),
 			startsAt = startsAt,
 			state = "Upcoming",
 			phase = "Upcoming",
@@ -1597,6 +1689,7 @@ local function schedule()
 			announced = false,
 			reminded = false,
 			postpones = 0,
+			venue = venue,
 			data = nil,
 		})
 		upcoming += 1
@@ -1607,8 +1700,37 @@ local function schedule()
 	end)
 end
 
+local function postpone(ev: Event, msg: string)
+	ev.postpones += 1
+	if ev.postpones > EC.MAX_POSTPONES then
+		cancelEvent(ev, msg)
+		return
+	end
+	ev.startsAt = now() + EC.POSTPONE_SECONDS
+	ev.phaseEndsAt = ev.startsAt
+	ev.reminded = false
+	for _, p in ev.registered do
+		Net.notify(p, ev.name:upper() .. " POSTPONED", msg .. " Trying again in 2 minutes.")
+	end
+	markDirty()
+end
+
 local function goLive(ev: Event)
-	if ev.kind == "ThreePoint" then
+	local h = registry[ev.kind]
+	if h then
+		local ok, status, msg = pcall(h.goLive, ev)
+		if not ok then
+			warn("[CityGrind] Event " .. ev.kind .. " failed to start:", status)
+			cancelEvent(ev, "This event couldn't be set up.")
+			return
+		elseif status == "postpone" then
+			postpone(ev, msg or "The venue is busy.")
+			return
+		elseif status ~= "live" then
+			cancelEvent(ev, msg or "This event couldn't be set up.")
+			return
+		end
+	elseif ev.kind == "ThreePoint" then
 		local m = court
 		if not m then
 			cancelEvent(ev, "The court is unavailable.")
@@ -1654,8 +1776,18 @@ local function goLive(ev: Event)
 	markDirty()
 end
 
-local TICKS = { ThreePoint = tickThree, City5K = tickRun, CarMeet = tickMeet }
-local LIVE = { ThreePoint = liveThree, City5K = liveRun, CarMeet = liveMeet }
+local TICKS: { [string]: (Event) -> () } = { ThreePoint = tickThree, City5K = tickRun, CarMeet = tickMeet }
+local LIVE: { [string]: (Event, Player) -> any } = { ThreePoint = liveThree, City5K = liveRun, CarMeet = liveMeet }
+
+local function tickFn(kind: string): ((Event) -> ())?
+	local h = registry[kind]
+	return if h then h.tick else TICKS[kind]
+end
+
+local function liveFn(kind: string): ((Event, Player) -> any)?
+	local h = registry[kind]
+	return if h then h.live else LIVE[kind]
+end
 
 local function tickSchedule()
 	local t = now()
@@ -1966,14 +2098,19 @@ local function snapshot(player: Player): any
 			wins = sec and sec.wins or 0,
 			podiums = sec and sec.podiums or 0,
 			carAwards = sec and sec.carAwards or 0,
+			dunkBest = sec and sec.dunkBest or 0,
+			caches = sec and sec.caches or 0,
+			photoWins = sec and sec.photoWins or 0,
+			fashionWins = sec and sec.fashionWins or 0,
+			streetballWins = sec and sec.streetballWins or 0,
 		},
 	}
 end
 
 local function pushLive()
 	for _, ev in events do
-		if isLive(ev) and ev.data then
-			local fn = LIVE[ev.kind]
+		local fn = liveFn(ev.kind)
+		if isLive(ev) and ev.data and fn then
 			local audience = table.clone(ev.registered)
 			for p in ev.watchers do
 				if not table.find(audience, p) then
@@ -2030,6 +2167,11 @@ local function leave(ev: Event, player: Player, quiet: boolean?)
 		elseif ev.kind == "CarMeet" then
 			ev.data.parked[player] = nil
 			refreshBayPlates(ev)
+		elseif registry[ev.kind] and registry[ev.kind].leave then
+			local ok, err = pcall((registry[ev.kind] :: any).leave, ev, player)
+			if not ok then
+				warn("[CityGrind] Event leave failed:", err)
+			end
 		end
 	end
 	if player.Parent then
@@ -2069,8 +2211,8 @@ local function join(ev: Event, player: Player): (boolean, string)
 		setEventAttr(player, ev.id)
 	end
 	markDirty()
-	local tip = if ev.kind == "CarMeet"
-		then " Bring a spawned vehicle (Garage app)."
+	local tip = if registry[ev.kind] then " " .. (registry[ev.kind].tip or "")
+		elseif ev.kind == "CarMeet" then " Bring a spawned vehicle (Garage app)."
 		elseif ev.kind == "City5K" then " Be on foot in the start box."
 		else " Be on the court at check-in."
 	if ev.state == "Upcoming" then
@@ -2091,7 +2233,7 @@ end
 ---------------------------------------------------------------------------
 -- Remote handling
 ---------------------------------------------------------------------------
-local COOLDOWNS = { List = 0.4, Join = 1, Leave = 1, Remind = 0.5, Watch = 0.5, Unwatch = 0.5, Vote = 0.25, Invite = 2 }
+local COOLDOWNS = { List = 0.4, Join = 1, Leave = 1, Remind = 0.5, Watch = 0.5, Unwatch = 0.5, Vote = 0.25, Invite = 2, Submit = 2, Entry = 0.3 }
 
 local function handle(player: Player, action: any, a: any, b: any, c: any): any
 	if type(action) ~= "string" or not COOLDOWNS[action] then
@@ -2137,8 +2279,15 @@ local function handle(player: Player, action: any, a: any, b: any, c: any): any
 		ev.watchers[player] = nil
 		markDirty()
 		return { ok = true, msg = "Stopped watching." }
-	elseif action == "Vote" then
-		if ev.kind ~= "CarMeet" or ev.state ~= "Voting" or not ev.data then
+	elseif action == "Vote" or action == "Submit" or action == "Entry" then
+		local h = registry[ev.kind]
+		if h then
+			if not h.request or not ev.data then
+				return { ok = false, msg = "Nothing to do here right now." }
+			end
+			return (h.request :: any)(ev, player, action, b, c)
+		end
+		if action ~= "Vote" or ev.kind ~= "CarMeet" or ev.state ~= "Voting" or not ev.data then
 			return { ok = false, msg = "Voting isn't open." }
 		end
 		if type(b) ~= "number" or b % 1 ~= 0 or not MEET.CATEGORIES[b] or type(c) ~= "number" then
@@ -2212,6 +2361,147 @@ function Events.isInEvent(player: Player): string?
 	return nil
 end
 
+---------------------------------------------------------------------------
+-- Shared helpers handed to the kind modules (EventDunk, EventHunt, ...)
+---------------------------------------------------------------------------
+local KIND_MODULES = {
+	DunkContest = "EventDunk",
+	TreasureHunt = "EventHunt",
+	PhotoChallenge = "EventPhoto",
+	FashionShow = "EventFashion",
+	StreetballTournament = "EventStreetball",
+}
+
+-- Courts an event may take over: public (not the gated Luxury Hills club) and
+-- at street level (not the Summit rooftop, which needs the elevator).
+local function publicCourt(m: Instance): boolean
+	return m:IsA("Model") and m.Parent ~= nil and not m.Name:find("Private") and courtCenter(m :: Model).Y < 20
+end
+
+local function courtFree(m: Model): boolean
+	return publicCourt(m) and courtIdle(m) and not m:GetAttribute("Event") and rimOf(m, "North") ~= nil and rimOf(m, "South") ~= nil
+end
+
+-- A public court that no event and no pickup game is using right now.
+-- `prefer` (a court or court names, best first) wins when free; `avoid` never.
+local function freeCourt(prefer: any, avoid: Model?): Model?
+	local wanted: { Model } = {}
+	if typeof(prefer) == "Instance" and prefer:IsA("Model") then
+		table.insert(wanted, prefer)
+	elseif type(prefer) == "table" then
+		for _, name in prefer do
+			for _, m in CollectionService:GetTagged("Court") do
+				if m:IsA("Model") and m.Name == name then
+					table.insert(wanted, m)
+				end
+			end
+		end
+	end
+	for _, m in wanted do
+		if m ~= avoid and courtFree(m) then
+			return m
+		end
+	end
+	for _, m in CollectionService:GetTagged("Court") do
+		if m:IsA("Model") and m ~= avoid and courtFree(m) then
+			return m
+		end
+	end
+	return nil
+end
+
+local function makeCtx(): any
+	return {
+		EC = EC,
+		root = root,
+		rng = rng,
+		now = now,
+		part = part,
+		surfaceText = surfaceText,
+		rootOf = rootOf,
+		humanoidOf = humanoidOf,
+		flat = flat,
+		flatDist = flatDist,
+		onFoot = onFoot,
+		notify = Net.notify,
+		notifyAll = notifyAll,
+		announce = function(players: { Player }, text: string)
+			Basketball.announce(players, text)
+		end,
+		section = section,
+		give = give,
+		payPlace = payPlace,
+		payPodium = payPodium,
+		pushResult = pushResult,
+		closeEvent = closeEvent,
+		cancelEvent = cancelEvent,
+		dropEntrant = dropEntrant,
+		isRegistered = isRegistered,
+		setEventAttr = setEventAttr,
+		markDirty = markDirty,
+		fire = function(p: Player, ...)
+			if p.Parent then
+				Update:FireClient(p, ...)
+			end
+		end,
+		audience = function(ev: Event): { Player }
+			local list = table.clone(ev.registered)
+			for p in ev.watchers do
+				if p.Parent and not table.find(list, p) then
+					table.insert(list, p)
+				end
+			end
+			return list
+		end,
+		-- courts
+		courtCenter = courtCenter,
+		courtSize = courtSize,
+		courtIdle = courtIdle,
+		onCourt = onCourt,
+		rimOf = rimOf,
+		freeCourt = freeCourt,
+		publicCourt = publicCourt,
+		minEntrants = function(kind: string): number
+			return EC.MIN_ENTRANTS[kind] or 1
+		end,
+		threeCourt = function(): Model?
+			return court
+		end,
+		claimCourt = function(m: Model, name: string)
+			m:SetAttribute("Event", true)
+			m:SetAttribute("EventName", name)
+		end,
+		releaseCourt = function(m: Model?)
+			if m then
+				m:SetAttribute("Event", nil)
+				m:SetAttribute("EventName", nil)
+			end
+		end,
+		courtLabel = function(m: Model): string
+			local n = m:GetAttribute("DisplayName")
+			return if type(n) == "string" then n else m.Name
+		end,
+	}
+end
+
+local function loadKinds()
+	local ctx = makeCtx()
+	for kindId, moduleName in KIND_MODULES do
+		local module = script.Parent:FindFirstChild(moduleName)
+		if not module then
+			warn("[CityGrind] Events: missing kind module " .. moduleName)
+			continue
+		end
+		local ok, err = pcall(function()
+			local handlers = require(module :: ModuleScript).init(ctx)
+			Events.registerKind(kindId, handlers)
+		end)
+		if not ok then
+			warn("[CityGrind] Events: " .. moduleName .. " failed to load:", err)
+		end
+	end
+end
+
 function Events.start(city: Instance)
 	Request = Net.remote("RemoteFunction", "EventsRequest")
 	Update = Net.remote("RemoteEvent", "EventsUpdate")
@@ -2228,6 +2518,16 @@ function Events.start(city: Instance)
 	buildBoards(root)
 	wrapPolicy()
 	Basketball.scored.connect(onScored)
+	loadKinds()
+
+	-- Server shutting down: close every event cleanly (venues, courts, balls).
+	game:BindToClose(function()
+		for _, ev in table.clone(events) do
+			if isLive(ev) then
+				pcall(cancelEvent, ev, "The server is shutting down.")
+			end
+		end
+	end)
 
 	Request.OnServerInvoke = function(player, action, a, b, c)
 		local ok, result = pcall(handle, player, action, a, b, c)
@@ -2279,8 +2579,9 @@ function Events.start(city: Instance)
 			local dt = task.wait(0.1)
 			tickBalls()
 			for _, ev in table.clone(events) do
-				if isLive(ev) and table.find(events, ev) then
-					local ok, err = pcall(TICKS[ev.kind], ev)
+				local fn = tickFn(ev.kind)
+				if isLive(ev) and table.find(events, ev) and fn then
+					local ok, err = pcall(fn, ev)
 					if not ok then
 						warn("[CityGrind] Event " .. ev.kind .. " failed:", err)
 						pcall(cancelEvent, ev, "Something went wrong running this event.")
