@@ -808,16 +808,18 @@ local function titlesFor(player: Player): { string }
 		return { "Newcomer" }
 	end
 	local list = SC.unlockedTitles(data.level, data.reputation, data.basketball.wins, data.basketball.points)
-	-- Achievement titles from Quests (optional module).
-	local Q = script.Parent:FindFirstChild("Quests")
-	if Q then
-		local ok, extra = pcall(function()
-			return (require(Q) :: any).titles(player)
-		end)
-		if ok and type(extra) == "table" then
-			for _, t in extra do
-				if type(t) == "string" and not table.find(list, t) then
-					table.insert(list, t)
+	-- Titles from achievements (Quests) and ranked seasons (Ranked); both optional.
+	for _, name in { "Quests", "Ranked" } do
+		local module = script.Parent:FindFirstChild(name)
+		if module then
+			local ok, extra = pcall(function()
+				return (require(module) :: any).titles(player)
+			end)
+			if ok and type(extra) == "table" then
+				for _, t in extra do
+					if type(t) == "string" and not table.find(list, t) then
+						table.insert(list, t)
+					end
 				end
 			end
 		end

@@ -191,6 +191,13 @@ QuestsConfig.ACHIEVEMENTS = {
 	A("collect_all", "Master Collector", "Find every collectible in the city.", "🏆", "Platinum", nil, nil, 10000, 3000, "Master Collector"),
 	A("secret_first", "Off the Map", "Discover a secret place.", "🗝️", "Bronze", nil, nil, 200, 100),
 	A("secret_all", "City Secrets", "Discover every secret place.", "🕳️", "Gold", nil, nil, 5000, 1500, "Urban Explorer"),
+	A("ranked_first_win", "Ranked Debut", "Win your first ranked game.", "🏆", "Bronze", nil, nil, 300, 150),
+	A("ranked_placed", "Placed", "Finish your ranked placement games.", "📋", "Bronze", nil, nil, 500, 250),
+	A("ranked_streak_5", "Heat Check", "Win 5 ranked games in a row.", "🔥", "Silver", nil, nil, 1500, 600, "Heat Check"),
+	A("ranked_gold", "Gold Standard", "Reach Gold in ranked.", "🥇", "Silver", nil, nil, 2000, 800),
+	A("ranked_diamond", "Diamond Hooper", "Reach Diamond in ranked.", "💎", "Gold", nil, nil, 8000, 2500, "Diamond Hooper"),
+	A("ranked_legend", "City Legend", "Reach Legend in ranked.", "👑", "Platinum", nil, nil, 25000, 8000, "City Legend"),
+	A("ranked_season_reward", "Season Veteran", "Earn a ranked season reward.", "🎖️", "Silver", nil, nil, 1000, 500),
 	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
 } :: { Achievement }
 

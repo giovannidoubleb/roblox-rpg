@@ -3,6 +3,11 @@
 -- players (1v1, 2v2 or 3v3) a countdown starts. First to 11 wins, or whoever
 -- leads after 6 minutes (tied games go to next basket). Between games the
 -- ball rack gives out free-play balls.
+--
+-- Other systems (Ranked) can run a scheduled match on a court with
+-- CourtGames.startMatch(model, home, away, opts): the court is "Reserved" for a
+-- short countdown (nobody else can join from the pads), then plays by the same
+-- rules. Pickup rewards are skipped and opts.onEnded(result) gets the outcome.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -36,6 +41,19 @@ type Court = {
 	freeBalls: { [Basketball.Ball]: boolean },
 	points: { [Player]: number },
 	awaySince: { [Player]: number },
+	match: Match?, -- set while a scheduled (ranked) match owns the court
+}
+-- A scheduled match (CourtGames.startMatch). `leavers` lists players who left
+-- before the result was decided; `decided` flips when the winning bucket drops.
+type Match = {
+	label: string,
+	ranked: boolean,
+	home: { Player },
+	away: { Player },
+	leavers: { Player },
+	decided: boolean,
+	over: boolean,
+	onEnded: ((result: any) -> ())?,
 }
 
 local courts: { Court } = {}
@@ -90,7 +108,8 @@ local function publish(court: Court)
 	m:SetAttribute("Overtime", court.overtime)
 	local timeLeft = if court.state == "Playing" then math.max(0, G.TIME_LIMIT - (os.clock() - court.startedAt)) else 0
 	m:SetAttribute("TimeLeft", math.floor(timeLeft))
-	m:SetAttribute("Countdown", if court.state == "Countdown" then math.max(0, math.ceil(court.countdownEnds - os.clock())) else 0)
+	m:SetAttribute("Countdown", if court.state == "Countdown" or court.state == "Reserved" then math.max(0, math.ceil(court.countdownEnds - os.clock())) else 0)
+	m:SetAttribute("Ranked", if court.match then court.match.ranked else nil)
 end
 
 local function inBounds(court: Court, position: Vector3, margin: number): boolean
@@ -184,6 +203,10 @@ local function leaveGame(player: Player)
 		return
 	end
 	playerGame[player] = nil
+	local match = entry.court.match
+	if match and not match.over and not match.decided and not table.find(match.leavers, player) then
+		table.insert(match.leavers, player)
+	end
 	local list = entry.court.teams[entry.team]
 	local i = table.find(list, player)
 	if i then
@@ -200,6 +223,10 @@ local function leaveGame(player: Player)
 end
 
 local function endGame(court: Court, winner: Team?, forfeit: boolean)
+	local match = court.match
+	if match then
+		match.over = true
+	end
 	court.state = "Ended"
 	local duration = os.clock() - court.startedAt
 	local total = court.score.Home + court.score.Away
@@ -210,6 +237,12 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 	for _, team in { "Home", "Away" } :: { Team } do
 		for _, player in table.clone(court.teams[team]) do
 			local won = team == winner
+			if match then
+				-- Scheduled matches pay out through their owner (onEnded), not pickup rewards.
+				Basketball.announce({ player }, if won then "YOU WIN!" else "GOOD GAME")
+				leaveGame(player)
+				continue
+			end
 			if eligible then
 				if won then
 					PlayerData.addCash(player, math.floor(G.WIN_CASH * sizeBonus), "Won a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
@@ -237,8 +270,29 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 	local result = if winner then string.upper(winner) .. " WINS" else "GAME OVER"
 	setScoreboard(court, string.format("%s\n%d - %d", result, court.score.Home, court.score.Away))
 	publish(court)
+	if match and match.onEnded then
+		local outcome = {
+			winner = winner,
+			score = { Home = court.score.Home, Away = court.score.Away },
+			forfeit = forfeit,
+			duration = duration,
+			home = match.home,
+			away = match.away,
+			leavers = match.leavers,
+			points = table.clone(court.points),
+			court = court.model,
+		}
+		local onEnded = match.onEnded
+		task.spawn(function()
+			local ok, err = pcall(onEnded, outcome)
+			if not ok then
+				warn("[CityGrind] Match result handler failed:", err)
+			end
+		end)
+	end
 	task.delay(6, function()
 		if court.state == "Ended" then
+			court.match = nil
 			court.state = "Idle"
 			court.score = { Home = 0, Away = 0 }
 			court.overtime = false
@@ -292,6 +346,9 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 	local first: Team = if math.random() < 0.5 then "Home" else "Away"
 	giveTo(court, first)
 	local mode = #home .. "v" .. #away
+	if court.match then
+		mode = court.match.label
+	end
 	Basketball.announce(gamePlayers(court), mode .. "  ·  FIRST TO " .. G.TARGET_SCORE)
 	publish(court)
 end
@@ -399,12 +456,33 @@ local function updatePlaying(court: Court)
 	setScoreboard(
 		court,
 		string.format(
-			"HOME %d - %d AWAY\n%s",
+			if court.match then "RANKED %d - %d\n%s" else "HOME %d - %d AWAY\n%s",
 			court.score.Home,
 			court.score.Away,
 			if court.overtime then "NEXT BUCKET WINS" else string.format("%d:%02d", timeLeft // 60, timeLeft % 60)
 		)
 	)
+	publish(court)
+end
+
+-- A scheduled match's countdown: the teams are on court, nobody else can join.
+local function updateReserved(court: Court)
+	for _, player in gamePlayers(court) do
+		if not player.Parent then
+			leaveGame(player)
+		end
+	end
+	if #court.teams.Home == 0 or #court.teams.Away == 0 then
+		local winner: Team? = if #court.teams.Home > 0 then "Home" elseif #court.teams.Away > 0 then "Away" else nil
+		endGame(court, winner, true)
+		return
+	end
+	if os.clock() >= court.countdownEnds then
+		startGame(court, court.teams.Home, court.teams.Away)
+		return
+	end
+	local label = if court.match then court.match.label else "MATCH"
+	setScoreboard(court, string.format("%s\nSTARTS IN %d", label, math.ceil(court.countdownEnds - os.clock())))
 	publish(court)
 end
 
@@ -471,6 +549,9 @@ Basketball.scored.connect(function(ball, hoop, shot)
 	court.score[team] += points
 
 	local gameOver = court.overtime or court.score[team] >= G.TARGET_SCORE
+	if gameOver and court.match then
+		court.match.decided = true
+	end
 	local callout
 	if gameOver then
 		callout = "GAME WINNER!"
@@ -587,7 +668,7 @@ local function setupCourt(model: Model)
 				PlayerData.onNotify:Fire(player, "EVENT IN PROGRESS", "The rack is closed during the contest.")
 				return
 			end
-			if playerGame[player] or court.state == "Playing" then
+			if playerGame[player] or court.state == "Playing" or court.state == "Reserved" then
 				PlayerData.onNotify:Fire(player, "GAME IN PROGRESS", "Free play balls come back when the game ends.")
 				return
 			end
@@ -623,6 +704,8 @@ local function setupCourt(model: Model)
 				updateIdle(court)
 			elseif court.state == "Playing" then
 				updatePlaying(court)
+			elseif court.state == "Reserved" then
+				updateReserved(court)
 			end
 			-- tidy up practice balls nobody has touched for a while
 			for ball in court.freeBalls do
@@ -652,6 +735,82 @@ function CourtGames.start()
 		end
 	end)
 	Players.PlayerRemoving:Connect(leaveGame)
+end
+
+-- True when a court can host a scheduled match right now: set up, no event,
+-- no pickup game or countdown, nobody standing on the team pads.
+function CourtGames.isFree(model: Model): boolean
+	local court = courtOfModel(model)
+	if not court or court.state ~= "Idle" or court.match or model:GetAttribute("Event") then
+		return false
+	end
+	for _, player in Players:GetPlayers() do
+		local r = rootOf(player)
+		if r and (onPad(court.pads.Home, r) or onPad(court.pads.Away, r)) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Runs a scheduled match (Ranked). `home`/`away` are 1-3 players each, all on
+-- no other court. opts: { label: string?, ranked: boolean?, countdown: number?,
+-- onEnded: ((result) -> ())? } where result = { winner: "Home" | "Away" | nil,
+-- score = {Home, Away}, forfeit, duration (seconds), home, away (rosters at the
+-- start), leavers (left before the result was decided), points ({[Player]: n}), court }.
+-- The court is "Reserved" (State attribute) during the countdown; pickup rewards
+-- are not paid for these games and nobody else can join until it ends.
+function CourtGames.startMatch(model: Model, home: { Player }, away: { Player }, opts: any?): (boolean, string?)
+	opts = opts or {}
+	local court = courtOfModel(model)
+	if not court then
+		return false, "That court isn't set up."
+	end
+	if not CourtGames.isFree(model) then
+		return false, "That court is busy."
+	end
+	if #home < 1 or #away < 1 or #home > G.MAX_TEAM_SIZE or #away > G.MAX_TEAM_SIZE then
+		return false, "Teams need 1 to " .. G.MAX_TEAM_SIZE .. " players."
+	end
+	local seen = {}
+	for _, list in { home, away } do
+		for _, p in list do
+			if typeof(p) ~= "Instance" or not p:IsA("Player") or not p.Parent or seen[p] or playerGame[p] then
+				return false, "A player is unavailable."
+			end
+			seen[p] = true
+		end
+	end
+	clearFreeBalls(court)
+	court.match = {
+		label = if type(opts.label) == "string" then opts.label else (#home .. "v" .. #away),
+		ranked = opts.ranked == true,
+		home = table.clone(home),
+		away = table.clone(away),
+		leavers = {},
+		decided = false,
+		over = false,
+		onEnded = if type(opts.onEnded) == "function" then opts.onEnded else nil,
+	}
+	court.teams = { Home = table.clone(home), Away = table.clone(away) }
+	court.score = { Home = 0, Away = 0 }
+	court.overtime = false
+	court.state = "Reserved"
+	court.startedAt = os.clock()
+	court.countdownEnds = os.clock() + (if type(opts.countdown) == "number" then math.clamp(opts.countdown, 0, 30) else G.COUNTDOWN)
+	for team, list in court.teams do
+		for _, p in list do
+			playerGame[p] = { court = court, team = team }
+			p:SetAttribute("InGame", court.name)
+			p:SetAttribute("Team", team)
+			local held = Basketball.heldBall(p)
+			if held then
+				Basketball.destroy(held)
+			end
+		end
+	end
+	publish(court)
+	return true
 end
 
 function CourtGames.gameOf(player: Player): string?
