@@ -1126,6 +1126,163 @@ Config.Game = {
 
 return Config
 ]=====])
+put(folder, 'ModuleScript', 'CrewBattlesConfig', [=====[
+-- CITY GRIND: crew battles (section 62). Tuning shared by server and client.
+-- A crew leader or officer challenges another crew to one format; the other
+-- crew's leader / officer accepts inside the accept window; the battle runs
+-- for the format's window and scores come from what crew members really do.
+
+local CrewBattlesConfig = {}
+
+export type Format = {
+	id: string,
+	label: string,
+	icon: string,
+	color: Color3,
+	minutes: number,
+	unit: string,
+	desc: string,
+}
+
+CrewBattlesConfig.FORMATS = {
+	{
+		id = "Basketball",
+		label = "Basketball",
+		icon = "🏀",
+		color = Color3.fromRGB(255, 140, 40),
+		minutes = 20,
+		unit = "pts",
+		desc = "Points your crew scores in games against the other crew (same court) + 5 per game won anywhere.",
+	},
+	{
+		id = "Racing",
+		label = "Racing",
+		icon = "🏎️",
+		color = Color3.fromRGB(255, 80, 60),
+		minutes = 20,
+		unit = "pts",
+		desc = "Race finishes: 1st 10 · 2nd 7 · 3rd 5 · other 3, +2 for each rival crew member beaten in the same race.",
+	},
+	{
+		id = "Running",
+		label = "Running",
+		icon = "🏃",
+		color = Color3.fromRGB(80, 220, 200),
+		minutes = 15,
+		unit = "pts",
+		desc = "1 pt per 10 studs run on foot, +100 per Neighborhood route run, +300 per City 5K finish.",
+	},
+	{
+		id = "TreasureHunt",
+		label = "Treasure Hunt",
+		icon = "💎",
+		color = Color3.fromRGB(90, 200, 255),
+		minutes = 30,
+		unit = "pts",
+		desc = "100 pts per cache your crew finds in Treasure Hunt events during the battle.",
+	},
+	{
+		id = "CityChallenge",
+		label = "City Challenge",
+		icon = "🏙️",
+		color = Color3.fromRGB(200, 100, 255),
+		minutes = 30,
+		unit = "",
+		desc = "Crew-wide total of one city metric for 30 minutes.",
+	},
+}
+
+CrewBattlesConfig.BY_ID = {} :: { [string]: Format }
+for _, f in CrewBattlesConfig.FORMATS do
+	CrewBattlesConfig.BY_ID[f.id] = f
+end
+
+-- City Challenge metrics.
+CrewBattlesConfig.METRICS = {
+	{ id = "jobs", label = "Job shifts", icon = "💼", unit = "shifts", desc = "Job shifts completed." },
+	{ id = "distance", label = "Distance run", icon = "👟", unit = "studs", desc = "Studs covered on foot." },
+	{ id = "buckets", label = "Buckets", icon = "🎯", unit = "pts", desc = "Basketball points scored on any court." },
+}
+CrewBattlesConfig.METRIC_BY_ID = {} :: { [string]: any }
+for _, m in CrewBattlesConfig.METRICS do
+	CrewBattlesConfig.METRIC_BY_ID[m.id] = m
+end
+
+CrewBattlesConfig.ACCEPT_SECONDS = 120 -- challenge expires if not accepted
+CrewBattlesConfig.COUNTDOWN_SECONDS = 30 -- after accepting, before scoring starts
+CrewBattlesConfig.FINALIZE_GRACE = 20 -- seconds after the end for other servers' last scores (they broadcast every 10 s)
+CrewBattlesConfig.CHALLENGE_COOLDOWN = 60 -- per issuing player
+CrewBattlesConfig.SCORE_BROADCAST_SECONDS = 10 -- cross-server score updates
+
+-- Rating (Elo-like)
+CrewBattlesConfig.START_RATING = 1000
+CrewBattlesConfig.K = 32
+
+-- Anti-farming: only this many rated battles per pair of crews per 24 h (later ones are
+-- unrated: no rating change, cup points or rewards), and each player collects battle
+-- rewards at most this many times per UTC day. A battle where one side scored nothing
+-- is also unrated (uncontested).
+CrewBattlesConfig.PAIR_RATED_PER_DAY = 2
+CrewBattlesConfig.DAILY_REWARDED_BATTLES = 5
+
+-- Rewards for members of either crew who scored in a rated battle
+CrewBattlesConfig.WIN_REWARD = { cash = 1500, xp = 300, rep = 25, crewRep = 40 }
+CrewBattlesConfig.DRAW_REWARD = { cash = 600, xp = 150, rep = 10, crewRep = 15 }
+CrewBattlesConfig.LOSS_REWARD = { cash = 250, xp = 80, rep = 0, crewRep = 5 } -- only if they scored
+
+-- Weekly City Crew Cup: points per battle result, top crews rewarded the next week.
+CrewBattlesConfig.CUP_POINTS = { win = 3, draw = 1 }
+CrewBattlesConfig.CUP_REWARDS = {
+	{ cash = 10000, xp = 2000, rep = 100 },
+	{ cash = 6000, xp = 1200, rep = 60 },
+	{ cash = 3500, xp = 800, rep = 40 },
+}
+-- Weeks start Monday 00:00 UTC (1970-01-05 was a Monday).
+CrewBattlesConfig.WEEK_EPOCH = 4 * 86400
+
+function CrewBattlesConfig.week(t: number): number
+	return math.floor((t - CrewBattlesConfig.WEEK_EPOCH) / 604800)
+end
+
+function CrewBattlesConfig.weekEnds(week: number): number
+	return CrewBattlesConfig.WEEK_EPOCH + (week + 1) * 604800
+end
+
+-- Elo expected score of A against B.
+function CrewBattlesConfig.expected(ra: number, rb: number): number
+	return 1 / (1 + 10 ^ ((rb - ra) / 400))
+end
+
+function CrewBattlesConfig.formatName(formatId: string, metric: string?): string
+	local f = CrewBattlesConfig.BY_ID[formatId]
+	if not f then
+		return formatId
+	end
+	if formatId == "CityChallenge" and metric then
+		local m = CrewBattlesConfig.METRIC_BY_ID[metric]
+		if m then
+			return f.label .. ": " .. m.label
+		end
+	end
+	return f.label
+end
+
+function CrewBattlesConfig.unit(formatId: string, metric: string?): string
+	if formatId == "CityChallenge" and metric then
+		local m = CrewBattlesConfig.METRIC_BY_ID[metric]
+		return m and m.unit or ""
+	end
+	local f = CrewBattlesConfig.BY_ID[formatId]
+	return f and f.unit or ""
+end
+
+function CrewBattlesConfig.clock(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	return string.format("%d:%02d", seconds // 60, seconds % 60)
+end
+
+return CrewBattlesConfig
+]=====])
 put(folder, 'ModuleScript', 'CrewsConfig', [=====[
 -- CITY GRIND: crew tuning (sections 60, 61, 62), shared by server and client.
 
@@ -2395,6 +2552,126 @@ JobsConfig.JOB_CENTER = Vector3.new(-40, 0, -48)
 
 return JobsConfig
 ]=====])
+put(folder, 'ModuleScript', 'LeaderboardsConfig', [=====[
+-- CITY GRIND: leaderboard definitions shared by server and client (section 98).
+-- Every board is an OrderedDataStore "CityGrind_LB_<statId>_v1"; the season
+-- boards add "_S<season number>". Fastest times are lower-is-better and are
+-- stored as whole centiseconds (OrderedDataStores only hold integers).
+
+local LeaderboardsConfig = {}
+
+export type Stat = {
+	id: string,
+	label: string,
+	short: string,
+	icon: string,
+	color: Color3,
+	lowerBetter: boolean, -- fastest times
+	format: string, -- "number" | "cash" | "time"
+	rule: string, -- "latest" (value can fall, e.g. cash) | "best" (max / min kept)
+	seasonal: boolean, -- also has a "This season" board
+	crew: boolean?, -- keyed by crew id instead of a player
+}
+
+local function S(id, label, short, icon, color, format, rule, seasonal, lowerBetter, crew): Stat
+	return { id = id, label = label, short = short, icon = icon, color = color, format = format, rule = rule, seasonal = seasonal, lowerBetter = lowerBetter == true, crew = crew }
+end
+
+-- Order = tab order in the phone app.
+LeaderboardsConfig.STATS = {
+	S("level", "Level", "LEVEL", "⭐", Color3.fromRGB(90, 170, 255), "number", "best", false),
+	S("cash", "Cash", "CASH", "💵", Color3.fromRGB(110, 230, 120), "cash", "latest", false),
+	S("reputation", "Reputation", "REP", "🔥", Color3.fromRGB(255, 120, 60), "number", "best", false),
+	S("fame", "Fame", "FAME", "📸", Color3.fromRGB(255, 90, 200), "number", "best", false),
+	S("rating", "Hoops Rating", "RATING", "🏆", Color3.fromRGB(255, 200, 60), "number", "best", true),
+	S("wins", "Wins", "WINS", "🏀", Color3.fromRGB(255, 150, 40), "number", "best", true),
+	S("points", "Points", "POINTS", "🎯", Color3.fromRGB(240, 90, 90), "number", "best", false),
+	S("fastest5k", "Fastest 5K", "5K", "🏃", Color3.fromRGB(80, 220, 200), "time", "best", false, true),
+	S("fastestRace", "Fastest Lap Race", "RACE", "🏎️", Color3.fromRGB(255, 80, 60), "time", "best", true, true),
+	S("crewRating", "Crew Rating", "CREWS", "🛡️", Color3.fromRGB(200, 100, 255), "number", "latest", false, false, true),
+}
+
+LeaderboardsConfig.BY_ID = {} :: { [string]: Stat }
+for _, s in LeaderboardsConfig.STATS do
+	LeaderboardsConfig.BY_ID[s.id] = s
+end
+
+LeaderboardsConfig.TOP_N = 50 -- entries cached / shown per board
+LeaderboardsConfig.ARCHIVE_N = 100 -- entries kept per archived season board
+LeaderboardsConfig.WRITE_COOLDOWN = 60 -- seconds between writes for one player on one board
+LeaderboardsConfig.REFRESH_SECONDS = 120 -- global top lists re-read this often
+LeaderboardsConfig.POLL_SECONDS = 30 -- server re-reads player attributes / saves this often
+LeaderboardsConfig.BUDGET_RESERVE = 6 -- leave this many requests of each budget for other systems
+LeaderboardsConfig.ARCHIVES_KEPT = 20 -- archived seasons listed
+
+-- World boards: top N shown, seconds per category.
+LeaderboardsConfig.WORLD_ROWS = 8
+LeaderboardsConfig.WORLD_ROTATE_SECONDS = 12
+-- Categories each world board cycles through.
+LeaderboardsConfig.WORLD_BOARDS = {
+	Court = { title = "NEIGHBORHOOD COURT", stats = { "rating", "wins", "points", "crewRating" } },
+	Grandstand = { title = "CITY SPEEDWAY", stats = { "fastestRace", "fastest5k", "crewRating", "level" } },
+}
+
+function LeaderboardsConfig.formatTime(seconds: number): string
+	if seconds <= 0 then
+		return "--"
+	end
+	local m = math.floor(seconds / 60)
+	local s = seconds - m * 60
+	return string.format("%d:%05.2f", m, s)
+end
+
+local function commas(n: number): string
+	local s = tostring(math.floor(math.abs(n)))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return (if n < 0 then "-" else "") .. formatted
+end
+
+-- A display string for a value on a board.
+function LeaderboardsConfig.format(statId: string, value: number): string
+	local s = LeaderboardsConfig.BY_ID[statId]
+	if not s then
+		return tostring(value)
+	elseif s.format == "time" then
+		return LeaderboardsConfig.formatTime(value)
+	elseif s.format == "cash" then
+		return "$" .. commas(value)
+	end
+	return commas(value)
+end
+
+-- Encoding for the OrderedDataStore (integers only).
+function LeaderboardsConfig.encode(statId: string, value: number): number
+	local s = LeaderboardsConfig.BY_ID[statId]
+	if s and s.format == "time" then
+		return math.floor(value * 100 + 0.5)
+	end
+	return math.floor(value)
+end
+
+function LeaderboardsConfig.decode(statId: string, stored: number): number
+	local s = LeaderboardsConfig.BY_ID[statId]
+	if s and s.format == "time" then
+		return stored / 100
+	end
+	return stored
+end
+
+-- True when `a` is a better value than `b` on this board.
+function LeaderboardsConfig.better(statId: string, a: number, b: number): boolean
+	local s = LeaderboardsConfig.BY_ID[statId]
+	if s and s.lowerBetter then
+		return a > 0 and (b <= 0 or a < b)
+	end
+	return a > b
+end
+
+return LeaderboardsConfig
+]=====])
 put(folder, 'ModuleScript', 'MediaConfig', [=====[
 -- CITY GRIND: tuning for the Camera, Gallery and CityGram (sections 27, 28, 30-33, 59).
 -- Shared by server and client so both agree on limits, filters and poses.
@@ -2962,6 +3239,24 @@ QuestsConfig.ACHIEVEMENTS = {
 	A("collect_all", "Master Collector", "Find every collectible in the city.", "🏆", "Platinum", nil, nil, 10000, 3000, "Master Collector"),
 	A("secret_first", "Off the Map", "Discover a secret place.", "🗝️", "Bronze", nil, nil, 200, 100),
 	A("secret_all", "City Secrets", "Discover every secret place.", "🕳️", "Gold", nil, nil, 5000, 1500, "Urban Explorer"),
+	A("ranked_first_win", "Ranked Debut", "Win your first ranked game.", "🏆", "Bronze", nil, nil, 300, 150),
+	A("ranked_placed", "Placed", "Finish your ranked placement games.", "📋", "Bronze", nil, nil, 500, 250),
+	A("ranked_streak_5", "Heat Check", "Win 5 ranked games in a row.", "🔥", "Silver", nil, nil, 1500, 600, "Heat Check"),
+	A("ranked_gold", "Gold Standard", "Reach Gold in ranked.", "🥇", "Silver", nil, nil, 2000, 800),
+	A("ranked_diamond", "Diamond Hooper", "Reach Diamond in ranked.", "💎", "Gold", nil, nil, 8000, 2500, "Diamond Hooper"),
+	A("ranked_legend", "City Legend", "Reach Legend in ranked.", "👑", "Platinum", nil, nil, 25000, 8000, "City Legend"),
+	A("ranked_season_reward", "Season Veteran", "Earn a ranked season reward.", "🎖️", "Silver", nil, nil, 1000, 500),
+	A("race_first", "Green Light", "Finish your first race.", "🏁", "Bronze", nil, nil, 200, 100),
+	A("race_win", "Checkered Flag", "Win a race at the City Speedway.", "🏆", "Silver", nil, nil, 1000, 400),
+	A("race_wins_10", "Speedway King", "Win 10 speedway races.", "👑", "Gold", nil, nil, 6000, 2000, "Speed King"),
+	A("street_king", "Street King", "Win a street race.", "🛣️", "Silver", nil, nil, 800, 300),
+	A("trial_gold", "Golden Lap", "Earn gold in the time trial.", "🥇", "Gold", nil, nil, 3000, 1000, "Gold Driver"),
+	A("crew_battle_win", "Crew Victory", "Win a crew battle with your crew.", "⚔️", "Bronze", nil, nil, 500, 200),
+	A("crew_battle_10", "Crew Warlord", "Win 10 crew battles.", "🛡️", "Gold", nil, nil, 5000, 1500, "Warlord"),
+	A("crew_battle_mvp", "Battle MVP", "Be the top scorer of a crew battle.", "🌟", "Silver", nil, nil, 1500, 500),
+	A("crew_cup_champion", "Cup Champions", "Win the weekly City Crew Cup with your crew.", "🏆", "Platinum", nil, nil, 10000, 3000, "Cup Champion"),
+	A("lb_top10", "Top 10", "Reach the top 10 of any global leaderboard.", "📈", "Gold", nil, nil, 3000, 1000),
+	A("lb_number1", "Number One", "Hold #1 on any global leaderboard.", "👑", "Platinum", nil, nil, 10000, 3000, "Number One"),
 	A("story_done", "Rise to the Top", "Finish the City Grind story.", "🏙️", "Platinum", nil, nil, 25000, 5000, "Top of the City"),
 } :: { Achievement }
 
@@ -2995,6 +3290,375 @@ function QuestsConfig.loginCash(base: number, level: number): number
 end
 
 return QuestsConfig
+]=====])
+put(folder, 'ModuleScript', 'RacingConfig', [=====[
+-- CITY GRIND: racing tuning (spec sections 58, 62, 98).
+-- Lives in ReplicatedStorage.CityGrind.RacingConfig; read by server/Racing and
+-- client/Racing. Circuit races and time trials use the City Speedway in
+-- Industrial (start line tagged "RaceStart", checkpoints with attribute Index,
+-- built by Districts). Street races follow the ROUTES below: ordered points
+-- on real roads (the server raycasts every point at startup, snaps it to the
+-- road surface and disables a route whose points or segments are blocked).
+
+local RacingConfig = {}
+
+RacingConfig.TRACK_NAME = "City Speedway"
+RacingConfig.LAPS = 3 -- circuit races and time trials (same distance, so times compare)
+RacingConfig.MIN_RACERS = 2
+RacingConfig.MAX_RACERS = 8
+RacingConfig.LOBBY_RANGE = 90 -- lobby members must stay this close to the start line
+RacingConfig.TRACK_RANGE = 350 -- a time trial can be started this close to the start line
+RacingConfig.LOBBY_WAIT = 20 -- seconds from the 2nd racer joining to the grid
+RacingConfig.LOBBY_FULL_WAIT = 5 -- once the lobby is full
+RacingConfig.COUNTDOWN = 5 -- grid countdown (circuit + street)
+RacingConfig.TRIAL_COUNTDOWN = 3
+RacingConfig.DNF_AFTER_WINNER = 30 -- circuit: seconds the rest get after the winner finishes
+RacingConfig.STREET_DNF_AFTER_WINNER = 20
+RacingConfig.CIRCUIT_MAX_SECONDS = 420
+RacingConfig.TRIAL_MAX_SECONDS = 300
+RacingConfig.OFF_VEHICLE_GRACE = 6 -- seconds out of your car before a DNF
+
+-- Anti-cheat: flat speed between two 10 Hz samples may not exceed
+-- topSpeed * SPEED_FACTOR + SPEED_MARGIN (studs/s); STRIKES samples in a row
+-- (decaying) disqualify, and a single jump over JUMP_STUDS is a teleport.
+RacingConfig.TICK = 0.1
+RacingConfig.SPEED_FACTOR = 1.3
+RacingConfig.SPEED_MARGIN = 15
+RacingConfig.STRIKES = 4
+RacingConfig.JUMP_STUDS = 60
+
+-- Street race challenges
+RacingConfig.CHALLENGE_RANGE = 150 -- both drivers this close to each other
+RacingConfig.CHALLENGE_SECONDS = 15
+RacingConfig.CHALLENGE_COOLDOWN = 8
+
+-- Rewards. A race pays full rewards with 5+ starters; fewer starters pay
+-- FIELD_BASE + FIELD_STEP per extra racer. After REWARD_CAP rewarded races in
+-- an hour, races pay XP only (halved) so alt-farming isn't worth it.
+RacingConfig.CIRCUIT_REWARDS = {
+	{ cash = 1000, xp = 300, rep = 40 },
+	{ cash = 600, xp = 200, rep = 25 },
+	{ cash = 400, xp = 140, rep = 15 },
+}
+RacingConfig.CIRCUIT_REWARD_REST = { cash = 200, xp = 80, rep = 6 }
+RacingConfig.STREET_REWARDS = {
+	{ cash = 500, xp = 150, rep = 20 },
+}
+RacingConfig.STREET_REWARD_REST = { cash = 120, xp = 50, rep = 4 }
+RacingConfig.TRIAL_XP = 40
+RacingConfig.FIELD_BASE = 0.4
+RacingConfig.FIELD_STEP = 0.15
+RacingConfig.REWARD_CAP = 10
+
+-- Time trial medals for LAPS laps (one-time bonus when first earned).
+-- Rough guide: Stinger GT / Apex X1 for gold, Viper 600 for silver, a hatch or SUV for bronze.
+RacingConfig.MEDALS = {
+	{ id = 3, name = "Gold", icon = "🥇", time = 35, cash = 1500, xp = 500, color = Color3.fromRGB(255, 205, 60) },
+	{ id = 2, name = "Silver", icon = "🥈", time = 46, cash = 700, xp = 250, color = Color3.fromRGB(200, 205, 215) },
+	{ id = 1, name = "Bronze", icon = "🥉", time = 60, cash = 300, xp = 120, color = Color3.fromRGB(205, 130, 70) },
+}
+
+function RacingConfig.medalFor(seconds: number): number
+	for _, m in RacingConfig.MEDALS do
+		if seconds <= m.time then
+			return m.id
+		end
+	end
+	return 0
+end
+
+function RacingConfig.medalInfo(id: number): { id: number, name: string, icon: string, time: number, cash: number, xp: number, color: Color3 }?
+	for _, m in RacingConfig.MEDALS do
+		if m.id == id then
+			return m
+		end
+	end
+	return nil
+end
+
+-- Street race routes. Points are road-centre / lane positions (y is snapped to
+-- the road by the server). Right-hand lanes: 8 studs off the road centre line.
+-- Roads: main road z = 0 (x -760..900), cross road x = 0 (z -730..330),
+-- Downtown avenue z = -480 (x -360..300) up the ramp to Luxury Drive
+-- (x -730..-420, y 14), Industrial service road x = 312 (z -430..-24) from the
+-- race paddock lot (x 300..400, z -530..-430).
+local V = Vector3.new
+RacingConfig.ROUTES = {
+	{
+		id = "main_street",
+		name = "Main Street Sprint",
+		blurb = "Old Town cobbles to the Industrial docks, flat out along the main road.",
+		points = { V(-700, 0, 8), V(-500, 0, 8), V(-300, 0, 8), V(-100, 0, 8), V(100, 0, 8), V(300, 0, 8), V(500, 0, 8), V(760, 0, 8) },
+	},
+	{
+		id = "crosstown",
+		name = "Crosstown Drag",
+		blurb = "From the beach straight up the cross road, through the Neighborhood, into Downtown.",
+		points = { V(8, 0, 300), V(8, 0, 150), V(8, 0, 0), V(8, 0, -150), V(8, 0, -300), V(8, 0, -480), V(8, 0, -600) },
+	},
+	{
+		id = "hill_climb",
+		name = "Hillside Climb",
+		blurb = "West down Downtown's avenue, up the ramp and along Luxury Drive.",
+		points = { V(250, 0, -488), V(100, 0, -488), V(-100, 0, -488), V(-300, 0, -488), V(-365, 0, -488), V(-425, 14, -488), V(-520, 14, -488), V(-620, 14, -488) },
+	},
+	{
+		id = "industrial_loop",
+		name = "Industrial Loop",
+		blurb = "Avenue to the paddock, down the service road, back through the Neighborhood.",
+		points = { V(40, 0, -472), V(180, 0, -472), V(312, 0, -478), V(312, 0, -380), V(312, 0, -200), V(312, 0, 0), V(150, 0, -8), V(0, 0, 0), V(8, 0, -150), V(8, 0, -300), V(8, 0, -440) },
+	},
+}
+
+RacingConfig.ROUTE_BY_ID = {} :: { [string]: any }
+for _, r in RacingConfig.ROUTES do
+	RacingConfig.ROUTE_BY_ID[r.id] = r
+	local len = 0
+	for i = 2, #r.points do
+		len += (r.points[i] - r.points[i - 1]).Magnitude
+	end
+	r.length = len
+end
+
+RacingConfig.STREET_GATE_HALF_WIDTH = 20 -- road is 32 wide; a little slack
+RacingConfig.STREET_PROXIMITY = 14 -- also counts if you pass this close to a point
+
+function RacingConfig.formatTime(seconds: number?): string
+	if not seconds or seconds <= 0 then
+		return "--:--.--"
+	end
+	local m = math.floor(seconds / 60)
+	local s = seconds - m * 60
+	return string.format("%d:%05.2f", m, s)
+end
+
+function RacingConfig.ordinal(n: number): string
+	local suffix = "th"
+	local mod100 = n % 100
+	if mod100 < 11 or mod100 > 13 then
+		local mod10 = n % 10
+		suffix = if mod10 == 1 then "st" elseif mod10 == 2 then "nd" elseif mod10 == 3 then "rd" else "th"
+	end
+	return tostring(n) .. suffix
+end
+
+-- A checkpoint arch (half ring of neon segments) spanning the road, centred on
+-- `ground` (road surface), facing `forward`. Used by the server for street
+-- route rings and by the client for its local next-checkpoint highlight.
+function RacingConfig.buildArch(ground: Vector3, forward: Vector3, halfWidth: number, color: Color3, transparency: number, parent: Instance): Model
+	local model = Instance.new("Model")
+	model.Name = "CheckpointArch"
+	local f = Vector3.new(forward.X, 0, forward.Z)
+	f = if f.Magnitude > 1e-3 then f.Unit else Vector3.xAxis
+	local right = f:Cross(Vector3.yAxis).Unit
+	local segments = 12
+	local r = halfWidth
+	local segLen = math.pi * r / segments + 0.6
+	for i = 0, segments - 1 do
+		local a = (i + 0.5) / segments * math.pi
+		local pos = ground + right * (math.cos(a) * r) + Vector3.yAxis * (math.sin(a) * r * 0.75)
+		local tangent = (-right * math.sin(a) + Vector3.yAxis * math.cos(a) * 0.75).Unit
+		local p = Instance.new("Part")
+		p.Name = "Segment"
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Material = Enum.Material.Neon
+		p.Color = color
+		p.Transparency = transparency
+		p.Size = Vector3.new(0.9, segLen, 0.9)
+		p.CFrame = CFrame.fromMatrix(pos, f, tangent)
+		p.Parent = model
+	end
+	model.Parent = parent
+	return model
+end
+
+return RacingConfig
+]=====])
+put(folder, 'ModuleScript', 'RankedConfig', [=====[
+-- CITY GRIND: ranked basketball and seasons tuning (spec 54, 55).
+-- Shared so the phone app renders tiers, rewards and the season clock from the
+-- same numbers the server uses. The server decides every result.
+
+local RankedConfig = {}
+
+---------------------------------------------------------------------------
+-- Entry requirements
+---------------------------------------------------------------------------
+RankedConfig.MIN_LEVEL = 5
+-- "Hooper rating": the average of the basketball stats below (each 1-99).
+RankedConfig.MIN_HOOPER_RATING = 8
+RankedConfig.HOOPER_STATS = { "Shooting", "BallHandling", "Passing", "Defense", "Finishing", "Vertical", "Speed" }
+
+RankedConfig.MODES = { "1v1", "2v2" }
+RankedConfig.TEAM_SIZE = { ["1v1"] = 1, ["2v2"] = 2 }
+
+---------------------------------------------------------------------------
+-- Rating (Elo with a games-played K factor: "Glicko-lite")
+---------------------------------------------------------------------------
+RankedConfig.START_RATING = 1000
+RankedConfig.PLACEMENTS = 5 -- first ranked games of each season
+RankedConfig.K_PLACEMENT = 56
+RankedConfig.K_NEW = 32 -- until K_NEW_GAMES rated games in the season
+RankedConfig.K_NEW_GAMES = 30
+RankedConfig.K = 24
+RankedConfig.MIN_CHANGE = 2 -- a rated win/loss always moves at least this much
+RankedConfig.MARGIN_BONUS = 0.25 -- up to +25% K for an 11-0 style blowout
+RankedConfig.STREAK_FROM = 3 -- win streaks of 3+ give a bonus...
+RankedConfig.STREAK_BONUS = 2 -- ...of this many points per extra win...
+RankedConfig.STREAK_BONUS_MAX = 10 -- ...capped here
+RankedConfig.LEAVER_EXTRA = 10 -- extra points lost for quitting a ranked game
+RankedConfig.MIN_RATING = 0
+
+-- Match validity / anti-boosting
+RankedConfig.MIN_SECONDS = 60 -- shorter games are "no contest" (no rating change)
+RankedConfig.MIN_POINTS = 5 -- total points needed for the game to count
+RankedConfig.MAX_SAME_OPPONENT_PER_DAY = 3 -- rated games vs the same player per UTC day
+
+-- Match rewards (on top of rating)
+RankedConfig.WIN_CASH = 150
+RankedConfig.WIN_XP = 160
+RankedConfig.WIN_REP = 20
+RankedConfig.LOSS_CASH = 40
+RankedConfig.LOSS_XP = 60
+RankedConfig.LOSS_REP = 4
+
+---------------------------------------------------------------------------
+-- Matchmaking
+---------------------------------------------------------------------------
+RankedConfig.WINDOW_START = 100 -- rating difference allowed right away
+RankedConfig.WINDOW_GROWTH = 25 -- widened by this every WINDOW_STEP seconds queued
+RankedConfig.WINDOW_STEP = 5
+RankedConfig.WINDOW_MAX = 700
+RankedConfig.MATCH_COUNTDOWN = 6 -- seconds on court before tip-off
+RankedConfig.FOUND_DELAY = 4 -- seconds between "match found" and the summon
+-- Courts tried first (Model names); any other public court comes after.
+RankedConfig.PREFERRED_COURTS = { "GrandArena", "NeighborhoodCourt", "OldTownCourt", "BeachCourt" }
+
+---------------------------------------------------------------------------
+-- Tiers (floor rating; divisions III -> I inside each tier, Legend has none)
+---------------------------------------------------------------------------
+RankedConfig.TIERS = {
+	{ name = "Bronze", floor = -math.huge, base = 700, color = Color3.fromRGB(205, 127, 50), icon = "🥉" },
+	{ name = "Silver", floor = 900, color = Color3.fromRGB(200, 205, 215), icon = "🥈" },
+	{ name = "Gold", floor = 1100, color = Color3.fromRGB(255, 200, 60), icon = "🥇" },
+	{ name = "Platinum", floor = 1300, color = Color3.fromRGB(110, 225, 210), icon = "💠" },
+	{ name = "Diamond", floor = 1500, color = Color3.fromRGB(120, 180, 255), icon = "💎" },
+	{ name = "Elite", floor = 1700, color = Color3.fromRGB(200, 110, 255), icon = "🔮" },
+	{ name = "Legend", floor = 1900, color = Color3.fromRGB(255, 90, 90), icon = "👑" },
+}
+RankedConfig.TIER_INDEX = {}
+for i, t in RankedConfig.TIERS do
+	RankedConfig.TIER_INDEX[t.name] = i
+end
+RankedConfig.UNRANKED_COLOR = Color3.fromRGB(150, 150, 165)
+local DIVISIONS = { "III", "II", "I" }
+
+export type TierInfo = {
+	tier: string,
+	division: string?, -- "III" | "II" | "I" | nil (Legend)
+	label: string, -- "Gold II"
+	color: Color3,
+	icon: string,
+	index: number,
+	progress: number, -- 0-1 toward the next division / tier
+	nextAt: number?, -- rating of the next step (nil at Legend)
+}
+
+function RankedConfig.tierOf(rating: number): TierInfo
+	local index = 1
+	for i, t in RankedConfig.TIERS do
+		if rating >= t.floor then
+			index = i
+		end
+	end
+	local t = RankedConfig.TIERS[index]
+	local nextTier = RankedConfig.TIERS[index + 1]
+	if not nextTier then
+		return { tier = t.name, division = nil, label = t.name, color = t.color, icon = t.icon, index = index, progress = 1, nextAt = nil }
+	end
+	local low = if t.floor == -math.huge then (t.base or 700) else t.floor
+	local span = (nextTier.floor - low) / 3
+	local step = math.clamp(math.floor((rating - low) / span), 0, 2)
+	local stepLow = low + step * span
+	local progress = math.clamp((rating - stepLow) / span, 0, 1)
+	local division = DIVISIONS[step + 1]
+	return {
+		tier = t.name,
+		division = division,
+		label = t.name .. " " .. division,
+		color = t.color,
+		icon = t.icon,
+		index = index,
+		progress = progress,
+		nextAt = math.floor(stepLow + span + 0.5),
+	}
+end
+
+function RankedConfig.tierColor(name: string?): Color3
+	local i = name and RankedConfig.TIER_INDEX[name]
+	return if i then RankedConfig.TIERS[i].color else RankedConfig.UNRANKED_COLOR
+end
+
+---------------------------------------------------------------------------
+-- Seasons: a fixed schedule from an epoch, so every server agrees.
+---------------------------------------------------------------------------
+RankedConfig.SEASON_EPOCH = 1790812800 -- 2026-10-01 00:00:00 UTC
+RankedConfig.SEASON_WEEKS = 10
+RankedConfig.SEASON_LENGTH = RankedConfig.SEASON_WEEKS * 7 * 86400
+RankedConfig.SOFT_RESET = 0.5 -- new rating = 1000 + (old - 1000) * this
+
+export type Season = { id: string, number: number, name: string, startsAt: number, endsAt: number }
+
+function RankedConfig.seasonNumber(t: number): number
+	return math.max(1, math.floor((t - RankedConfig.SEASON_EPOCH) / RankedConfig.SEASON_LENGTH) + 1)
+end
+
+function RankedConfig.seasonByNumber(n: number): Season
+	local startsAt = RankedConfig.SEASON_EPOCH + (n - 1) * RankedConfig.SEASON_LENGTH
+	return { id = "S" .. n, number = n, name = "Season " .. n, startsAt = startsAt, endsAt = startsAt + RankedConfig.SEASON_LENGTH }
+end
+
+function RankedConfig.seasonAt(t: number): Season
+	return RankedConfig.seasonByNumber(RankedConfig.seasonNumber(t))
+end
+
+function RankedConfig.seasonNumberOfId(id: any): number?
+	if type(id) ~= "string" then
+		return nil
+	end
+	local n = tonumber(id:match("^S(%d+)$"))
+	return n
+end
+
+---------------------------------------------------------------------------
+-- Season rewards by final tier (placements must be finished)
+---------------------------------------------------------------------------
+-- badge = the exclusive season badge (a coloured tag over your head and on your
+-- profile) for high ranks. item = a Threads wardrobe item id granted when the
+-- shop catalog defines it (see the Ranked report for the ShopsConfig patch).
+RankedConfig.REWARDS = {
+	Bronze = { cash = 500, xp = 250 },
+	Silver = { cash = 1200, xp = 500 },
+	Gold = { cash = 2500, xp = 1000 },
+	Platinum = { cash = 5000, xp = 2000, badge = true },
+	Diamond = { cash = 10000, xp = 4000, badge = true, item = "ranked_diamond_jacket" },
+	Elite = { cash = 20000, xp = 7000, badge = true, item = "ranked_elite_jacket" },
+	Legend = { cash = 40000, xp = 12000, badge = true, item = "ranked_legend_jacket" },
+}
+
+-- "S1 Diamond"
+function RankedConfig.seasonTitle(seasonId: string, tier: string): string
+	return seasonId .. " " .. tier
+end
+
+RankedConfig.HISTORY_LIMIT = 10 -- matches kept for the phone
+RankedConfig.SEASON_HISTORY_LIMIT = 20
+
+return RankedConfig
 ]=====])
 put(folder, 'ModuleScript', 'Replay', [=====[
 -- CITY GRIND: replay clips (spec 23, 24, 34). A clip is compact replay data, never video:
@@ -7374,7 +8038,7 @@ CourtGames.start()
 ---------------------------------------------------------------------------
 -- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -15201,6 +15865,11 @@ put(server, 'ModuleScript', 'CourtGames', [=====[
 -- players (1v1, 2v2 or 3v3) a countdown starts. First to 11 wins, or whoever
 -- leads after 6 minutes (tied games go to next basket). Between games the
 -- ball rack gives out free-play balls.
+--
+-- Other systems (Ranked) can run a scheduled match on a court with
+-- CourtGames.startMatch(model, home, away, opts): the court is "Reserved" for a
+-- short countdown (nobody else can join from the pads), then plays by the same
+-- rules. Pickup rewards are skipped and opts.onEnded(result) gets the outcome.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -15234,6 +15903,19 @@ type Court = {
 	freeBalls: { [Basketball.Ball]: boolean },
 	points: { [Player]: number },
 	awaySince: { [Player]: number },
+	match: Match?, -- set while a scheduled (ranked) match owns the court
+}
+-- A scheduled match (CourtGames.startMatch). `leavers` lists players who left
+-- before the result was decided; `decided` flips when the winning bucket drops.
+type Match = {
+	label: string,
+	ranked: boolean,
+	home: { Player },
+	away: { Player },
+	leavers: { Player },
+	decided: boolean,
+	over: boolean,
+	onEnded: ((result: any) -> ())?,
 }
 
 local courts: { Court } = {}
@@ -15288,7 +15970,8 @@ local function publish(court: Court)
 	m:SetAttribute("Overtime", court.overtime)
 	local timeLeft = if court.state == "Playing" then math.max(0, G.TIME_LIMIT - (os.clock() - court.startedAt)) else 0
 	m:SetAttribute("TimeLeft", math.floor(timeLeft))
-	m:SetAttribute("Countdown", if court.state == "Countdown" then math.max(0, math.ceil(court.countdownEnds - os.clock())) else 0)
+	m:SetAttribute("Countdown", if court.state == "Countdown" or court.state == "Reserved" then math.max(0, math.ceil(court.countdownEnds - os.clock())) else 0)
+	m:SetAttribute("Ranked", if court.match then court.match.ranked else nil)
 end
 
 local function inBounds(court: Court, position: Vector3, margin: number): boolean
@@ -15382,6 +16065,10 @@ local function leaveGame(player: Player)
 		return
 	end
 	playerGame[player] = nil
+	local match = entry.court.match
+	if match and not match.over and not match.decided and not table.find(match.leavers, player) then
+		table.insert(match.leavers, player)
+	end
 	local list = entry.court.teams[entry.team]
 	local i = table.find(list, player)
 	if i then
@@ -15398,7 +16085,22 @@ local function leaveGame(player: Player)
 end
 
 local function endGame(court: Court, winner: Team?, forfeit: boolean)
+	local match = court.match
+	if match then
+		match.over = true
+	end
 	court.state = "Ended"
+	-- Scheduled first, so the court always reopens even if a payout below errors.
+	task.delay(6, function()
+		if court.state == "Ended" then
+			court.match = nil
+			court.state = "Idle"
+			court.score = { Home = 0, Away = 0 }
+			court.overtime = false
+			setScoreboard(court, "OPEN COURT")
+			publish(court)
+		end
+	end)
 	local duration = os.clock() - court.startedAt
 	local total = court.score.Home + court.score.Away
 	local eligible = not forfeit and duration >= G.MIN_SECONDS_FOR_REWARDS and total >= G.MIN_POINTS_FOR_REWARDS
@@ -15408,6 +16110,12 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 	for _, team in { "Home", "Away" } :: { Team } do
 		for _, player in table.clone(court.teams[team]) do
 			local won = team == winner
+			if match then
+				-- Scheduled matches pay out through their owner (onEnded), not pickup rewards.
+				Basketball.announce({ player }, if won then "YOU WIN!" else "GOOD GAME")
+				leaveGame(player)
+				continue
+			end
 			if eligible then
 				if won then
 					PlayerData.addCash(player, math.floor(G.WIN_CASH * sizeBonus), "Won a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
@@ -15435,15 +16143,26 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 	local result = if winner then string.upper(winner) .. " WINS" else "GAME OVER"
 	setScoreboard(court, string.format("%s\n%d - %d", result, court.score.Home, court.score.Away))
 	publish(court)
-	task.delay(6, function()
-		if court.state == "Ended" then
-			court.state = "Idle"
-			court.score = { Home = 0, Away = 0 }
-			court.overtime = false
-			setScoreboard(court, "OPEN COURT")
-			publish(court)
-		end
-	end)
+	if match and match.onEnded then
+		local outcome = {
+			winner = winner,
+			score = { Home = court.score.Home, Away = court.score.Away },
+			forfeit = forfeit,
+			duration = duration,
+			home = match.home,
+			away = match.away,
+			leavers = match.leavers,
+			points = table.clone(court.points),
+			court = court.model,
+		}
+		local onEnded = match.onEnded
+		task.spawn(function()
+			local ok, err = pcall(onEnded, outcome)
+			if not ok then
+				warn("[CityGrind] Match result handler failed:", err)
+			end
+		end)
+	end
 end
 
 local function startGame(court: Court, home: { Player }, away: { Player })
@@ -15477,6 +16196,15 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 			player:SetAttribute("InGame", court.name)
 			player:SetAttribute("Team", team)
 			local pos = court.center + Vector3.new((i - (#list + 1) / 2) * 7, 3.5, zSide)
+			local humanoid = court.match and player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.SeatPart then
+				-- a summoned ranked player who sat in a car: unweld first so the car isn't dragged along
+				local weld = humanoid.SeatPart:FindFirstChild("SeatWeld")
+				if weld then
+					weld:Destroy()
+				end
+				humanoid.Sit = false
+			end
 			if player.Character then
 				player.Character:PivotTo(CFrame.lookAt(pos, pos + facing))
 			end
@@ -15490,6 +16218,9 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 	local first: Team = if math.random() < 0.5 then "Home" else "Away"
 	giveTo(court, first)
 	local mode = #home .. "v" .. #away
+	if court.match then
+		mode = court.match.label
+	end
 	Basketball.announce(gamePlayers(court), mode .. "  ·  FIRST TO " .. G.TARGET_SCORE)
 	publish(court)
 end
@@ -15597,12 +16328,33 @@ local function updatePlaying(court: Court)
 	setScoreboard(
 		court,
 		string.format(
-			"HOME %d - %d AWAY\n%s",
+			if court.match then "RANKED %d - %d\n%s" else "HOME %d - %d AWAY\n%s",
 			court.score.Home,
 			court.score.Away,
 			if court.overtime then "NEXT BUCKET WINS" else string.format("%d:%02d", timeLeft // 60, timeLeft % 60)
 		)
 	)
+	publish(court)
+end
+
+-- A scheduled match's countdown: the teams are on court, nobody else can join.
+local function updateReserved(court: Court)
+	for _, player in gamePlayers(court) do
+		if not player.Parent then
+			leaveGame(player)
+		end
+	end
+	if #court.teams.Home == 0 or #court.teams.Away == 0 then
+		local winner: Team? = if #court.teams.Home > 0 then "Home" elseif #court.teams.Away > 0 then "Away" else nil
+		endGame(court, winner, true)
+		return
+	end
+	if os.clock() >= court.countdownEnds then
+		startGame(court, court.teams.Home, court.teams.Away)
+		return
+	end
+	local label = if court.match then court.match.label else "MATCH"
+	setScoreboard(court, string.format("%s\nSTARTS IN %d", label, math.ceil(court.countdownEnds - os.clock())))
 	publish(court)
 end
 
@@ -15669,6 +16421,9 @@ Basketball.scored.connect(function(ball, hoop, shot)
 	court.score[team] += points
 
 	local gameOver = court.overtime or court.score[team] >= G.TARGET_SCORE
+	if gameOver and court.match then
+		court.match.decided = true
+	end
 	local callout
 	if gameOver then
 		callout = "GAME WINNER!"
@@ -15785,7 +16540,7 @@ local function setupCourt(model: Model)
 				PlayerData.onNotify:Fire(player, "EVENT IN PROGRESS", "The rack is closed during the contest.")
 				return
 			end
-			if playerGame[player] or court.state == "Playing" then
+			if playerGame[player] or court.state == "Playing" or court.state == "Reserved" then
 				PlayerData.onNotify:Fire(player, "GAME IN PROGRESS", "Free play balls come back when the game ends.")
 				return
 			end
@@ -15817,10 +16572,19 @@ local function setupCourt(model: Model)
 
 	task.spawn(function()
 		while model.Parent do
-			if court.state == "Idle" or court.state == "Countdown" then
-				updateIdle(court)
-			elseif court.state == "Playing" then
-				updatePlaying(court)
+			-- pcall: one bad tick must never kill the court's loop (a stuck court
+			-- would also hold a ranked match forever).
+			local ok, err = pcall(function()
+				if court.state == "Idle" or court.state == "Countdown" then
+					updateIdle(court)
+				elseif court.state == "Playing" then
+					updatePlaying(court)
+				elseif court.state == "Reserved" then
+					updateReserved(court)
+				end
+			end)
+			if not ok then
+				warn("[CityGrind] Court update failed at " .. court.name .. ":", err)
 			end
 			-- tidy up practice balls nobody has touched for a while
 			for ball in court.freeBalls do
@@ -15852,12 +16616,1739 @@ function CourtGames.start()
 	Players.PlayerRemoving:Connect(leaveGame)
 end
 
+-- True when a court can host a scheduled match right now: set up, no event,
+-- no pickup game or countdown, nobody standing on the team pads.
+function CourtGames.isFree(model: Model): boolean
+	local court = courtOfModel(model)
+	if not court or court.state ~= "Idle" or court.match or model:GetAttribute("Event") then
+		return false
+	end
+	for _, player in Players:GetPlayers() do
+		local r = rootOf(player)
+		if r and (onPad(court.pads.Home, r) or onPad(court.pads.Away, r)) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Runs a scheduled match (Ranked). `home`/`away` are 1-3 players each, all on
+-- no other court. opts: { label: string?, ranked: boolean?, countdown: number?,
+-- onEnded: ((result) -> ())? } where result = { winner: "Home" | "Away" | nil,
+-- score = {Home, Away}, forfeit, duration (seconds), home, away (rosters at the
+-- start), leavers (left before the result was decided), points ({[Player]: n}), court }.
+-- The court is "Reserved" (State attribute) during the countdown; pickup rewards
+-- are not paid for these games and nobody else can join until it ends.
+function CourtGames.startMatch(model: Model, home: { Player }, away: { Player }, opts: any?): (boolean, string?)
+	opts = opts or {}
+	local court = courtOfModel(model)
+	if not court then
+		return false, "That court isn't set up."
+	end
+	if not CourtGames.isFree(model) then
+		return false, "That court is busy."
+	end
+	if #home < 1 or #away < 1 or #home > G.MAX_TEAM_SIZE or #away > G.MAX_TEAM_SIZE then
+		return false, "Teams need 1 to " .. G.MAX_TEAM_SIZE .. " players."
+	end
+	local seen = {}
+	for _, list in { home, away } do
+		for _, p in list do
+			if typeof(p) ~= "Instance" or not p:IsA("Player") or not p.Parent or seen[p] or playerGame[p] then
+				return false, "A player is unavailable."
+			end
+			seen[p] = true
+		end
+	end
+	clearFreeBalls(court)
+	court.match = {
+		label = if type(opts.label) == "string" then opts.label else (#home .. "v" .. #away),
+		ranked = opts.ranked == true,
+		home = table.clone(home),
+		away = table.clone(away),
+		leavers = {},
+		decided = false,
+		over = false,
+		onEnded = if type(opts.onEnded) == "function" then opts.onEnded else nil,
+	}
+	court.teams = { Home = table.clone(home), Away = table.clone(away) }
+	court.score = { Home = 0, Away = 0 }
+	court.overtime = false
+	court.state = "Reserved"
+	court.startedAt = os.clock()
+	court.countdownEnds = os.clock() + (if type(opts.countdown) == "number" then math.clamp(opts.countdown, 0, 30) else G.COUNTDOWN)
+	for team, list in court.teams do
+		for _, p in list do
+			playerGame[p] = { court = court, team = team }
+			p:SetAttribute("InGame", court.name)
+			p:SetAttribute("Team", team)
+			local held = Basketball.heldBall(p)
+			if held then
+				Basketball.destroy(held)
+			end
+		end
+	end
+	publish(court)
+	return true
+end
+
 function CourtGames.gameOf(player: Player): string?
 	local entry = playerGame[player]
 	return entry and entry.court.name
 end
 
 return CourtGames
+]=====])
+put(server, 'ModuleScript', 'CrewBattles', [=====[
+-- CITY GRIND: crew battles (section 62). Server side.
+--
+-- A crew Leader / Officer challenges another crew to a format (Basketball,
+-- Racing, Running, Treasure Hunt, City Challenge + metric). A Leader / Officer
+-- of the other crew accepts within 2 minutes (on any server: challenges, accepts,
+-- scores and results travel over MessagingService, best effort; without it
+-- battles work between crews on this server). After a 30 s countdown the
+-- battle window runs; every server scores its own online members of both
+-- crews from real activity (see CrewBattlesConfig descriptions) and shares its
+-- totals every 10 s. The challenger's server ("host") finalizes: Elo-like
+-- crew rating change (start 1000, K 32) in DataStore "CityGrind_CrewRating_v1"
+-- (each battle id applied once per crew), Leaderboards.submitCrew, weekly
+-- City Crew Cup points (OrderedDataStore "CityGrind_CrewCup_v1_W<week>"), and
+-- rewards for members who took part. Last week's top 3 cup crews' members who
+-- battled for them that week collect a cup reward on their next visit.
+--
+-- Remotes: CrewBattleRequest (RemoteFunction): (action, args) -> { ok, msg }
+--            actions "Challenge" {target, format, metric?}, "Accept" id, "Decline" id, "Cancel" id
+--          CrewBattleGet (RemoteFunction): () -> snapshot for the phone app
+--          CrewBattleEvent (RemoteEvent, server -> client): ("changed") ("live", chip | nil) ("result", card)
+-- Player attribute: CrewBattle (battle id while their crew is in a countdown / live battle, else nil)
+-- Saved section "crewBattles" = { played, wins, mvps, cupWeeks = { ["<week>"] = crewId }, cupClaimed, rewardDay, rewardCount }
+
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+local MessagingService = game:GetService("MessagingService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local CB = require(shared:WaitForChild("CrewBattlesConfig"))
+
+local CrewBattles = {}
+
+local SERVER_ID = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
+local TOPIC = "CityGrindCrewBattles"
+local IS_STUDIO = RunService:IsStudio()
+
+local CrewBattleRequest = Net.remote("RemoteFunction", "CrewBattleRequest")
+local CrewBattleGet = Net.remote("RemoteFunction", "CrewBattleGet")
+local CrewBattleEvent = Net.remote("RemoteEvent", "CrewBattleEvent")
+
+PlayerData.registerSection("crewBattles", function()
+	return { played = 0, wins = 0, mvps = 0, cupWeeks = {}, cupClaimed = -1, rewardDay = 0, rewardCount = 0 }
+end)
+
+local function now(): number
+	return os.time()
+end
+
+local function optional(name: string): any
+	local m = script.Parent:FindFirstChild(name)
+	if not m then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return if ok then mod else nil
+end
+
+---------------------------------------------------------------------------
+-- Crew helpers
+---------------------------------------------------------------------------
+type Side = { id: string, name: string, tag: string, color: Color3 }
+
+local function crewOf(player: Player): any
+	local Crews = optional("Crews")
+	if not Crews or type(Crews.crewOf) ~= "function" then
+		return nil
+	end
+	local ok, c = pcall(Crews.crewOf, player)
+	return if ok and type(c) == "table" then c else nil
+end
+
+local function isOfficer(c: any): boolean
+	return c ~= nil and (c.role == "Leader" or c.role == "Officer")
+end
+
+local function membersHere(crewId: string): { Player }
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		if p:GetAttribute("CrewId") == crewId then
+			table.insert(list, p)
+		end
+	end
+	return list
+end
+
+local crewNames: { [string]: string } = {}
+
+---------------------------------------------------------------------------
+-- DataStores (ratings, weekly cup)
+---------------------------------------------------------------------------
+local storesOk = true
+local ratingStore: DataStore? = nil
+local cupStores: { [number]: OrderedDataStore } = {}
+
+local function noteFailure(err: any)
+	local msg = tostring(err)
+	if IS_STUDIO or msg:find("403") or msg:find("API") or msg:find("Studio") then
+		if storesOk then
+			warn("[CityGrind] CrewBattles: DataStores unavailable, ratings and the cup are kept for this server only.", msg)
+		end
+		storesOk = false
+	end
+end
+
+do
+	local ok, err = pcall(function()
+		ratingStore = DataStoreService:GetDataStore("CityGrind_CrewRating_v1")
+	end)
+	if not ok then
+		noteFailure(err)
+	end
+end
+
+local function budget(kind: Enum.DataStoreRequestType): boolean
+	local ok, n = pcall(function()
+		return DataStoreService:GetRequestBudgetForRequestType(kind)
+	end)
+	return ok and n > 4
+end
+
+local function cupStore(week: number): OrderedDataStore?
+	if not storesOk then
+		return nil
+	end
+	if cupStores[week] then
+		return cupStores[week]
+	end
+	local ok, result = pcall(function()
+		return DataStoreService:GetOrderedDataStore("CityGrind_CrewCup_v1_W" .. week)
+	end)
+	if not ok then
+		noteFailure(result)
+		return nil
+	end
+	cupStores[week] = result
+	return result
+end
+
+type RatingRec = { rating: number, wins: number, losses: number, draws: number, name: string?, vs: { any }? }
+local ratings: { [string]: RatingRec } = {}
+local ratingLoading: { [string]: boolean } = {}
+local cupMem: { [number]: { [string]: number } } = {} -- week -> crewId -> points (this server's view / fallback)
+
+local function blankRating(): RatingRec
+	return { rating = CB.START_RATING, wins = 0, losses = 0, draws = 0 }
+end
+
+local function submitCrew(crewId: string, rec: RatingRec)
+	local LB = optional("Leaderboards")
+	if LB and type(LB.submitCrew) == "function" then
+		pcall(LB.submitCrew, crewId, crewNames[crewId] or rec.name or "Crew", rec.rating)
+	end
+end
+
+local function loadRating(crewId: string, fresh: boolean?): RatingRec
+	if ratings[crewId] and not fresh then
+		return ratings[crewId]
+	end
+	if ratingStore and storesOk and budget(Enum.DataStoreRequestType.GetAsync) then
+		local ok, result = pcall(function()
+			return (ratingStore :: DataStore):GetAsync("crew_" .. crewId)
+		end)
+		if ok then
+			local rec = blankRating()
+			if type(result) == "table" then
+				rec.rating = tonumber(result.rating) or CB.START_RATING
+				rec.wins = tonumber(result.wins) or 0
+				rec.losses = tonumber(result.losses) or 0
+				rec.draws = tonumber(result.draws) or 0
+				rec.name = if type(result.name) == "string" then result.name else nil
+				rec.vs = if type(result.vs) == "table" then result.vs else nil
+				if rec.name and not crewNames[crewId] then
+					crewNames[crewId] = rec.name
+				end
+			end
+			ratings[crewId] = rec
+			return rec
+		end
+		noteFailure(result)
+	end
+	ratings[crewId] = ratings[crewId] or blankRating()
+	return ratings[crewId]
+end
+
+-- Public: a crew's rating (cached; loads in the background the first time).
+function CrewBattles.ratingOf(crewId: string): number
+	if type(crewId) ~= "string" or crewId == "" then
+		return CB.START_RATING
+	end
+	local rec = ratings[crewId]
+	if rec then
+		return rec.rating
+	end
+	if not ratingLoading[crewId] then
+		ratingLoading[crewId] = true
+		task.spawn(function()
+			local r = loadRating(crewId)
+			ratingLoading[crewId] = nil
+			submitCrew(crewId, r)
+		end)
+	end
+	return CB.START_RATING
+end
+
+-- Applies one battle's result to a crew record once (battle id remembered). Returns the new record.
+local function applyResult(crewId: string, battleId: string, delta: number, outcome: string, opponentId: string): (RatingRec, boolean)
+	local applied = false
+	local function bump(rec: any)
+		rec.rating = math.max(100, math.floor((tonumber(rec.rating) or CB.START_RATING) + delta + 0.5))
+		if outcome == "win" then
+			rec.wins = (tonumber(rec.wins) or 0) + 1
+		elseif outcome == "loss" then
+			rec.losses = (tonumber(rec.losses) or 0) + 1
+		else
+			rec.draws = (tonumber(rec.draws) or 0) + 1
+		end
+	end
+	if ratingStore and storesOk then
+		local ok, result = pcall(function()
+			return (ratingStore :: DataStore):UpdateAsync("crew_" .. crewId, function(old)
+				local rec = if type(old) == "table" then old else { rating = CB.START_RATING, wins = 0, losses = 0, draws = 0 }
+				rec.applied = if type(rec.applied) == "table" then rec.applied else {}
+				if table.find(rec.applied, battleId) then
+					applied = false
+					return nil -- another server already applied this battle
+				end
+				applied = true
+				bump(rec)
+				rec.name = crewNames[crewId] or rec.name
+				table.insert(rec.applied, battleId)
+				while #rec.applied > 30 do
+					table.remove(rec.applied, 1)
+				end
+				-- rated battles of the last 24 h by opponent (anti-farming pair limit)
+				local vs = {}
+				if type(rec.vs) == "table" then
+					for _, e in rec.vs do
+						if type(e) == "table" and type(e.t) == "number" and os.time() - e.t < 86400 then
+							table.insert(vs, e)
+						end
+					end
+				end
+				table.insert(vs, { o = opponentId, t = os.time() })
+				while #vs > 40 do
+					table.remove(vs, 1)
+				end
+				rec.vs = vs
+				return rec
+			end)
+		end)
+		if ok then
+			if type(result) == "table" then
+				local rec = blankRating()
+				rec.rating = tonumber(result.rating) or CB.START_RATING
+				rec.wins = tonumber(result.wins) or 0
+				rec.losses = tonumber(result.losses) or 0
+				rec.draws = tonumber(result.draws) or 0
+				rec.name = result.name
+				rec.vs = if type(result.vs) == "table" then result.vs else nil
+				ratings[crewId] = rec
+			end
+			return ratings[crewId] or blankRating(), applied
+		end
+		noteFailure(result)
+	end
+	-- in memory (Studio / DataStore down)
+	local rec = ratings[crewId] or blankRating()
+	ratings[crewId] = rec
+	bump(rec)
+	return rec, true
+end
+
+local function addCupPoints(crewId: string, points: number)
+	if points <= 0 then
+		return
+	end
+	local week = CB.week(now())
+	cupMem[week] = cupMem[week] or {}
+	cupMem[week][crewId] = (cupMem[week][crewId] or 0) + points
+	local store = cupStore(week)
+	if store then
+		local ok, err = pcall(function()
+			(store :: OrderedDataStore):IncrementAsync(crewId, points)
+		end)
+		if not ok then
+			noteFailure(err)
+		end
+	end
+end
+
+-- Cup standings cache: week -> { {id, points} } (best first)
+local cupTop: { [number]: { { id: string, points: number } } } = {}
+local cupReadAt: { [number]: number } = {}
+local cupFromStore: { [number]: boolean } = {}
+
+-- Returns the standings and whether they came from the DataStore (false = this server's view only).
+local function readCup(week: number, count: number): ({ { id: string, points: number } }, boolean)
+	if os.clock() - (cupReadAt[week] or -math.huge) < 120 and cupTop[week] then
+		return cupTop[week], cupFromStore[week] == true
+	end
+	local list = nil
+	local fromStore = false
+	local store = cupStore(week)
+	if store and budget(Enum.DataStoreRequestType.GetSortedAsync) then
+		local ok, page = pcall(function()
+			return (store :: OrderedDataStore):GetSortedAsync(false, count, 1):GetCurrentPage()
+		end)
+		if ok then
+			list = {}
+			fromStore = true
+			for _, item in page do
+				table.insert(list, { id = tostring(item.key), points = tonumber(item.value) or 0 })
+			end
+		else
+			noteFailure(page)
+		end
+	end
+	if not list then
+		list = {}
+		local mem: { [string]: number } = cupMem[week] or {}
+		for id, pts in mem do
+			table.insert(list, { id = id, points = pts })
+		end
+		table.sort(list, function(a, b)
+			return a.points > b.points
+		end)
+	end
+	-- merge this server's freshest view (the store may lag)
+	local byId = {}
+	for _, e in list do
+		byId[e.id] = e
+	end
+	local memNow: { [string]: number } = cupMem[week] or {}
+	for id, pts in memNow do
+		if not byId[id] then
+			byId[id] = { id = id, points = pts }
+			table.insert(list, byId[id])
+		elseif byId[id].points < pts then
+			byId[id].points = pts
+		end
+	end
+	table.sort(list, function(a, b)
+		return a.points > b.points
+	end)
+	cupTop[week] = list
+	cupFromStore[week] = fromStore
+	-- a failed read is retried sooner than a good one
+	cupReadAt[week] = if fromStore or not storesOk then os.clock() else os.clock() - 90
+	-- names for crews we haven't seen
+	for i, e in list do
+		if i > count then
+			break
+		end
+		if not crewNames[e.id] then
+			loadRating(e.id)
+		end
+	end
+	return list, fromStore
+end
+
+---------------------------------------------------------------------------
+-- Battles
+---------------------------------------------------------------------------
+type Top = { u: number, n: string, c: string, v: number }
+type Battle = {
+	id: string,
+	format: string,
+	metric: string?,
+	a: Side,
+	b: Side,
+	by: string,
+	host: string,
+	state: string, -- pending | countdown | live | ending | done
+	createdAt: number,
+	acceptBy: number,
+	startsAt: number?,
+	endsAt: number?,
+	scores: { [string]: { [string]: number } }, -- crewId -> serverId -> score
+	tops: { [string]: Top }, -- serverId -> best local contributor
+	contrib: { [number]: { name: string, crewId: string, score: number } }, -- this server's players
+	lastSent: string,
+	sentFinal: boolean,
+	result: any?,
+	rewarded: { [number]: boolean },
+	doneAt: number?,
+	finalizing: boolean?,
+}
+
+local battles: { [string]: Battle } = {}
+local history: { any } = {} -- recent results (newest first)
+local raceLog: { [string]: { { crewId: string, place: number, userId: number, at: number } } } = {}
+
+local function isActive(b: Battle): boolean
+	return b.state == "pending" or b.state == "countdown" or b.state == "live" or b.state == "ending"
+end
+
+local function activeBattleOf(crewId: string): Battle?
+	for _, b in battles do
+		if isActive(b) and (b.a.id == crewId or b.b.id == crewId) then
+			return b
+		end
+	end
+	return nil
+end
+
+local function liveBattleOf(crewId: string): Battle?
+	local b = activeBattleOf(crewId)
+	if b and b.state == "live" then
+		return b
+	end
+	return nil
+end
+
+local function total(b: Battle, crewId: string): number
+	local sum = 0
+	local per: { [string]: number } = b.scores[crewId] or {}
+	for _, v in per do
+		sum += v
+	end
+	return sum
+end
+
+local function otherSide(b: Battle, crewId: string): Side
+	return if b.a.id == crewId then b.b else b.a
+end
+
+local function audience(b: Battle): { Player }
+	local list = membersHere(b.a.id)
+	for _, p in membersHere(b.b.id) do
+		table.insert(list, p)
+	end
+	return list
+end
+
+local function notifyCrew(crewId: string, title: string, body: string)
+	for _, p in membersHere(crewId) do
+		Net.notify(p, title, body)
+	end
+end
+
+local function changed(b: Battle?)
+	local list = if b then audience(b) else Players:GetPlayers()
+	for _, p in list do
+		CrewBattleEvent:FireClient(p, "changed")
+	end
+end
+
+local function publish(msg: any)
+	msg.s = SERVER_ID
+	task.spawn(function()
+		local ok, err = pcall(function()
+			MessagingService:PublishAsync(TOPIC, msg)
+		end)
+		if not ok and not IS_STUDIO then
+			warn("[CityGrind] CrewBattles publish failed:", err)
+		end
+	end)
+end
+
+local function sideMsg(s: Side): any
+	return { id = s.id, n = s.name, t = s.tag, c = s.color:ToHex() }
+end
+
+local function sideFrom(m: any): Side?
+	if type(m) ~= "table" or type(m.id) ~= "string" or type(m.n) ~= "string" then
+		return nil
+	end
+	local ok, color = pcall(Color3.fromHex, tostring(m.c))
+	return { id = m.id, name = m.n, tag = if type(m.t) == "string" then m.t else "", color = if ok then color else Color3.fromRGB(200, 100, 255) }
+end
+
+local function newBattle(id: string, format: string, metric: string?, a: Side, b: Side, by: string, host: string, acceptBy: number): Battle
+	local battle: Battle = {
+		id = id,
+		format = format,
+		metric = metric,
+		a = a,
+		b = b,
+		by = by,
+		host = host,
+		state = "pending",
+		createdAt = now(),
+		acceptBy = acceptBy,
+		startsAt = nil,
+		endsAt = nil,
+		scores = { [a.id] = {}, [b.id] = {} },
+		tops = {},
+		contrib = {},
+		lastSent = "",
+		sentFinal = false,
+		result = nil,
+		rewarded = {},
+		doneAt = nil,
+		finalizing = false,
+	}
+	crewNames[a.id] = a.name
+	crewNames[b.id] = b.name
+	battles[id] = battle
+	return battle
+end
+
+local function setBattleAttr(b: Battle)
+	local active = b.state == "countdown" or b.state == "live" or b.state == "ending"
+	for _, p in audience(b) do
+		p:SetAttribute("CrewBattle", if active then b.id else nil)
+	end
+end
+
+local function accepted(b: Battle, startsAt: number)
+	if b.state == "pending" then
+		b.state = "countdown"
+		b.startsAt = startsAt
+		b.endsAt = startsAt + CB.BY_ID[b.format].minutes * 60
+	elseif b.state == "countdown" and b.startsAt and startsAt < b.startsAt then
+		-- two officers accepted on different servers: the earliest start wins everywhere
+		b.startsAt = startsAt
+		b.endsAt = startsAt + CB.BY_ID[b.format].minutes * 60
+	else
+		return
+	end
+	local fmt = CB.formatName(b.format, b.metric)
+	notifyCrew(b.a.id, "BATTLE ACCEPTED", string.format("%s accepted your %s battle. Starts in %d s!", b.b.name, fmt, math.max(0, startsAt - now())))
+	notifyCrew(b.b.id, "CREW BATTLE ON", string.format("%s vs %s · %s starts in %d s!", b.a.name, b.b.name, fmt, math.max(0, startsAt - now())))
+	setBattleAttr(b)
+	changed(b)
+end
+
+---------------------------------------------------------------------------
+-- Per-player tracking while their crew is live
+---------------------------------------------------------------------------
+type Tracker = {
+	battleId: string,
+	crewId: string,
+	carried: number, -- score from before a rejoin
+	wins: number,
+	shifts: number,
+	runs: number,
+	best5k: number,
+	caches: number,
+	distance: number,
+	lastPos: Vector3?,
+	h2h: number, -- basketball points vs the rival crew
+	buckets: number, -- basketball points anywhere
+	race: number, -- racing points
+	fiveK: number, -- City 5K finishes
+}
+local trackers: { [Player]: Tracker } = {}
+local runHooked = false
+
+local function attrNum(p: Player, name: string): number
+	local v = p:GetAttribute(name)
+	return if type(v) == "number" then v else 0
+end
+
+local function shiftsOf(p: Player): number
+	local sum = 0
+	for name, v in p:GetAttributes() do
+		if type(v) == "number" and name:sub(1, 10) == "JobShifts_" then
+			sum += v
+		end
+	end
+	return sum
+end
+
+local function eventsSec(p: Player): any
+	return PlayerData.section(p, "events")
+end
+
+local function runsOf(p: Player): number
+	local d = PlayerData.get(p)
+	return if d and type(d.runsCompleted) == "number" then d.runsCompleted else 0
+end
+
+local function newTracker(p: Player, b: Battle, crewId: string): Tracker
+	local ev = eventsSec(p)
+	local prev = b.contrib[p.UserId]
+	return {
+		battleId = b.id,
+		crewId = crewId,
+		carried = if prev and prev.crewId == crewId then prev.score else 0,
+		wins = attrNum(p, "Wins"),
+		shifts = shiftsOf(p),
+		runs = runsOf(p),
+		best5k = if ev and type(ev.best5k) == "number" then ev.best5k else 0,
+		caches = if ev and type(ev.caches) == "number" then ev.caches else 0,
+		distance = 0,
+		lastPos = nil,
+		h2h = 0,
+		buckets = 0,
+		race = 0,
+		fiveK = 0,
+	}
+end
+
+local function trackerFor(p: Player): (Tracker?, Battle?)
+	local t = trackers[p]
+	if not t then
+		return nil, nil
+	end
+	local b = battles[t.battleId]
+	if not b or b.state ~= "live" then
+		return nil, nil
+	end
+	return t, b
+end
+
+-- The player's score in their battle from the tracker.
+local function scoreOf(p: Player, t: Tracker, b: Battle): number
+	local s = 0
+	if b.format == "Basketball" then
+		s = t.h2h + 5 * math.max(0, attrNum(p, "Wins") - t.wins)
+	elseif b.format == "Racing" then
+		s = t.race
+	elseif b.format == "Running" then
+		local five = t.fiveK
+		if not runHooked then
+			-- without the Events hook a new City 5K personal best is the proof of a finish
+			local ev = eventsSec(p)
+			local best = if ev and type(ev.best5k) == "number" then ev.best5k else 0
+			if best > 0 and (t.best5k == 0 or best < t.best5k) then
+				five = math.max(five, 1)
+			end
+		end
+		s = math.floor(t.distance / 10) + 100 * math.max(0, runsOf(p) - t.runs) + 300 * five
+	elseif b.format == "TreasureHunt" then
+		local ev = eventsSec(p)
+		local caches = if ev and type(ev.caches) == "number" then ev.caches else 0
+		s = 100 * math.max(0, caches - t.caches)
+	elseif b.format == "CityChallenge" then
+		if b.metric == "jobs" then
+			s = math.max(0, shiftsOf(p) - t.shifts)
+		elseif b.metric == "distance" then
+			s = math.floor(t.distance)
+		elseif b.metric == "buckets" then
+			s = t.buckets
+		end
+	end
+	return t.carried + s
+end
+
+local function onFoot(p: Player): boolean
+	local character = p.Character
+	local hum = character and character:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 or hum.SeatPart ~= nil then
+		return false
+	end
+	local driving = p:GetAttribute("Driving")
+	if type(driving) == "string" and driving ~= "" then
+		return false
+	end
+	return hum.FloorMaterial ~= Enum.Material.Air
+end
+
+local function trackTick(dt: number)
+	for _, p in Players:GetPlayers() do
+		local crewId = p:GetAttribute("CrewId")
+		local b = if type(crewId) == "string" and crewId ~= "" then liveBattleOf(crewId) else nil
+		local t = trackers[p]
+		if not b then
+			if t then
+				trackers[p] = nil
+			end
+			continue
+		end
+		local battle: Battle = b
+		if not t or t.battleId ~= battle.id or t.crewId ~= crewId then
+			t = newTracker(p, battle, crewId :: string)
+			trackers[p] = t
+		end
+		local tr: Tracker = t :: Tracker
+		-- distance on foot (server-side positions; teleports / vehicles don't count)
+		local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			local pos = root.Position
+			if tr.lastPos then
+				local d = Vector3.new(pos.X - tr.lastPos.X, 0, pos.Z - tr.lastPos.Z).Magnitude
+				if onFoot(p) and d < 40 * math.max(dt, 0.1) then
+					tr.distance += d
+				end
+			end
+			tr.lastPos = pos
+		end
+		local score = scoreOf(p, tr, battle)
+		battle.contrib[p.UserId] = { name = p.DisplayName, crewId = crewId :: string, score = score }
+	end
+	-- local totals per battle
+	for _, b in battles do
+		if b.state ~= "live" and b.state ~= "ending" then
+			continue
+		end
+		local sa, sb = 0, 0
+		local best: Top? = nil
+		for uid, c in b.contrib do
+			if c.crewId == b.a.id then
+				sa += c.score
+			elseif c.crewId == b.b.id then
+				sb += c.score
+			end
+			if c.score > 0 and (not best or c.score > best.v) then
+				best = { u = uid, n = c.name, c = c.crewId, v = c.score }
+			end
+		end
+		b.scores[b.a.id][SERVER_ID] = sa
+		b.scores[b.b.id][SERVER_ID] = sb
+		b.tops[SERVER_ID] = best :: any
+	end
+end
+
+-- Basketball: points vs the rival crew on the same court, and buckets anywhere.
+local function onScored(_ball: any, _hoop: any, shot: any)
+	if type(shot) ~= "table" or typeof(shot.shooter) ~= "Instance" or not shot.shooter:IsA("Player") then
+		return
+	end
+	local p: Player = shot.shooter
+	local pts = tonumber(shot.points) or 0
+	if pts <= 0 then
+		return
+	end
+	local t, b = trackerFor(p)
+	if not t or not b then
+		return
+	end
+	t.buckets += pts
+	if b.format == "Basketball" then
+		local CourtGames = optional("CourtGames")
+		if not CourtGames or type(CourtGames.gameOf) ~= "function" then
+			return
+		end
+		local ok, court = pcall(CourtGames.gameOf, p)
+		if not ok or not court then
+			return
+		end
+		local rival = otherSide(b, t.crewId)
+		for _, q in membersHere(rival.id) do
+			local ok2, c2 = pcall(CourtGames.gameOf, q)
+			if ok2 and c2 == court then
+				t.h2h += pts
+				return
+			end
+		end
+	end
+end
+
+local function onRaceFinished(p: any, place: any, _time: any, kind: any, raceId: any)
+	-- solo time trials always report place 1: they don't count
+	if kind == "trial" or typeof(p) ~= "Instance" or not p:IsA("Player") or type(place) ~= "number" then
+		return
+	end
+	local t, b = trackerFor(p)
+	if not t or not b or b.format ~= "Racing" then
+		return
+	end
+	t.race += if place == 1 then 10 elseif place == 2 then 7 elseif place == 3 then 5 else 3
+	local key = tostring(raceId)
+	local log = raceLog[key]
+	if not log then
+		log = {}
+		raceLog[key] = log
+	end
+	local rival = otherSide(b, t.crewId).id
+	for _, e in log do
+		if e.crewId == rival then
+			if place < e.place then
+				t.race += 2
+			else
+				local q = Players:GetPlayerByUserId(e.userId)
+				local qt = q and trackers[q]
+				if qt and qt.battleId == b.id then
+					qt.race += 2
+				end
+			end
+		end
+	end
+	table.insert(log, { crewId = t.crewId, place = place, userId = p.UserId, at = os.clock() })
+end
+
+local function onRunFinished(p: any)
+	if typeof(p) ~= "Instance" or not p:IsA("Player") then
+		return
+	end
+	local t, b = trackerFor(p)
+	if t and b and b.format == "Running" then
+		t.fiveK += 1
+	end
+end
+
+local hooked = { basketball = false, racing = false }
+local function hookSignals()
+	if not hooked.basketball then
+		local Basketball = optional("Basketball")
+		if Basketball and type(Basketball.scored) == "table" and type(Basketball.scored.connect) == "function" then
+			hooked.basketball = true
+			Basketball.scored.connect(onScored)
+		end
+	end
+	if not hooked.racing then
+		local Racing = optional("Racing")
+		if Racing and typeof(Racing.raceFinished) == "Instance" and Racing.raceFinished:IsA("BindableEvent") then
+			hooked.racing = true
+			Racing.raceFinished.Event:Connect(onRaceFinished)
+		end
+	end
+	if not runHooked then
+		local Events = optional("Events")
+		if Events and typeof(Events.runFinished) == "Instance" and Events.runFinished:IsA("BindableEvent") then
+			runHooked = true
+			Events.runFinished.Event:Connect(onRunFinished)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Results
+---------------------------------------------------------------------------
+local function sectionOf(p: Player): any
+	return PlayerData.section(p, "crewBattles")
+end
+
+local function unlock(p: Player, id: string)
+	local Quests = optional("Quests")
+	if Quests and type(Quests.unlock) == "function" then
+		pcall(Quests.unlock, p, id)
+	end
+end
+
+local function give(p: Player, reward: any, label: string)
+	if reward.cash and reward.cash > 0 then
+		PlayerData.addCash(p, reward.cash, label)
+	end
+	if reward.xp and reward.xp > 0 then
+		PlayerData.addXP(p, reward.xp)
+	end
+	if reward.rep and reward.rep > 0 then
+		PlayerData.addReputation(p, reward.rep)
+	end
+end
+
+local function rewardText(reward: any): string
+	local parts = {}
+	if reward.cash and reward.cash > 0 then
+		table.insert(parts, "$" .. reward.cash)
+	end
+	if reward.xp and reward.xp > 0 then
+		table.insert(parts, reward.xp .. " XP")
+	end
+	if reward.rep and reward.rep > 0 then
+		table.insert(parts, reward.rep .. " rep")
+	end
+	return table.concat(parts, " · ")
+end
+
+-- Every server runs this once per battle when the result is known.
+local function handleResult(b: Battle, r: any)
+	if b.state == "done" then
+		return
+	end
+	b.state = "done"
+	b.result = r
+	b.doneAt = now()
+	setBattleAttr(b)
+	for p, t in trackers do
+		if t.battleId == b.id then
+			trackers[p] = nil
+		end
+	end
+	table.insert(history, 1, r)
+	while #history > 15 do
+		table.remove(history)
+	end
+	local Crews = optional("Crews")
+	local week = CB.week(r.at or now())
+	for _, p in audience(b) do
+		local crewId = p:GetAttribute("CrewId") :: string
+		local mine = b.contrib[p.UserId]
+		-- only members who actually scored for this crew take part (no AFK rewards, no carried
+		-- score from the rival crew after switching sides)
+		local took = mine ~= nil and mine.crewId == crewId and mine.score > 0
+		local outcome = if r.winner == nil then (if r.noContest then "none" else "draw") elseif r.winner == crewId then "win" else "loss"
+		local rated = outcome ~= "none" and r.unrated == nil
+		local reward = nil
+		local note: string? = nil
+		if r.unrated == "uncontested" then
+			note = "Uncontested (one crew scored nothing): unrated, no rewards."
+		elseif r.unrated == "repeat" then
+			note = "These crews already battled today: unrated, no rewards."
+		end
+		if took and not b.rewarded[p.UserId] then
+			b.rewarded[p.UserId] = true
+			local sec = sectionOf(p)
+			if rated and sec then
+				if outcome == "win" then
+					reward = CB.WIN_REWARD
+				elseif outcome == "draw" then
+					reward = CB.DRAW_REWARD
+				elseif outcome == "loss" then
+					reward = CB.LOSS_REWARD
+				end
+				-- daily cap on paid battles per player
+				local day = math.floor(now() / 86400)
+				if sec.rewardDay ~= day then
+					sec.rewardDay = day
+					sec.rewardCount = 0
+				end
+				if reward and (tonumber(sec.rewardCount) or 0) >= CB.DAILY_REWARDED_BATTLES then
+					reward = nil
+					note = "Daily crew battle reward limit reached."
+				elseif reward then
+					sec.rewardCount = (tonumber(sec.rewardCount) or 0) + 1
+				end
+				sec.played += 1
+				if outcome == "win" then
+					sec.wins += 1
+				end
+				if r.mvp and r.mvp.u == p.UserId then
+					sec.mvps += 1
+				end
+				-- cup eligibility: battled for this crew this week
+				sec.cupWeeks[tostring(week)] = crewId
+				local keys = {}
+				for k in sec.cupWeeks do
+					table.insert(keys, tonumber(k) or 0)
+				end
+				table.sort(keys)
+				while #keys > 3 do
+					sec.cupWeeks[tostring(table.remove(keys, 1))] = nil
+				end
+				PlayerData.markChanged(p)
+			end
+			if reward then
+				give(p, reward, "Crew battle vs " .. otherSide(b, crewId).name)
+				if Crews and type(Crews.addCrewRep) == "function" and reward.crewRep > 0 then
+					pcall(Crews.addCrewRep, p, reward.crewRep)
+				end
+			end
+			if rated then
+				if outcome == "win" then
+					unlock(p, "crew_battle_win")
+					if sec and sec.wins >= 10 then
+						unlock(p, "crew_battle_10")
+					end
+				end
+				if r.mvp and r.mvp.u == p.UserId then
+					unlock(p, "crew_battle_mvp")
+				end
+			end
+		end
+		local mySide = if r.a.id == crewId then r.a else r.b
+		local theirSide = if r.a.id == crewId then r.b else r.a
+		CrewBattleEvent:FireClient(p, "result", {
+			id = r.id,
+			formatName = r.formatName,
+			icon = r.icon,
+			unit = r.unit,
+			outcome = outcome,
+			mine = { name = mySide.name, tag = mySide.tag, score = mySide.score, delta = mySide.delta, rating = mySide.rating },
+			theirs = { name = theirSide.name, tag = theirSide.tag, score = theirSide.score, delta = theirSide.delta, rating = theirSide.rating },
+			mvp = r.mvp and { name = r.mvp.n, score = r.mvp.v } or nil,
+			myScore = if mine then mine.score else 0,
+			reward = if reward then rewardText(reward) else nil,
+			note = note,
+		})
+		local headline = if outcome == "win" then "CREW BATTLE WON!" elseif outcome == "loss" then "CREW BATTLE LOST" elseif outcome == "draw" then "CREW BATTLE DRAW" else "CREW BATTLE OVER"
+		Net.notify(p, headline, string.format("%s %d – %d %s · %s", mySide.name, mySide.score, theirSide.score, theirSide.name, r.formatName))
+		CrewBattleEvent:FireClient(p, "live", nil)
+	end
+	changed(nil)
+end
+
+-- Rated battles between two crews in the last 24 h (saved records + this server's memory).
+local pairMem: { [string]: { number } } = {}
+
+local function pairKey(x: string, y: string): string
+	return if x < y then x .. "|" .. y else y .. "|" .. x
+end
+
+local function recentVs(rec: RatingRec?, opponentId: string): number
+	local n = 0
+	if rec and type(rec.vs) == "table" then
+		for _, e in rec.vs do
+			if type(e) == "table" and e.o == opponentId and type(e.t) == "number" and os.time() - e.t < 86400 then
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
+local function pairCount(aId: string, bId: string, recA: RatingRec?, recB: RatingRec?): number
+	local mem = 0
+	local times: { number } = pairMem[pairKey(aId, bId)] or {}
+	for _, t in times do
+		if os.time() - t < 86400 then
+			mem += 1
+		end
+	end
+	return math.max(mem, recentVs(recA, bId), recentVs(recB, aId))
+end
+
+-- Host (or fallback) decides the result and applies ratings / cup once.
+local function finalize(b: Battle)
+	if b.state == "done" or b.finalizing then
+		return
+	end
+	b.finalizing = true
+	task.spawn(function()
+		local ok, err = pcall(function()
+			local sa, sb = total(b, b.a.id), total(b, b.b.id)
+			local winner: string? = if sa > sb then b.a.id elseif sb > sa then b.b.id else nil
+			local noContest = sa == 0 and sb == 0
+			local loadedA = loadRating(b.a.id, true)
+			local loadedB = loadRating(b.b.id, true)
+			local ra, rb = loadedA.rating, loadedB.rating
+			local da, db = 0, 0
+			local recA, recB = ratings[b.a.id] or blankRating(), ratings[b.b.id] or blankRating()
+			-- anti-farming: a battle one side never played, or one pair of crews battling over
+			-- and over (alt crews), changes no rating, gives no cup points and pays no rewards
+			local unrated: string? = nil
+			if not noContest and (sa == 0 or sb == 0) then
+				unrated = "uncontested"
+			elseif not noContest and pairCount(b.a.id, b.b.id, loadedA, loadedB) >= CB.PAIR_RATED_PER_DAY then
+				unrated = "repeat"
+			end
+			if not noContest and not unrated then
+				local pk = pairKey(b.a.id, b.b.id)
+				pairMem[pk] = pairMem[pk] or {}
+				table.insert(pairMem[pk], os.time())
+				local scoreA = if winner == b.a.id then 1 elseif winner == nil then 0.5 else 0
+				local ea = CB.expected(ra, rb)
+				da = math.floor(CB.K * (scoreA - ea) + 0.5)
+				db = -da
+				local okA
+				recA, okA = applyResult(b.a.id, b.id, da, if scoreA == 1 then "win" elseif scoreA == 0 then "loss" else "draw", b.b.id)
+				local okB
+				recB, okB = applyResult(b.b.id, b.id, db, if scoreA == 0 then "win" elseif scoreA == 1 then "loss" else "draw", b.a.id)
+				if okA then
+					addCupPoints(b.a.id, if scoreA == 1 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+				end
+				if okB then
+					addCupPoints(b.b.id, if scoreA == 0 then CB.CUP_POINTS.win elseif scoreA == 0.5 then CB.CUP_POINTS.draw else 0)
+				end
+				submitCrew(b.a.id, recA)
+				submitCrew(b.b.id, recB)
+			end
+			local mvp: Top? = nil
+			for _, t in b.tops do
+				if t and (not mvp or t.v > mvp.v) then
+					mvp = t
+				end
+			end
+			local f = CB.BY_ID[b.format]
+			local r = {
+				id = b.id,
+				format = b.format,
+				formatName = CB.formatName(b.format, b.metric),
+				icon = f.icon,
+				unit = CB.unit(b.format, b.metric),
+				at = now(),
+				winner = winner,
+				noContest = noContest,
+				unrated = unrated,
+				a = { id = b.a.id, name = b.a.name, tag = b.a.tag, score = sa, delta = da, rating = recA.rating },
+				b = { id = b.b.id, name = b.b.name, tag = b.b.tag, score = sb, delta = db, rating = recB.rating },
+				mvp = mvp,
+			}
+			publish({ t = "rs", id = b.id, r = r })
+			b.finalizing = false
+			handleResult(b, r)
+		end)
+		if not ok then
+			-- never leave the crews stuck in an "ending" battle
+			warn("[CityGrind] CrewBattles finalize failed:", err)
+			b.finalizing = false
+			if b.state ~= "done" then
+				b.state = "done"
+				b.doneAt = now()
+				setBattleAttr(b)
+				changed(nil)
+			end
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Cross-server messages
+---------------------------------------------------------------------------
+local function onMessage(packet: any)
+	local msg = type(packet) == "table" and packet.Data
+	if type(msg) ~= "table" or msg.s == SERVER_ID or type(msg.t) ~= "string" then
+		return
+	end
+	local t = msg.t
+	if t == "ch" then
+		if type(msg.id) ~= "string" or battles[msg.id] or not CB.BY_ID[msg.f] then
+			return
+		end
+		local a, b = sideFrom(msg.a), sideFrom(msg.b)
+		if not a or not b then
+			return
+		end
+		local battle = newBattle(msg.id, msg.f, if type(msg.m) == "string" then msg.m else nil, a, b, tostring(msg.by), msg.s, tonumber(msg.acceptBy) or now() + CB.ACCEPT_SECONDS)
+		local fmt = CB.formatName(battle.format, battle.metric)
+		for _, p in membersHere(b.id) do
+			local c = crewOf(p)
+			if isOfficer(c) then
+				Net.notify(p, "CREW CHALLENGE!", string.format("%s challenges your crew to %s. Accept in the Battles app (2 min).", a.name, fmt))
+			end
+		end
+		changed(battle)
+	else
+		local b = type(msg.id) == "string" and battles[msg.id]
+		if not b then
+			return
+		end
+		if t == "ac" then
+			accepted(b, tonumber(msg.startsAt) or now() + CB.COUNTDOWN_SECONDS)
+		elseif t == "dc" then
+			if b.state == "pending" then
+				b.state = "done"
+				b.doneAt = now()
+				changed(b)
+			end
+		elseif t == "sc" then
+			if type(msg.a) == "number" and type(msg.b) == "number" then
+				b.scores[b.a.id][msg.s] = msg.a
+				b.scores[b.b.id][msg.s] = msg.b
+				if type(msg.top) == "table" and type(msg.top.v) == "number" then
+					b.tops[msg.s] = { u = tonumber(msg.top.u) or 0, n = tostring(msg.top.n), c = tostring(msg.top.c), v = msg.top.v }
+				end
+			end
+		elseif t == "rs" then
+			if type(msg.r) == "table" and type(msg.r.a) == "table" and type(msg.r.b) == "table" then
+				handleResult(b, msg.r)
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Requests
+---------------------------------------------------------------------------
+local function targetsFor(myId: string?): { any }
+	local list, seen = {}, {}
+	for _, p in Players:GetPlayers() do
+		local c = crewOf(p)
+		if c and c.id ~= myId and not seen[c.id] then
+			seen[c.id] = true
+			crewNames[c.id] = c.name
+			table.insert(list, { id = c.id, name = c.name, tag = c.tag, rating = CrewBattles.ratingOf(c.id), here = true, busy = activeBattleOf(c.id) ~= nil })
+		end
+	end
+	local LB = optional("Leaderboards")
+	if LB and type(LB.top) == "function" then
+		local ok, top = pcall(LB.top, "crewRating", 30, "all")
+		if ok and type(top) == "table" then
+			for _, e in top do
+				if e.key ~= myId and not seen[e.key] then
+					seen[e.key] = true
+					table.insert(list, { id = e.key, name = e.name, tag = "", rating = e.value, here = false, busy = activeBattleOf(e.key) ~= nil })
+				end
+			end
+		end
+	end
+	return list
+end
+
+local function challenge(player: Player, args: any): (boolean, string)
+	if type(args) ~= "table" or type(args.target) ~= "string" or type(args.format) ~= "string" then
+		return false, "Bad request."
+	end
+	local f = CB.BY_ID[args.format]
+	if not f then
+		return false, "Pick a format."
+	end
+	local metric = nil
+	if f.id == "CityChallenge" then
+		if type(args.metric) ~= "string" or not CB.METRIC_BY_ID[args.metric] then
+			return false, "Pick a city challenge metric."
+		end
+		metric = args.metric
+	end
+	local mine = crewOf(player)
+	if not mine then
+		return false, "You're not in a crew."
+	end
+	if not isOfficer(mine) then
+		return false, "Only crew leaders and officers can issue challenges."
+	end
+	if args.target == mine.id then
+		return false, "You can't battle your own crew."
+	end
+	if activeBattleOf(mine.id) then
+		return false, "Your crew is already in a battle or has a challenge out."
+	end
+	if activeBattleOf(args.target) then
+		return false, "That crew is busy with another battle."
+	end
+	-- find the target crew (this server, else the crew board)
+	local target: Side? = nil
+	for _, t in targetsFor(mine.id) do
+		if t.id == args.target then
+			local color = Color3.fromRGB(200, 100, 255)
+			for _, p in membersHere(t.id) do
+				local c = crewOf(p)
+				if c then
+					color = c.color
+					break
+				end
+			end
+			target = { id = t.id, name = t.name, tag = t.tag or "", color = color }
+			break
+		end
+	end
+	if not target then
+		return false, "That crew can't be found."
+	end
+	if not Net.allow(player, "CrewBattleChallenge", CB.CHALLENGE_COOLDOWN) then
+		return false, "Wait a minute before issuing another challenge."
+	end
+	local a: Side = { id = mine.id, name = mine.name, tag = mine.tag, color = mine.color }
+	local id = HttpService:GenerateGUID(false):sub(1, 12)
+	local b = newBattle(id, f.id, metric, a, target, player.DisplayName, SERVER_ID, now() + CB.ACCEPT_SECONDS)
+	publish({ t = "ch", id = id, f = f.id, m = metric, a = sideMsg(a), b = sideMsg(target), by = player.DisplayName, acceptBy = b.acceptBy })
+	local fmt = CB.formatName(f.id, metric)
+	local hereOfficers = 0
+	for _, p in membersHere(target.id) do
+		local c = crewOf(p)
+		if isOfficer(c) then
+			hereOfficers += 1
+			Net.notify(p, "CREW CHALLENGE!", string.format("%s challenges your crew to %s. Accept in the Battles app (2 min).", a.name, fmt))
+			local Messages = optional("Messages")
+			if Messages and type(Messages.sendSystem) == "function" then
+				pcall(Messages.sendSystem, p, "Crew Battles", string.format("%s (%s) challenged your crew to %s. Open the Battles app on your phone to accept or decline within 2 minutes.", a.name, player.DisplayName, fmt))
+			end
+		end
+	end
+	notifyCrew(mine.id, "CHALLENGE SENT", string.format("%s challenged %s to %s.", player.DisplayName, target.name, fmt))
+	changed(b)
+	if hereOfficers == 0 then
+		return true, "Challenge sent. Their leader or officers have 2 minutes to accept (from any server)."
+	end
+	return true, "Challenge sent to " .. target.name .. "."
+end
+
+local function respond(player: Player, id: any, action: string): (boolean, string)
+	local b = type(id) == "string" and battles[id]
+	if not b or b.state ~= "pending" then
+		return false, "That challenge is no longer open."
+	end
+	local c = crewOf(player)
+	if not isOfficer(c) then
+		return false, "Only leaders and officers can do that."
+	end
+	if action == "Cancel" then
+		if c.id ~= b.a.id then
+			return false, "Only the challenging crew can cancel."
+		end
+		b.state = "done"
+		b.doneAt = now()
+		publish({ t = "dc", id = b.id })
+		notifyCrew(b.a.id, "CHALLENGE CANCELLED", player.DisplayName .. " cancelled the challenge to " .. b.b.name .. ".")
+		changed(b)
+		return true, "Challenge cancelled."
+	end
+	if c.id ~= b.b.id then
+		return false, "This challenge isn't for your crew."
+	end
+	if action == "Decline" then
+		b.state = "done"
+		b.doneAt = now()
+		publish({ t = "dc", id = b.id })
+		notifyCrew(b.a.id, "CHALLENGE DECLINED", b.b.name .. " declined your crew battle.")
+		changed(b)
+		return true, "Challenge declined."
+	end
+	-- Accept
+	if now() > b.acceptBy then
+		return false, "The challenge expired."
+	end
+	for _, other in battles do
+		if other ~= b and isActive(other) and (other.a.id == c.id or other.b.id == c.id) then
+			return false, "Your crew is already in another battle."
+		end
+	end
+	local startsAt = now() + CB.COUNTDOWN_SECONDS
+	publish({ t = "ac", id = b.id, startsAt = startsAt })
+	accepted(b, startsAt)
+	return true, "Battle accepted! Starts in " .. CB.COUNTDOWN_SECONDS .. " seconds."
+end
+
+CrewBattleRequest.OnServerInvoke = function(player: Player, action: any, args: any)
+	if not Net.allow(player, "CrewBattleRequest", 0.5) then
+		return { ok = false, msg = "Slow down." }
+	end
+	local ok, success, msg = pcall(function()
+		if action == "Challenge" then
+			return challenge(player, args)
+		elseif action == "Accept" or action == "Decline" or action == "Cancel" then
+			return respond(player, args, action)
+		end
+		return false, "Unknown action."
+	end)
+	if not ok then
+		warn("[CityGrind] CrewBattleRequest failed:", success)
+		return { ok = false, msg = "Something went wrong." }
+	end
+	return { ok = success == true, msg = msg }
+end
+
+local function battleView(b: Battle, viewer: Player, myId: string): any
+	local f = CB.BY_ID[b.format]
+	local c = crewOf(viewer)
+	local top = {}
+	for _, ct in b.contrib do
+		if ct.score > 0 then
+			table.insert(top, { name = ct.name, score = ct.score, mine = ct.crewId == myId })
+		end
+	end
+	table.sort(top, function(x, y)
+		return x.score > y.score
+	end)
+	while #top > 6 do
+		table.remove(top)
+	end
+	local me = b.contrib[viewer.UserId]
+	return {
+		id = b.id,
+		format = b.format,
+		formatName = CB.formatName(b.format, b.metric),
+		desc = if b.format == "CityChallenge" and b.metric then CB.METRIC_BY_ID[b.metric].desc else f.desc,
+		icon = f.icon,
+		unit = CB.unit(b.format, b.metric),
+		state = b.state,
+		by = b.by,
+		a = { id = b.a.id, name = b.a.name, tag = b.a.tag, color = b.a.color, score = total(b, b.a.id) },
+		b = { id = b.b.id, name = b.b.name, tag = b.b.tag, color = b.b.color, score = total(b, b.b.id) },
+		mineIsA = b.a.id == myId,
+		acceptBy = b.acceptBy,
+		startsAt = b.startsAt,
+		endsAt = b.endsAt,
+		canAccept = b.state == "pending" and b.b.id == myId and isOfficer(c),
+		canCancel = b.state == "pending" and b.a.id == myId and isOfficer(c),
+		top = top,
+		myScore = if me then me.score else 0,
+	}
+end
+
+CrewBattleGet.OnServerInvoke = function(player: Player)
+	if not Net.allow(player, "CrewBattleGet", 0.3) then
+		return nil
+	end
+	local c = crewOf(player)
+	local week = CB.week(now())
+	local snapshot: any = {
+		serverNow = now(),
+		global = storesOk,
+		formats = nil,
+	}
+	if c then
+		local rec = ratings[c.id] or loadRating(c.id)
+		snapshot.crew = {
+			id = c.id,
+			name = c.name,
+			tag = c.tag,
+			role = c.role,
+			canChallenge = isOfficer(c),
+			rating = rec.rating,
+			wins = rec.wins,
+			losses = rec.losses,
+			draws = rec.draws,
+		}
+		local b = activeBattleOf(c.id)
+		if b then
+			snapshot.battle = battleView(b, player, c.id)
+		end
+		snapshot.targets = targetsFor(c.id)
+	end
+	-- weekly cup
+	local standings = {}
+	local myPoints = 0
+	for i, e in (readCup(week, 10)) do
+		if c and e.id == c.id then
+			myPoints = e.points
+		end
+		if i <= 10 then
+			table.insert(standings, { name = crewNames[e.id] or "Crew", points = e.points, mine = c ~= nil and e.id == c.id })
+		end
+	end
+	local last = {}
+	for i, e in (readCup(week - 1, 3)) do
+		if i > 3 then
+			break
+		end
+		table.insert(last, { name = crewNames[e.id] or "Crew", points = e.points })
+	end
+	snapshot.cup = { week = week, endsAt = CB.weekEnds(week), standings = standings, myPoints = myPoints, lastWeek = last }
+	local hist = {}
+	for i, r in history do
+		if i > 10 then
+			break
+		end
+		table.insert(hist, {
+			formatName = r.formatName,
+			icon = r.icon,
+			a = { name = r.a.name, score = r.a.score },
+			b = { name = r.b.name, score = r.b.score },
+			winner = if r.winner == r.a.id then r.a.name elseif r.winner == r.b.id then r.b.name else nil,
+			noContest = r.noContest,
+			at = r.at,
+		})
+	end
+	snapshot.history = hist
+	local sec = sectionOf(player)
+	snapshot.me = sec and { played = sec.played, wins = sec.wins, mvps = sec.mvps } or nil
+	return snapshot
+end
+
+---------------------------------------------------------------------------
+-- Weekly City Crew Cup rewards (collected on the next visit after the week ends)
+---------------------------------------------------------------------------
+local function claimCup(p: Player)
+	local sec = sectionOf(p)
+	if not sec then
+		return
+	end
+	local lastWeek = CB.week(now()) - 1
+	if sec.cupClaimed >= lastWeek then
+		return
+	end
+	local crewId = sec.cupWeeks[tostring(lastWeek)]
+	if type(crewId) ~= "string" then
+		return
+	end
+	local top, fromStore = readCup(lastWeek, 3)
+	if #top == 0 or (storesOk and not fromStore) then
+		return -- global standings not readable right now (this server's view isn't enough); try again later
+	end
+	for place, e in top do
+		if place > 3 then
+			break
+		end
+		if e.id == crewId and e.points > 0 then
+			sec.cupClaimed = lastWeek
+			PlayerData.markChanged(p)
+			local reward = CB.CUP_REWARDS[place]
+			give(p, reward, "City Crew Cup #" .. place)
+			Net.notify(p, if place == 1 then "CITY CREW CUP CHAMPIONS!" else "CITY CREW CUP PODIUM", string.format("%s finished #%d in last week's City Crew Cup. %s", crewNames[crewId] or "Your crew", place, rewardText(reward)))
+			if place == 1 then
+				unlock(p, "crew_cup_champion")
+			end
+			return
+		end
+	end
+	-- not on the podium: nothing to claim for that week
+	sec.cupClaimed = lastWeek
+	PlayerData.markChanged(p)
+end
+
+---------------------------------------------------------------------------
+-- Main loop
+---------------------------------------------------------------------------
+local function chipFor(b: Battle, p: Player): any
+	local myId = p:GetAttribute("CrewId")
+	local mine = if b.a.id == myId then b.a else b.b
+	local theirs = if b.a.id == myId then b.b else b.a
+	local me = b.contrib[p.UserId]
+	return {
+		id = b.id,
+		state = b.state,
+		icon = CB.BY_ID[b.format].icon,
+		formatName = CB.formatName(b.format, b.metric),
+		unit = CB.unit(b.format, b.metric),
+		mine = { tag = mine.tag, name = mine.name, color = mine.color, score = total(b, mine.id) },
+		theirs = { tag = theirs.tag, name = theirs.name, color = theirs.color, score = total(b, theirs.id) },
+		startsAt = b.startsAt,
+		endsAt = b.endsAt,
+		myScore = if me then me.score else 0,
+		serverNow = now(),
+	}
+end
+
+local function step(dt: number)
+	local t = now()
+	for id, b in battles do
+		if b.state == "pending" and t > b.acceptBy then
+			b.state = "done"
+			b.doneAt = t
+			if b.host == SERVER_ID then
+				notifyCrew(b.a.id, "CHALLENGE EXPIRED", b.b.name .. " didn't answer your crew battle challenge.")
+			end
+			changed(b)
+		elseif b.state == "countdown" and b.startsAt and t >= b.startsAt then
+			b.state = "live"
+			notifyCrew(b.a.id, "BATTLE STARTED!", CB.formatName(b.format, b.metric) .. " vs " .. b.b.name .. ". Go!")
+			notifyCrew(b.b.id, "BATTLE STARTED!", CB.formatName(b.format, b.metric) .. " vs " .. b.a.name .. ". Go!")
+			setBattleAttr(b)
+			changed(b)
+		elseif b.state == "live" and b.endsAt and t >= b.endsAt then
+			b.state = "ending"
+			changed(b)
+		elseif b.state == "done" and b.doneAt and t - b.doneAt > 600 then
+			battles[id] = nil
+		end
+	end
+	trackTick(dt)
+	for _, b in battles do
+		if b.state == "ending" and b.endsAt then
+			-- the host finalizes; another server only does if the host went quiet
+			-- (a battle id is applied to a crew's rating once either way)
+			local grace = if b.host == SERVER_ID then CB.FINALIZE_GRACE else 90
+			if t >= b.endsAt + grace then
+				if b.host ~= SERVER_ID and next(b.contrib) == nil and #audience(b) == 0 then
+					-- an uninvolved server that missed the host's result: just forget the battle
+					-- (finalizing here too would only spend DataStore budget on every server)
+					b.state = "done"
+					b.doneAt = t
+				else
+					finalize(b)
+				end
+			end
+		end
+	end
+end
+
+local function broadcastScores()
+	for _, b in battles do
+		if (b.state == "live" or b.state == "ending") and b.host ~= nil then
+			if b.state == "ending" and b.sentFinal then
+				continue
+			end
+			local sa = b.scores[b.a.id][SERVER_ID] or 0
+			local sb = b.scores[b.b.id][SERVER_ID] or 0
+			local key = sa .. "|" .. sb
+			if key ~= b.lastSent or b.state == "ending" then
+				b.lastSent = key
+				if b.state == "ending" then
+					b.sentFinal = true
+				end
+				-- only servers with something to report (every server knows every battle; a
+				-- message from each would flood the topic's per-minute receive limit)
+				if #membersHere(b.a.id) + #membersHere(b.b.id) > 0 or next(b.contrib) ~= nil then
+					local top = b.tops[SERVER_ID]
+					publish({ t = "sc", id = b.id, a = sa, b = sb, top = top })
+				end
+			end
+		end
+	end
+end
+
+function CrewBattles.start(_city: Instance?)
+	task.spawn(function()
+		local ok, err = pcall(function()
+			MessagingService:SubscribeAsync(TOPIC, onMessage)
+		end)
+		if not ok and not IS_STUDIO then
+			warn("[CityGrind] CrewBattles: cross-server battles unavailable:", err)
+		end
+	end)
+
+	PlayerData.onLoaded(function(p)
+		task.wait(5)
+		if p.Parent then
+			claimCup(p)
+			local id = p:GetAttribute("CrewId")
+			if type(id) == "string" and id ~= "" then
+				CrewBattles.ratingOf(id)
+			end
+		end
+	end)
+
+	Players.PlayerRemoving:Connect(function(p)
+		trackers[p] = nil
+	end)
+
+	-- main loop: state changes, tracking, chips
+	task.spawn(function()
+		local last = os.clock()
+		local ticks = 0
+		while true do
+			task.wait(1)
+			local dt = os.clock() - last
+			last = os.clock()
+			ticks += 1
+			hookSignals()
+			local ok, err = pcall(step, dt)
+			if not ok then
+				warn("[CityGrind] CrewBattles step failed:", err)
+			end
+			if ticks % 2 == 0 then
+				-- clear stale battle attributes (left the crew, battle over)
+				for _, p in Players:GetPlayers() do
+					local bid = p:GetAttribute("CrewBattle")
+					if bid ~= nil then
+						local b = battles[bid]
+						local crewId = p:GetAttribute("CrewId")
+						if not b or b.state == "done" or b.state == "pending" or (b.a.id ~= crewId and b.b.id ~= crewId) then
+							p:SetAttribute("CrewBattle", nil)
+							CrewBattleEvent:FireClient(p, "live", nil)
+						end
+					end
+				end
+				for _, b in battles do
+					if b.state == "countdown" or b.state == "live" or b.state == "ending" then
+						for _, p in audience(b) do
+							if p:GetAttribute("CrewBattle") ~= b.id then
+								p:SetAttribute("CrewBattle", b.id)
+							end
+							CrewBattleEvent:FireClient(p, "live", chipFor(b, p))
+						end
+					end
+				end
+			end
+			if ticks % CB.SCORE_BROADCAST_SECONDS == 0 then
+				pcall(broadcastScores)
+			end
+			if ticks % 60 == 0 then
+				-- crews online here show up on the crew board; drop stale race logs
+				for _, p in Players:GetPlayers() do
+					local id = p:GetAttribute("CrewId")
+					if type(id) == "string" and id ~= "" and ratings[id] then
+						local c = crewOf(p)
+						if c then
+							crewNames[id] = c.name
+						end
+						submitCrew(id, ratings[id])
+					elseif type(id) == "string" and id ~= "" then
+						CrewBattles.ratingOf(id)
+					end
+				end
+				for key, log in raceLog do
+					if #log == 0 or os.clock() - log[#log].at > 900 then
+						raceLog[key] = nil
+					end
+				end
+			end
+			if ticks % 300 == 0 then
+				for _, p in Players:GetPlayers() do
+					task.spawn(claimCup, p)
+				end
+			end
+		end
+	end)
+end
+
+return CrewBattles
 ]=====])
 put(server, 'ModuleScript', 'Crews', [=====[
 -- CITY GRIND: crews (sections 60, 61, 62). Server side.
@@ -17938,6 +20429,7 @@ end
 -- Downtown (section 6)
 ---------------------------------------------------------------------------
 local leaderboardRows: { [string]: { TextLabel } } = {}
+local leaderboardTitle: TextLabel? = nil
 local billboardTitles: { TextLabel } = {}
 local billboardBodies: { TextLabel } = {}
 
@@ -17968,6 +20460,7 @@ local function buildLeaderboard(pos: Vector3, dir: Vector3)
 	title.TextColor3 = Color3.fromRGB(255, 200, 60)
 	title.Text = "CITY LEADERS · THIS SERVER"
 	title.Parent = bg
+	leaderboardTitle = title
 	local stats = { { "Level", "LEVEL", Color3.fromRGB(90, 170, 255) }, { "Reputation", "REPUTATION", Color3.fromRGB(255, 120, 60) }, { "Fame", "FAME", Color3.fromRGB(255, 90, 200) } }
 	for i, stat in stats do
 		local col = Instance.new("Frame")
@@ -18006,6 +20499,26 @@ local function buildLeaderboard(pos: Vector3, dir: Vector3)
 end
 
 local function refreshLeaderboard()
+	-- Global boards (all servers) when the Leaderboards system runs; otherwise this server's players.
+	local lbModule = script.Parent:FindFirstChild("Leaderboards")
+	local okLb, lb = false, nil
+	if lbModule then
+		okLb, lb = pcall(require, lbModule)
+	end
+	if okLb and type(lb) == "table" and type(lb.top) == "function" then
+		local global = type(lb.isGlobal) == "function" and lb.isGlobal()
+		if leaderboardTitle then
+			leaderboardTitle.Text = if global then "CITY LEADERS · ALL SERVERS" else "CITY LEADERS · THIS SERVER"
+		end
+		for stat, rows in leaderboardRows do
+			local list = lb.top(string.lower(stat), #rows, "all") or {}
+			for r, row in rows do
+				local e = list[r]
+				row.Text = if e then string.format("%d. %s  ·  %s", r, e.name, e.text) else (if r == 1 then "Waiting for players" else "")
+			end
+		end
+		return
+	end
 	local players = Players:GetPlayers()
 	for stat, rows in leaderboardRows do
 		local list = {}
@@ -23245,6 +25758,8 @@ local Places = require(script.Parent:WaitForChild("Places"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
 
 local Events = {}
+-- Fired for each City 5K finisher: (player, place, timeSeconds). CrewBattles listens.
+Events.runFinished = Instance.new("BindableEvent")
 
 PlayerData.registerSection("events", function()
 	return { best5k = 0, best3pt = 0, joined = 0, podiums = 0, wins = 0, carAwards = 0 }
@@ -24340,6 +26855,7 @@ local function tickRun(ev: Event)
 			table.insert(ranked, p)
 			PlayerData.addStatXP(p, "Stamina", 30)
 			PlayerData.addStatXP(p, "Speed", 15)
+			Events.runFinished:Fire(p, place, racer.time)
 			local sec = section(p)
 			if sec and (sec.best5k == 0 or racer.time < sec.best5k) then
 				sec.best5k = racer.time
@@ -29572,6 +32088,1076 @@ end
 
 return Jobs
 ]=====])
+put(server, 'ModuleScript', 'Leaderboards', [=====[
+-- CITY GRIND: global leaderboards (section 98). Server side.
+--
+-- Boards: level, cash, reputation, fame, rating, wins, points, fastest5k,
+-- fastestRace (players) and crewRating (crews). "rating", "wins" and
+-- "fastestRace" also have a per-season board while Ranked runs a season.
+--
+-- Storage: OrderedDataStore "CityGrind_LB_<statId>_v1" (season boards add
+-- "_S<season number>"), keyed by UserId (crews: crew id). Writes are queued and
+-- flushed at most once per player per board every 60 s, only while the
+-- DataStore request budget has room. The top 50 of every board is re-read
+-- about every 2 minutes and cached; the values of players in this server are
+-- merged in live. Without DataStore access (Studio) every board is built from
+-- the players this server has seen.
+--
+-- This module reads Level / Cash / Reputation / Fame / Wins attributes, the
+-- saved basketball points and the Events 5K best itself; Ranked submits
+-- "rating" (the Rating attribute is also read), Racing submits "fastestRace"
+-- (Racing.raceFinished / Racing.bestTime are also read when Racing exists).
+--
+-- Archive: Leaderboards.archive(seasonId) snapshots the top 100 of the season
+-- boards into DataStore "CityGrind_LB_Archive_v1" ("season_<id>", plus an
+-- "index" list the phone reads).
+--
+-- Remote: LeaderboardsGet (RemoteFunction): ("Meta") | ("Board", statId, scope) | ("Archive", seasonId)
+-- Saved section "leaderboards" = { seasonId = "", winsBase = 0 }  (season wins = Wins - winsBase)
+-- World: boards at the Neighborhood court and the City Speedway grandstand
+-- (folder City.Leaderboards). The Downtown plaza board (Districts) reads Leaderboards.top.
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local LC = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("LeaderboardsConfig"))
+
+local Leaderboards = {}
+
+local IS_STUDIO = RunService:IsStudio()
+local LeaderboardsGet = Net.remote("RemoteFunction", "LeaderboardsGet")
+
+PlayerData.registerSection("leaderboards", function()
+	return { seasonId = "", winsBase = 0 }
+end)
+
+type Entry = { key: string, name: string, value: number } -- value is decoded (seconds for times)
+
+---------------------------------------------------------------------------
+-- Optional modules (required lazily; they may not exist)
+---------------------------------------------------------------------------
+local function optional(name: string): any
+	local m = script.Parent:FindFirstChild(name)
+	if not m then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return if ok then mod else nil
+end
+
+---------------------------------------------------------------------------
+-- Season (from Ranked, if it runs)
+---------------------------------------------------------------------------
+type Season = { id: string, number: number, name: string, startsAt: number, endsAt: number }
+local seasonCache: Season? = nil
+local seasonCheckedAt = -math.huge
+local seasonNumbers: { [string]: number } = {}
+local seasonNames: { [string]: string } = {}
+local seasonEndHooked = false
+
+local function currentSeason(): Season?
+	if os.clock() - seasonCheckedAt < 20 then
+		return seasonCache
+	end
+	seasonCheckedAt = os.clock()
+	local Ranked = optional("Ranked")
+	local s = nil
+	if Ranked and type(Ranked.season) == "function" then
+		local ok, result = pcall(Ranked.season)
+		if ok and type(result) == "table" and type(result.id) == "string" and type(result.number) == "number" then
+			s = result
+		end
+	end
+	if s then
+		seasonNumbers[s.id] = s.number
+		seasonNames[s.id] = if type(s.name) == "string" then s.name else ("Season " .. s.number)
+	end
+	if Ranked and not seasonEndHooked and typeof(Ranked.seasonEnded) == "Instance" and Ranked.seasonEnded:IsA("BindableEvent") then
+		seasonEndHooked = true
+		-- Ranked itself calls Leaderboards.archive on exactly one server (DataStore guard);
+		-- archiving here too would make every server snapshot the season at once.
+		-- Just drop the cached season so new values stop landing on the ended season's boards.
+		Ranked.seasonEnded.Event:Connect(function()
+			seasonCheckedAt = -math.huge
+		end)
+	end
+	seasonCache = s
+	return s
+end
+Leaderboards.season = currentSeason
+
+---------------------------------------------------------------------------
+-- DataStores
+---------------------------------------------------------------------------
+local storesOk = true -- false once DataStore access turns out to be unavailable
+local ordered: { [string]: OrderedDataStore } = {}
+local archiveStore: DataStore? = nil
+local crewNameStore: DataStore? = nil
+
+local function boardName(statId: string, seasonNumber: number?): string
+	return "CityGrind_LB_" .. statId .. "_v1" .. (if seasonNumber then "_S" .. seasonNumber else "")
+end
+
+local function statOfBoard(board: string): string
+	return (board:match("^CityGrind_LB_(.-)_v1") or "")
+end
+
+local function noteFailure(err: any)
+	local msg = tostring(err)
+	-- Studio without "Enable Studio Access to API Services", or no published place.
+	if IS_STUDIO or msg:find("403") or msg:find("API") or msg:find("Studio") then
+		if storesOk then
+			warn("[CityGrind] Leaderboards: DataStores unavailable, using this server's players only.", msg)
+		end
+		storesOk = false
+	end
+end
+
+local function orderedStore(board: string): OrderedDataStore?
+	if not storesOk then
+		return nil
+	end
+	local s = ordered[board]
+	if s then
+		return s
+	end
+	local ok, result = pcall(function()
+		return DataStoreService:GetOrderedDataStore(board)
+	end)
+	if not ok then
+		noteFailure(result)
+		return nil
+	end
+	ordered[board] = result
+	return result
+end
+
+local function budget(kind: Enum.DataStoreRequestType, reserve: number?): boolean
+	local ok, n = pcall(function()
+		return DataStoreService:GetRequestBudgetForRequestType(kind)
+	end)
+	return ok and n > (reserve or LC.BUDGET_RESERVE)
+end
+
+do
+	local ok, err = pcall(function()
+		archiveStore = DataStoreService:GetDataStore("CityGrind_LB_Archive_v1")
+		crewNameStore = DataStoreService:GetDataStore("CityGrind_LB_CrewNames_v1")
+	end)
+	if not ok then
+		noteFailure(err)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Names
+---------------------------------------------------------------------------
+local userNames: { [number]: string } = {}
+local nameTried: { [number]: number } = {}
+local crewNames: { [string]: string } = {}
+local crewNameTried: { [string]: number } = {}
+local crewNameWritten: { [string]: string } = {}
+
+local function displayName(board: string, key: string): string
+	if statOfBoard(board) == "crewRating" then
+		return crewNames[key] or "Crew"
+	end
+	local uid = tonumber(key)
+	if not uid then
+		return "?"
+	end
+	local p = Players:GetPlayerByUserId(uid)
+	if p then
+		return p.DisplayName
+	end
+	return userNames[uid] or "Player"
+end
+
+-- Looks up names for entries we don't know yet (cached, at most once per 10 min per id).
+local function resolveNames(board: string, entries: { Entry })
+	local isCrew = statOfBoard(board) == "crewRating"
+	local looked = 0
+	for _, e in entries do
+		if looked >= 60 then
+			break
+		end
+		if isCrew then
+			if not crewNames[e.key] and crewNameStore and storesOk and os.clock() - (crewNameTried[e.key] or -math.huge) > 600 then
+				crewNameTried[e.key] = os.clock()
+				if budget(Enum.DataStoreRequestType.GetAsync) then
+					looked += 1
+					local ok, result = pcall(function()
+						return (crewNameStore :: DataStore):GetAsync(e.key)
+					end)
+					if ok and type(result) == "string" then
+						crewNames[e.key] = result
+					end
+				end
+			end
+			e.name = crewNames[e.key] or e.name
+		else
+			local uid = tonumber(e.key)
+			if uid and uid > 0 and not userNames[uid] and not Players:GetPlayerByUserId(uid) and os.clock() - (nameTried[uid] or -math.huge) > 600 then
+				nameTried[uid] = os.clock()
+				looked += 1
+				local ok, result = pcall(function()
+					return Players:GetNameFromUserIdAsync(uid)
+				end)
+				if ok and type(result) == "string" then
+					userNames[uid] = result
+				end
+			end
+			e.name = displayName(board, e.key)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Values: this server's known values, queued writes and the cached global tops
+---------------------------------------------------------------------------
+local localVals: { [string]: { [string]: Entry } } = {} -- board -> key -> entry (decoded)
+local pending: { [string]: { [string]: number } } = {} -- board -> key -> encoded value
+local lastWrite: { [string]: number } = {} -- board .. "|" .. key -> os.clock()
+local globalTop: { [string]: { Entry } } = {} -- board -> top list (decoded)
+local refreshedAt: { [string]: number } = {}
+
+local function ruleFor(statId: string, seasonal: boolean): string
+	-- season rating is the player's current season rating; all-time keeps the peak
+	if seasonal and statId == "rating" then
+		return "latest"
+	end
+	local s = LC.BY_ID[statId]
+	return s and s.rule or "best"
+end
+
+-- Records a value for one key on one board (live locally, queued for the DataStore).
+local function record(board: string, statId: string, key: string, name: string, value: number, rule: string)
+	local s = LC.BY_ID[statId]
+	if not s or value ~= value or value == math.huge or value == -math.huge then
+		return
+	end
+	if s.lowerBetter and value <= 0 then
+		return -- no time yet
+	end
+	local vals = localVals[board]
+	if not vals then
+		vals = {}
+		localVals[board] = vals
+	end
+	local old = vals[key]
+	if old and rule == "best" and not LC.better(statId, value, old.value) then
+		old.name = name
+		return
+	end
+	if old and old.value == value then
+		old.name = name
+		return
+	end
+	vals[key] = { key = key, name = name, value = value }
+	local q = pending[board]
+	if not q then
+		q = {}
+		pending[board] = q
+	end
+	q[key] = LC.encode(statId, value)
+end
+
+-- Writes queued values (throttled per key, budget-aware). `force` ignores the per-key cooldown.
+local function flush(onlyBoard: string?, force: boolean?)
+	if not storesOk then
+		return
+	end
+	local writes = 0
+	for board, q in pending do
+		if onlyBoard and board ~= onlyBoard then
+			continue
+		end
+		local statId = statOfBoard(board)
+		local seasonal = board:find("_S%d+$") ~= nil
+		local rule = ruleFor(statId, seasonal)
+		local store = orderedStore(board)
+		if not store then
+			return
+		end
+		-- iterate a copy: the writes below yield, and record() / another flush may change q meanwhile
+		for key, encoded in table.clone(q) do
+			if q[key] ~= encoded then
+				continue -- written by a concurrent flush, or replaced by a newer value
+			end
+			if writes >= 12 and not force then
+				return
+			end
+			local wk = board .. "|" .. key
+			if not force and os.clock() - (lastWrite[wk] or -math.huge) < LC.WRITE_COOLDOWN then
+				continue
+			end
+			-- Values read from the save only ever improve (level, rep, wins, 5K best...),
+			-- so a plain write is enough. A peak rating and a race time from a single
+			-- race may be worse than the saved best: those compare first (costs a read).
+			local compare = rule == "best" and (statId == "rating" or statId == "fastestRace")
+			if not budget(Enum.DataStoreRequestType.SetIncrementSortedAsync) then
+				return
+			end
+			if compare and not budget(Enum.DataStoreRequestType.GetAsync, 20) then
+				continue
+			end
+			q[key] = nil
+			lastWrite[wk] = os.clock()
+			writes += 1
+			local ok, err = pcall(function()
+				if not compare then
+					(store :: OrderedDataStore):SetAsync(key, encoded)
+					return
+				end
+				(store :: OrderedDataStore):UpdateAsync(key, function(old)
+					if type(old) == "number" and not LC.better(statId, encoded, old) then
+						return nil -- the saved value is already better
+					end
+					return encoded
+				end)
+			end)
+			if not ok then
+				noteFailure(err)
+				if storesOk and q[key] == nil then
+					q[key] = encoded -- try again after the cooldown
+				end
+			end
+		end
+		if next(q) == nil and pending[board] == q then
+			pending[board] = nil
+		end
+	end
+end
+
+-- Re-reads one board's global top list.
+local function refreshBoard(board: string, count: number?): { Entry }?
+	local statId = statOfBoard(board)
+	local s = LC.BY_ID[statId]
+	local store = orderedStore(board)
+	if not s or not store or not budget(Enum.DataStoreRequestType.GetSortedAsync) then
+		return nil
+	end
+	local ok, page = pcall(function()
+		local pages = (store :: OrderedDataStore):GetSortedAsync(s.lowerBetter, count or LC.TOP_N, if s.lowerBetter then 1 else nil)
+		return pages:GetCurrentPage()
+	end)
+	if not ok then
+		noteFailure(page)
+		return nil
+	end
+	local list: { Entry } = {}
+	for _, item in page do
+		if type(item.value) == "number" then
+			table.insert(list, { key = tostring(item.key), name = displayName(board, tostring(item.key)), value = LC.decode(statId, item.value) })
+		end
+	end
+	resolveNames(board, list)
+	return list
+end
+
+---------------------------------------------------------------------------
+-- Merged views (global top + live values from this server)
+---------------------------------------------------------------------------
+local function boardFor(statId: string, scope: string): string?
+	local s = LC.BY_ID[statId]
+	if not s then
+		return nil
+	end
+	if scope == "season" then
+		local season = currentSeason()
+		if not s.seasonal or not season then
+			return nil
+		end
+		return boardName(statId, season.number)
+	end
+	return boardName(statId, nil)
+end
+
+-- Full merged list for a board, best first (global entries plus this server's values).
+local function merged(board: string): { Entry }
+	local statId = statOfBoard(board)
+	local seasonal = board:find("_S%d+$") ~= nil
+	local rule = ruleFor(statId, seasonal)
+	local byKey: { [string]: Entry } = {}
+	local top: { Entry } = globalTop[board] or {}
+	for _, e in top do
+		byKey[e.key] = { key = e.key, name = displayName(board, e.key), value = e.value }
+	end
+	local vals: { [string]: Entry } = localVals[board] or {}
+	for key, e in vals do
+		local g = byKey[key]
+		local online = statOfBoard(board) ~= "crewRating" and tonumber(key) ~= nil and Players:GetPlayerByUserId(tonumber(key) :: number) ~= nil
+		if not g or (rule == "latest" and (online or statId == "crewRating")) or LC.better(statId, e.value, g.value) then
+			byKey[key] = { key = key, name = e.name, value = e.value }
+		end
+	end
+	local list = {}
+	for _, e in byKey do
+		table.insert(list, e)
+	end
+	table.sort(list, function(a, b)
+		if a.value ~= b.value then
+			return LC.better(statId, a.value, b.value)
+		end
+		return a.key < b.key
+	end)
+	return list
+end
+
+-- Public: the top `n` of a board ("all" | "season"), each { rank, key, name, value, text }.
+-- Returns nil for an unknown stat or a season board with no season running.
+function Leaderboards.top(statId: string, n: number?, scope: string?): { any }?
+	local board = boardFor(statId, scope or "all")
+	if not board then
+		return nil
+	end
+	local out = {}
+	for i, e in merged(board) do
+		if i > (n or LC.TOP_N) then
+			break
+		end
+		table.insert(out, { rank = i, key = e.key, name = e.name, value = e.value, text = LC.format(statId, e.value) })
+	end
+	return out
+end
+
+-- True when the global DataStore boards are in use (false = this server only).
+function Leaderboards.isGlobal(): boolean
+	return storesOk
+end
+
+---------------------------------------------------------------------------
+-- Public submit API
+---------------------------------------------------------------------------
+local function sectionOf(player: Player): any
+	return PlayerData.section(player, "leaderboards")
+end
+
+function Leaderboards.submit(statId: string, player: Player, value: number)
+	local s = LC.BY_ID[statId]
+	if not s or s.crew or typeof(player) ~= "Instance" or not player:IsA("Player") or type(value) ~= "number" then
+		return
+	end
+	local key = tostring(player.UserId)
+	local name = player.DisplayName
+	record(boardName(statId, nil), statId, key, name, value, ruleFor(statId, false))
+	if s.seasonal then
+		local season = currentSeason()
+		-- the cached season may lag the rollover by a few seconds: never write into an ended season
+		if season and not (type(season.endsAt) == "number" and os.time() >= season.endsAt) then
+			local seasonValue = value
+			if statId == "wins" then
+				local sec = sectionOf(player)
+				if not sec or sec.seasonId ~= season.id then
+					return -- the season baseline isn't set yet (next poll sets it)
+				end
+				seasonValue = math.max(0, value - (sec.winsBase or 0))
+			end
+			record(boardName(statId, season.number), statId, key, name, seasonValue, ruleFor(statId, true))
+		end
+	end
+end
+
+function Leaderboards.submitCrew(crewId: string, crewName: string, value: number)
+	if type(crewId) ~= "string" or crewId == "" or type(value) ~= "number" then
+		return
+	end
+	if type(crewName) == "string" and crewName ~= "" then
+		crewNames[crewId] = crewName
+		-- remember the (already filtered) crew name for other servers' boards
+		if crewNameWritten[crewId] ~= crewName and crewNameStore and storesOk then
+			crewNameWritten[crewId] = crewName
+			task.spawn(function()
+				if budget(Enum.DataStoreRequestType.SetIncrementAsync) then
+					local ok, err = pcall(function()
+						(crewNameStore :: DataStore):SetAsync(crewId, crewName)
+					end)
+					if not ok then
+						crewNameWritten[crewId] = nil
+						noteFailure(err)
+					end
+				else
+					crewNameWritten[crewId] = nil
+				end
+			end)
+		end
+	end
+	record(boardName("crewRating", nil), "crewRating", crewId, crewNames[crewId] or "Crew", value, "latest")
+end
+
+---------------------------------------------------------------------------
+-- Reading the stats this module tracks on its own
+---------------------------------------------------------------------------
+local raceHooked = false
+
+local function hookRacing()
+	if raceHooked then
+		return
+	end
+	local Racing = optional("Racing")
+	if Racing and typeof(Racing.raceFinished) == "Instance" and Racing.raceFinished:IsA("BindableEvent") then
+		raceHooked = true
+		Racing.raceFinished.Event:Connect(function(player, _place, timeSeconds, raceKind)
+			-- street routes are different distances; circuit / trial are the 3-lap speedway
+			if raceKind == "street" then
+				return
+			end
+			if typeof(player) == "Instance" and player:IsA("Player") and type(timeSeconds) == "number" and timeSeconds > 0 then
+				Leaderboards.submit("fastestRace", player, timeSeconds)
+			end
+		end)
+	end
+end
+
+local function attrNumber(player: Player, name: string): number?
+	local v = player:GetAttribute(name)
+	return if type(v) == "number" then v else nil
+end
+
+local function poll(player: Player)
+	if not player.Parent or not PlayerData.isLoaded(player) then
+		return
+	end
+	-- season wins baseline
+	local season = currentSeason()
+	local sec = sectionOf(player)
+	if season and sec and sec.seasonId ~= season.id then
+		sec.seasonId = season.id
+		sec.winsBase = attrNumber(player, "Wins") or 0
+		PlayerData.markChanged(player)
+	end
+	for attr, statId in { Level = "level", Cash = "cash", Reputation = "reputation", Fame = "fame", Wins = "wins", Rating = "rating" } do
+		local v = attrNumber(player, attr)
+		if v then
+			Leaderboards.submit(statId, player, v)
+		end
+	end
+	local data = PlayerData.get(player)
+	if data and type(data.basketball) == "table" and type(data.basketball.points) == "number" then
+		Leaderboards.submit("points", player, data.basketball.points)
+	end
+	local ev = PlayerData.section(player, "events")
+	if ev and type(ev.best5k) == "number" and ev.best5k > 0 then
+		Leaderboards.submit("fastest5k", player, ev.best5k)
+	end
+	local Racing = optional("Racing")
+	if Racing and type(Racing.bestTime) == "function" then
+		local ok, t = pcall(Racing.bestTime, player)
+		if ok and type(t) == "number" and t > 0 then
+			Leaderboards.submit("fastestRace", player, t)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Achievements for global ranks
+---------------------------------------------------------------------------
+local function checkRankAchievements()
+	if not storesOk then
+		return -- a one-server board is no achievement
+	end
+	local Quests = optional("Quests")
+	if not Quests or type(Quests.unlock) ~= "function" then
+		return
+	end
+	for _, s in LC.STATS do
+		if s.crew then
+			continue
+		end
+		local list = globalTop[boardName(s.id, nil)]
+		if not list then
+			continue
+		end
+		for i, e in list do
+			if i > 10 then
+				break
+			end
+			local uid = tonumber(e.key)
+			local p = uid and Players:GetPlayerByUserId(uid)
+			if p then
+				pcall(Quests.unlock, p, "lb_top10")
+				if i == 1 then
+					pcall(Quests.unlock, p, "lb_number1")
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Archive
+---------------------------------------------------------------------------
+type ArchiveIndexItem = { id: string, name: string, number: number, at: number }
+local archiveIndex: { ArchiveIndexItem } = {}
+local archiveMem: { [string]: any } = {} -- seasonId -> record (also caches DataStore reads)
+local archiving: { [string]: boolean } = {}
+local indexLoadedAt = -math.huge
+
+local function loadIndex()
+	if not archiveStore or not storesOk or not budget(Enum.DataStoreRequestType.GetAsync) then
+		return
+	end
+	indexLoadedAt = os.clock()
+	local ok, result = pcall(function()
+		return (archiveStore :: DataStore):GetAsync("index")
+	end)
+	if ok and type(result) == "table" then
+		archiveIndex = result
+	elseif not ok then
+		noteFailure(result)
+	end
+end
+
+local function addToIndex(list: { ArchiveIndexItem }, item: ArchiveIndexItem): { ArchiveIndexItem }
+	for _, it in list do
+		if it.id == item.id then
+			return list
+		end
+	end
+	table.insert(list, 1, item)
+	table.sort(list, function(a, b)
+		return (a.at or 0) > (b.at or 0)
+	end)
+	while #list > LC.ARCHIVES_KEPT do
+		table.remove(list)
+	end
+	return list
+end
+
+-- Snapshots the top 100 of the season boards ("rating", "wins", "fastestRace") under that season.
+function Leaderboards.archive(seasonId: string)
+	if type(seasonId) ~= "string" or seasonId == "" or archiving[seasonId] then
+		return
+	end
+	local season = currentSeason()
+	local number = seasonNumbers[seasonId]
+	if not number and season and season.id == seasonId then
+		number = season.number
+	end
+	if not number then
+		number = tonumber(seasonId:match("(%d+)%D*$"))
+	end
+	if not number then
+		warn("[CityGrind] Leaderboards.archive: unknown season", seasonId)
+		return
+	end
+	archiving[seasonId] = true
+	local seasonNumber: number = number
+	task.spawn(function()
+		local snap = {
+			id = seasonId,
+			name = seasonNames[seasonId] or ("Season " .. seasonNumber),
+			number = seasonNumber,
+			at = os.time(),
+			boards = {},
+		}
+		for _, s in LC.STATS do
+			if not s.seasonal then
+				continue
+			end
+			local board = boardName(s.id, seasonNumber)
+			flush(board, true) -- get this server's last values in first
+			local list = refreshBoard(board, LC.ARCHIVE_N)
+			if not list then
+				list = merged(board)
+			else
+				-- the DataStore may lag behind values this server just wrote
+				globalTop[board] = list
+				list = merged(board)
+			end
+			local rows = {}
+			for i, e in list do
+				if i > LC.ARCHIVE_N then
+					break
+				end
+				table.insert(rows, { k = e.key, n = e.name, v = e.value })
+			end
+			snap.boards[s.id] = rows
+		end
+		archiveMem[seasonId] = snap
+		archiveIndex = addToIndex(archiveIndex, { id = seasonId, name = snap.name, number = seasonNumber, at = snap.at })
+		if archiveStore and storesOk then
+			local ok, err = pcall(function()
+				local as = archiveStore :: DataStore
+				as:UpdateAsync("season_" .. seasonId, function(old)
+					-- another server may have archived the same season with more entries
+					if type(old) == "table" and type(old.boards) == "table" then
+						local oldCount, newCount = 0, 0
+						for _, rows in old.boards do
+							oldCount += #rows
+						end
+						for _, rows in snap.boards do
+							newCount += #rows
+						end
+						if oldCount >= newCount then
+							return nil
+						end
+					end
+					return snap
+				end)
+				as:UpdateAsync("index", function(old)
+					return addToIndex(if type(old) == "table" then old else {}, { id = seasonId, name = snap.name, number = seasonNumber, at = snap.at })
+				end)
+			end)
+			if not ok then
+				noteFailure(err)
+			end
+		end
+	end)
+end
+
+local archiveMissAt: { [string]: number } = {}
+
+local function readArchive(seasonId: string): any
+	local rec = archiveMem[seasonId]
+	if rec then
+		return rec
+	end
+	-- only seasons in the index, and a failed read is not retried for a minute:
+	-- a client can't spend the server's GetAsync budget on made-up ids
+	local listed = false
+	for _, it in archiveIndex do
+		if it.id == seasonId then
+			listed = true
+			break
+		end
+	end
+	if not listed or os.clock() - (archiveMissAt[seasonId] or -math.huge) < 60 then
+		return nil
+	end
+	archiveMissAt[seasonId] = os.clock()
+	if archiveStore and storesOk and budget(Enum.DataStoreRequestType.GetAsync) then
+		local ok, result = pcall(function()
+			return (archiveStore :: DataStore):GetAsync("season_" .. seasonId)
+		end)
+		if ok and type(result) == "table" then
+			archiveMem[seasonId] = result
+			return result
+		end
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- Phone remote
+---------------------------------------------------------------------------
+local function friendSet(player: Player): { [string]: boolean }
+	local set = { [tostring(player.UserId)] = true }
+	local Social = optional("Social")
+	if Social and type(Social.friendIds) == "function" then
+		local ok, ids = pcall(Social.friendIds, player)
+		if ok and type(ids) == "table" then
+			for _, uid in ids do
+				set[tostring(uid)] = true
+			end
+		end
+	end
+	return set
+end
+
+local function crewIdOf(player: Player): string?
+	local id = player:GetAttribute("CrewId")
+	return if type(id) == "string" and id ~= "" then id else nil
+end
+
+local function boardView(player: Player, statId: string, scope: string): any
+	local s = LC.BY_ID[statId]
+	if not s then
+		return { ok = false, msg = "Unknown board." }
+	end
+	local board = boardFor(statId, if scope == "season" then "season" else "all")
+	if not board then
+		return { ok = false, msg = "No ranked season is running right now." }
+	end
+	local list = merged(board)
+	local myKey = if s.crew then crewIdOf(player) else tostring(player.UserId)
+	if scope == "friends" then
+		if s.crew then
+			return { ok = false, msg = "Crew boards have no friends view." }
+		end
+		local set = friendSet(player)
+		local filtered = {}
+		for _, e in list do
+			if set[e.key] then
+				table.insert(filtered, e)
+			end
+		end
+		list = filtered
+	end
+	local entries = {}
+	local mine = nil
+	for i, e in list do
+		if myKey and e.key == myKey then
+			mine = { rank = if i <= LC.TOP_N or scope == "friends" then i else nil, value = e.value, text = LC.format(statId, e.value) }
+		end
+		if i <= LC.TOP_N then
+			table.insert(entries, { rank = i, name = e.name, text = LC.format(statId, e.value), me = myKey ~= nil and e.key == myKey, userId = if s.crew then nil else tonumber(e.key) })
+		end
+	end
+	return {
+		ok = true,
+		stat = statId,
+		scope = scope,
+		entries = entries,
+		mine = mine,
+		global = storesOk,
+		updatedAt = refreshedAt[board],
+	}
+end
+
+LeaderboardsGet.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+	if not Net.allow(player, "LeaderboardsGet", 0.2) then
+		return { ok = false, msg = "Slow down." }
+	end
+	if action == "Meta" then
+		if os.clock() - indexLoadedAt > 600 then
+			loadIndex()
+		end
+		local season = currentSeason()
+		local archives = {}
+		for _, it in archiveIndex do
+			table.insert(archives, { id = it.id, name = it.name, at = it.at })
+		end
+		return {
+			ok = true,
+			global = storesOk,
+			season = season and { id = season.id, name = seasonNames[season.id] or ("Season " .. season.number), number = season.number, endsAt = season.endsAt } or nil,
+			archives = archives,
+			inCrew = crewIdOf(player) ~= nil,
+		}
+	elseif action == "Board" then
+		if type(a) ~= "string" or (b ~= "all" and b ~= "season" and b ~= "friends") then
+			return { ok = false, msg = "Bad request." }
+		end
+		return boardView(player, a, b)
+	elseif action == "Archive" then
+		if type(a) ~= "string" or #a > 64 then
+			return { ok = false, msg = "Bad request." }
+		end
+		local rec = readArchive(a)
+		if not rec then
+			return { ok = false, msg = "That season's archive isn't available." }
+		end
+		local boards = {}
+		local myKey = tostring(player.UserId)
+		for statId, rows in rec.boards or {} do
+			local list = {}
+			for i, r in rows do
+				if i > LC.ARCHIVE_N then
+					break
+				end
+				table.insert(list, { rank = i, name = tostring(r.n), text = LC.format(statId, tonumber(r.v) or 0), me = tostring(r.k) == myKey })
+			end
+			boards[statId] = list
+		end
+		return { ok = true, id = rec.id, name = rec.name, at = rec.at, boards = boards }
+	end
+	return { ok = false, msg = "Unknown action." }
+end
+
+---------------------------------------------------------------------------
+-- World boards (SurfaceGuis updated by the server)
+---------------------------------------------------------------------------
+type WorldBoard = { title: TextLabel, sub: TextLabel, rows: { TextLabel }, stats: { string }, index: number, name: string }
+local worldBoards: { WorldBoard } = {}
+
+local function part(props: { [string]: any }): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in props do
+		(p :: any)[k] = v
+	end
+	return p
+end
+
+local function text(parent: Instance, props: { [string]: any }): TextLabel
+	local t = Instance.new("TextLabel")
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBold
+	t.TextScaled = true
+	t.TextColor3 = Color3.fromRGB(235, 235, 245)
+	for k, v in props do
+		(t :: any)[k] = v
+	end
+	t.Parent = parent
+	return t
+end
+
+-- A free-standing board at `base` (ground point) whose screen faces `dir`.
+local function buildWorldBoard(folder: Instance, key: string, base: Vector3, dir: Vector3, lift: number)
+	local def = LC.WORLD_BOARDS[key]
+	local m = Instance.new("Model")
+	m.Name = key .. "Board"
+	m.Parent = folder
+	dir = Vector3.new(dir.X, 0, dir.Z).Unit
+	local right = Vector3.new(-dir.Z, 0, dir.X)
+	local w, h = 26, 16
+	local legH = lift + 1
+	for _, s in { -1, 1 } do
+		local legPos = base + right * s * (w / 2 - 1) - dir * 0.8 + Vector3.new(0, legH / 2, 0)
+		part({ Name = "Leg", Size = Vector3.new(1, legH, 1), CFrame = CFrame.new(legPos), Color = Color3.fromRGB(40, 40, 46), Material = Enum.Material.Metal, Parent = m })
+	end
+	local center = base + Vector3.new(0, lift + h / 2, 0)
+	local board = part({ Name = "Screen", Size = Vector3.new(w, h, 1), CFrame = CFrame.lookAt(center, center + dir), Color = Color3.fromRGB(14, 14, 20), Material = Enum.Material.SmoothPlastic, Parent = m })
+	part({ Name = "Trim", Size = Vector3.new(w + 1, 0.6, 1.4), CFrame = CFrame.lookAt(center + Vector3.new(0, h / 2 + 0.3, 0), center + Vector3.new(0, h / 2 + 0.3, 0) + dir), Color = Color3.fromRGB(255, 200, 60), Material = Enum.Material.Neon, Parent = m })
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 30
+	gui.LightInfluence = 0
+	gui.MaxDistance = 300
+	gui.Parent = board
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
+	bg.BorderSizePixel = 0
+	bg.Parent = gui
+	local title = text(bg, { Font = Enum.Font.GothamBlack, Position = UDim2.fromScale(0.03, 0.03), Size = UDim2.fromScale(0.94, 0.12), Text = def.title, TextColor3 = Color3.fromRGB(255, 200, 60) })
+	local sub = text(bg, { Font = Enum.Font.GothamMedium, Position = UDim2.fromScale(0.03, 0.15), Size = UDim2.fromScale(0.94, 0.07), Text = "", TextColor3 = Color3.fromRGB(160, 160, 175) })
+	local rows = {}
+	local rowH = 0.74 / LC.WORLD_ROWS
+	for r = 1, LC.WORLD_ROWS do
+		local row = text(bg, {
+			Position = UDim2.fromScale(0.05, 0.24 + (r - 1) * rowH),
+			Size = UDim2.fromScale(0.9, rowH * 0.86),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = "",
+		})
+		table.insert(rows, row)
+	end
+	table.insert(worldBoards, { title = title, sub = sub, rows = rows, stats = def.stats, index = 0, name = def.title })
+end
+
+local function updateWorldBoards()
+	for _, wb in worldBoards do
+		wb.index = wb.index % #wb.stats + 1
+		local statId = wb.stats[wb.index]
+		local s = LC.BY_ID[statId]
+		local list = Leaderboards.top(statId, LC.WORLD_ROWS, "all") or {}
+		wb.title.Text = s.icon .. "  " .. string.upper(s.label)
+		wb.title.TextColor3 = s.color
+		wb.sub.Text = wb.name .. "  ·  " .. (if storesOk then "ALL SERVERS" else "THIS SERVER") .. "  ·  PHONE › LEADERBOARDS"
+		for r, row in wb.rows do
+			local e = list[r]
+			row.Text = if e then string.format("%d.  %s   —   %s", r, e.name, e.text) elseif r == 1 then "No entries yet — be the first!" else ""
+			row.TextColor3 = if r == 1 then Color3.fromRGB(255, 215, 90) elseif r <= 3 then Color3.fromRGB(220, 225, 240) else Color3.fromRGB(190, 190, 205)
+		end
+	end
+end
+
+local function buildWorld(city: Instance)
+	local folder = Instance.new("Folder")
+	folder.Name = "Leaderboards"
+	folder.Parent = city
+	-- behind the north hoop of the Neighborhood court (court centre 100,0,-110; 76 long)
+	-- (lifted above the court's own scoreboard, which tops out at y 16 on the north fence at z -152)
+	buildWorldBoard(folder, "Court", Vector3.new(100, 0, -162), Vector3.new(0, 0, 1), 17)
+	-- City Speedway: in the infield, facing the grandstand on the south straight
+	local districts = city:FindFirstChild("Districts")
+	local industrial = districts and districts:FindFirstChild("Industrial")
+	local track = industrial and industrial:FindFirstChild("RaceTrack")
+	local center = track and track:GetAttribute("Center")
+	if typeof(center) == "Vector3" then
+		buildWorldBoard(folder, "Grandstand", Vector3.new(center.X - 60, 0, center.Z + 58), Vector3.new(0, 0, 1), 4)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Leaderboards.start(city: Instance?)
+	if city then
+		local ok, err = pcall(buildWorld, city)
+		if not ok then
+			warn("[CityGrind] Leaderboards world boards failed:", err)
+		end
+	end
+
+	PlayerData.onLoaded(function(player)
+		task.wait(2)
+		poll(player)
+	end)
+
+	-- attribute / save polling
+	task.spawn(function()
+		while true do
+			task.wait(LC.POLL_SECONDS)
+			hookRacing()
+			for _, p in Players:GetPlayers() do
+				pcall(poll, p)
+			end
+		end
+	end)
+
+	-- queued writes
+	task.spawn(function()
+		while true do
+			task.wait(5)
+			pcall(flush, nil, false)
+		end
+	end)
+
+	-- global top lists
+	task.spawn(function()
+		task.wait(8)
+		loadIndex()
+		local cycle = 0
+		while true do
+			hookRacing()
+			local boards = {}
+			for _, s in LC.STATS do
+				table.insert(boards, boardName(s.id, nil))
+				local season = currentSeason()
+				if s.seasonal and season then
+					table.insert(boards, boardName(s.id, season.number))
+				end
+			end
+			-- start at a different board each cycle so that, when the GetSortedAsync budget is
+			-- tight (small servers), the boards at the end of the list don't starve
+			cycle += 1
+			local offset = cycle % #boards
+			for i = 1, #boards do
+				local board = boards[(i + offset - 1) % #boards + 1]
+				if not storesOk then
+					break
+				end
+				local list = refreshBoard(board, nil)
+				if list then
+					globalTop[board] = list
+					refreshedAt[board] = os.time()
+				end
+				task.wait(0.5)
+			end
+			pcall(checkRankAchievements)
+			task.wait(LC.REFRESH_SECONDS)
+		end
+	end)
+
+	-- world boards rotate
+	task.spawn(function()
+		task.wait(3)
+		while true do
+			pcall(updateWorldBoards)
+			task.wait(LC.WORLD_ROTATE_SECONDS)
+		end
+	end)
+
+	-- last chance to write before the server closes
+	game:BindToClose(function()
+		if storesOk and not IS_STUDIO then
+			pcall(flush, nil, true)
+		end
+	end)
+end
+
+return Leaderboards
+]=====])
 put(server, 'ModuleScript', 'Media', [=====[
 -- CITY GRIND: photos (sections 30-33, 59). Server side of the Camera and Gallery apps.
 --
@@ -32739,7 +36325,13 @@ function Places.teleport(player: Player, cf: CFrame)
 	if not character or not humanoid then
 		return
 	end
-	if humanoid.SeatPart then
+	local seat = humanoid.SeatPart
+	if seat then
+		-- Break the seat weld first so a car (or bike) isn't dragged along and flung.
+		local weld = seat:FindFirstChild("SeatWeld")
+		if weld then
+			weld:Destroy()
+		end
 		humanoid.Sit = false
 		task.wait()
 	end
@@ -34438,6 +38030,2978 @@ function Quests.start(city: Instance)
 end
 
 return Quests
+]=====])
+put(server, 'ModuleScript', 'Racing', [=====[
+-- CITY GRIND: racing (spec sections 58, 62, 98).
+-- * Circuit races at the City Speedway (Industrial): drive up to the RACE HQ
+--   kiosk by the start line, open it (prompt) and join the lobby from your car.
+--   2-8 racers; LOBBY_WAIT seconds after the 2nd joins the cars are moved to a
+--   staggered grid behind the line, a countdown runs, then RacingConfig.LAPS laps.
+-- * Solo time trials on the same track (same distance) with medal times.
+-- * Street races: challenge another driver from the player menu (client
+--   Social action). They get COUNTDOWN-free 15 s to accept; both cars are moved
+--   to the start of a RacingConfig.ROUTES route, whose checkpoint arches exist
+--   only while that race is live.
+-- Every checkpoint is validated here at 10 Hz from the car's chassis position:
+-- the segment between two samples must cross the checkpoint plane (inside its
+-- width) in order; crossing a later one first is a "missed checkpoint"; flat
+-- speed above the car's top speed * SPEED_FACTOR + SPEED_MARGIN gets strikes,
+-- and a jump over JUMP_STUDS is a teleport (both disqualify).
+--
+-- Public API:
+--   Racing.raceFinished: BindableEvent (player, place, timeSeconds, raceKind, raceId)
+--       raceKind "circuit" | "street" | "trial"; fired for finishers only.
+--   Racing.bestTime(player): number?   best full-distance speedway time (race or trial)
+--   Racing.raceOf(player): string?     kind of the race the player is in ("lobby" while queued)
+-- Player attributes: Race ("" | "lobby" | "circuit" | "street" | "trial"),
+--   RaceBest (seconds, 0 = none), RaceWins (circuit wins).
+-- Saved section "racing": see registerSection below.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local RC = require(shared:WaitForChild("RacingConfig"))
+local VC = require(shared:WaitForChild("VehiclesConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Vehicles = require(script.Parent:WaitForChild("Vehicles"))
+
+local Racing = {}
+Racing.raceFinished = Instance.new("BindableEvent")
+
+PlayerData.registerSection("racing", function()
+	return {
+		bestRace = 0, -- best LAPS-lap speedway time (circuit race or time trial), seconds
+		bestLap = 0,
+		bestTrial = 0,
+		medal = 0, -- best time trial medal: 0 none, 1 bronze, 2 silver, 3 gold
+		races = 0, -- circuit races finished
+		wins = 0,
+		podiums = 0,
+		trials = 0,
+		streetRaces = 0,
+		streetWins = 0,
+		routes = {}, -- [routeId] = best seconds
+		recent = {}, -- newest first: { k = kind, n = name, p = place (0 = DNF), of = field, t = seconds, at = os.time() }
+	}
+end)
+
+local RacingAction = Net.remote("RemoteFunction", "RacingAction") -- (action, ...) -> ok, message, data
+local RacingEvent = Net.remote("RemoteEvent", "RacingEvent") -- server -> client (kind, payload)
+
+type CP = { pos: Vector3, f: Vector3, r: Vector3, hw: number, hh: number, radius: number, ground: Vector3 }
+type Racer = {
+	player: Player,
+	name: string,
+	userId: number,
+	model: Model,
+	chassis: BasePart,
+	spec: VC.Spec,
+	slot: number,
+	lap: number,
+	next: number,
+	dist: number,
+	finished: boolean,
+	dnf: boolean,
+	reason: string?,
+	time: number,
+	place: number,
+	lastPos: Vector3,
+	lastT: number,
+	strikes: number,
+	offSince: number?,
+	lastWarn: number,
+	lapStart: number,
+	bestLap: number,
+	reward: { [string]: any }?,
+	grid: CFrame?, -- where freezeAt parked the car for the countdown
+}
+type Race = {
+	id: string,
+	kind: string,
+	name: string,
+	routeId: string?,
+	laps: number,
+	cps: { CP },
+	list: { Racer },
+	phase: string,
+	goT: number,
+	starters: number,
+	finishers: number,
+	deadline: number?,
+	maxEnd: number,
+	folder: Folder?,
+	tick: number,
+}
+
+local track: { startPos: Vector3, forward: Vector3, right: Vector3, width: number, cps: { CP } }? = nil
+local routeOk: { [string]: boolean } = {}
+local routePoints: { [string]: { Vector3 } } = {}
+local races: { [string]: Race } = {}
+local racerOf: { [Player]: Race } = {}
+local circuitRace: Race? = nil
+local lobby: { Player } = {}
+local lobbyStartAt: number? = nil
+local watchers: { [Player]: number } = {}
+local challenges: { [string]: { id: string, from: Player, to: Player, routeId: string, expires: number } } = {}
+local rewardLog: { [Player]: { number } } = {}
+local root: Folder
+local liveFolder: Folder
+local raceCounter = 0
+
+local function now(): number
+	return workspace:GetServerTimeNow()
+end
+
+local function fire(player: Player, kind: string, payload: any)
+	if player.Parent then
+		RacingEvent:FireClient(player, kind, payload)
+	end
+end
+
+local function sibling(name: string): any
+	local m = script.Parent:FindFirstChild(name)
+	if not m then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return if ok and type(mod) == "table" then mod else nil
+end
+
+local function section(player: Player): any
+	return PlayerData.section(player, "racing")
+end
+
+local function setRace(player: Player, kind: string)
+	if player.Parent then
+		player:SetAttribute("Race", kind)
+	end
+end
+
+local function flat(v: Vector3): Vector3
+	local f = Vector3.new(v.X, 0, v.Z)
+	return if f.Magnitude > 1e-3 then f.Unit else Vector3.xAxis
+end
+
+local function unlock(player: Player, id: string)
+	local Quests = sibling("Quests")
+	if Quests and type(Quests.unlock) == "function" then
+		pcall(Quests.unlock, player, id)
+	end
+end
+
+local function inEvent(player: Player): boolean
+	local Events = sibling("Events")
+	if Events and type(Events.isInEvent) == "function" then
+		local ok, id = pcall(Events.isInEvent, player)
+		return ok and id ~= nil
+	end
+	return false
+end
+
+local function exclusions(): { Instance }
+	local list: { Instance } = {}
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(list, p.Character)
+		end
+	end
+	for _, m in CollectionService:GetTagged("CityVehicle") do
+		table.insert(list, m)
+	end
+	if liveFolder then
+		table.insert(list, liveFolder)
+	end
+	return list
+end
+
+local function groundBelow(pos: Vector3, up: number, down: number): RaycastResult?
+	-- selene: allow(undefined_variable)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclusions()
+	params.RespectCanCollide = true
+	params.IgnoreWater = true
+	return workspace:Raycast(pos + Vector3.new(0, up, 0), Vector3.new(0, -(up + down), 0), params)
+end
+
+---------------------------------------------------------------------------
+-- Track + routes
+---------------------------------------------------------------------------
+local function makeCP(ground: Vector3, forward: Vector3, hw: number, radius: number): CP
+	local f = flat(forward)
+	return { pos = ground + Vector3.new(0, 4, 0), ground = ground, f = f, r = f:Cross(Vector3.yAxis).Unit, hw = hw, hh = 12, radius = radius }
+end
+
+local function loadTrack(city: Instance)
+	local line: BasePart? = nil
+	for _, inst in CollectionService:GetTagged("RaceStart") do
+		if inst:IsA("BasePart") and inst:IsDescendantOf(workspace) then
+			line = inst
+			break
+		end
+	end
+	if not line then
+		warn("[Racing] no RaceStart part found; circuit races and time trials are off")
+		return
+	end
+	local folder = line.Parent and line.Parent:FindFirstChild("Checkpoints")
+	if not folder then
+		local districts = city:FindFirstChild("Districts")
+		local industrial = districts and districts:FindFirstChild("Industrial")
+		local rt = industrial and industrial:FindFirstChild("RaceTrack", true)
+		folder = rt and rt:FindFirstChild("Checkpoints")
+	end
+	local parts = {}
+	if folder then
+		for _, p in folder:GetChildren() do
+			if p:IsA("BasePart") and type(p:GetAttribute("Index")) == "number" then
+				table.insert(parts, p)
+			end
+		end
+	end
+	table.sort(parts, function(a, b)
+		return a:GetAttribute("Index") < b:GetAttribute("Index")
+	end)
+	if #parts == 0 then
+		warn("[Racing] the race track has no checkpoints; circuit races are off")
+		return
+	end
+	local fwdAttr = line:GetAttribute("Forward")
+	local forward = flat(if typeof(fwdAttr) == "Vector3" then fwdAttr else line.CFrame.LookVector)
+	local widthAttr = line:GetAttribute("TrackWidth")
+	local width = if type(widthAttr) == "number" then widthAttr else line.Size.Z
+	local cps = {}
+	for _, p in parts do
+		local ground = p.Position - Vector3.new(0, p.Size.Y / 2, 0)
+		table.insert(cps, makeCP(ground, p.CFrame.LookVector, p.Size.X / 2, 0))
+	end
+	local startGround = Vector3.new(line.Position.X, line.Position.Y - line.Size.Y / 2, line.Position.Z)
+	table.insert(cps, makeCP(startGround, forward, width / 2 + 3, 0)) -- the start/finish line closes each lap
+	track = { startPos = startGround, forward = forward, right = forward:Cross(Vector3.yAxis).Unit, width = width, cps = cps }
+end
+
+local ROAD_PARTS = { MainRoad = true, CrossRoad = true, Street = true, RampRoad = true, Lot = true, LaneMark = true, Crosswalk = true }
+
+-- Snaps every route point to the road and checks the way between points is clear.
+local function validateRoutes()
+	-- selene: allow(undefined_variable)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclusions()
+	params.RespectCanCollide = true
+	params.IgnoreWater = true
+	for _, route in RC.ROUTES do
+		local ok = true
+		local pts = {}
+		for i, p in route.points do
+			-- cast from just above the expected road height so lamp arms or trees can't catch it
+			local hit = groundBelow(p, 6, 12)
+			if not hit then
+				warn(string.format("[Racing] route %s point %d (%s) has no ground; route disabled", route.id, i, tostring(p)))
+				ok = false
+				break
+			end
+			if math.abs(hit.Position.Y - p.Y) > 6 then
+				warn(string.format("[Racing] route %s point %d lands on %s at y=%.1f (expected ~%d); route disabled", route.id, i, hit.Instance:GetFullName(), hit.Position.Y, p.Y))
+				ok = false
+				break
+			end
+			if not ROAD_PARTS[hit.Instance.Name] then
+				warn(string.format("[Racing] route %s point %d is on %s, not a road", route.id, i, hit.Instance.Name))
+			end
+			table.insert(pts, Vector3.new(p.X, hit.Position.Y, p.Z))
+		end
+		if ok then
+			for i = 2, #pts do
+				local a = pts[i - 1] + Vector3.new(0, 3.5, 0)
+				local b = pts[i] + Vector3.new(0, 3.5, 0)
+				local hit = workspace:Raycast(a, b - a, params)
+				if hit then
+					warn(string.format("[Racing] route %s is blocked between points %d and %d by %s; route disabled", route.id, i - 1, i, hit.Instance:GetFullName()))
+					ok = false
+					break
+				end
+			end
+		end
+		routeOk[route.id] = ok
+		routePoints[route.id] = pts
+	end
+end
+
+---------------------------------------------------------------------------
+-- Checkpoint crossing
+---------------------------------------------------------------------------
+-- Did the move p0 -> p1 pass through the checkpoint? Returns the fraction of
+-- the move at which it happened (for precise timing).
+local function crossed(cp: CP, p0: Vector3, p1: Vector3): (boolean, number)
+	local d0 = (p0 - cp.pos):Dot(cp.f)
+	local d1 = (p1 - cp.pos):Dot(cp.f)
+	if d0 < 0 and d1 >= 0 then
+		local t = -d0 / (d1 - d0)
+		local x = p0 + (p1 - p0) * t
+		local rel = x - cp.pos
+		if math.abs(rel:Dot(cp.r)) <= cp.hw and math.abs(rel.Y) <= cp.hh then
+			return true, t
+		end
+	end
+	if cp.radius > 0 then
+		local rel = p1 - cp.pos
+		if Vector3.new(rel.X, 0, rel.Z).Magnitude <= cp.radius and math.abs(rel.Y) <= cp.hh then
+			return true, 1
+		end
+	end
+	return false, 0
+end
+
+---------------------------------------------------------------------------
+-- Cars
+---------------------------------------------------------------------------
+local function freezeAt(r: Racer, groundCF: CFrame)
+	local cf = groundCF * CFrame.new(0, VC.groundOffset(r.spec) + 0.3, 0)
+	r.grid = groundCF
+	r.chassis.Anchored = true
+	r.chassis.AssemblyLinearVelocity = Vector3.zero
+	r.chassis.AssemblyAngularVelocity = Vector3.zero
+	r.model:PivotTo(cf)
+end
+
+local function release(r: Racer)
+	if r.chassis.Parent and r.chassis.Anchored and Vehicles.drivingVehicle(r.player) == r.model then
+		r.chassis.Anchored = false
+		pcall(function()
+			r.chassis:SetNetworkOwner(r.player)
+		end)
+	end
+end
+
+local function slotClear(groundCF: CFrame, size: Vector3, ignore: { Instance }): boolean
+	-- selene: allow(undefined_variable)
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances = ignore
+	overlap.RespectCanCollide = true
+	return #workspace:GetPartBoundsInBox(groundCF * CFrame.new(0, size.Y / 2 + 1.2, 0), size, overlap) == 0
+end
+
+-- Ground CFrame (facing `forward`) at a spot, snapped to whatever is below.
+local function groundCF(pos: Vector3, forward: Vector3): CFrame
+	local hit = groundBelow(pos, 25, 25)
+	local p = if hit then hit.Position else pos
+	return CFrame.lookAt(p, p + forward)
+end
+
+local function trackSlot(i: number): CFrame
+	local t = track :: any
+	local row, col = i // 2, i % 2
+	local back = 12 + row * 16 + col * 8
+	local lateral = (if col == 0 then -1 else 1) * t.width * 0.22
+	return groundCF(t.startPos - t.forward * back + t.right * lateral, t.forward)
+end
+
+local function newRacer(player: Player, model: Model, slot: number): Racer?
+	local chassis = model.PrimaryPart
+	local spec = VC.byId[model:GetAttribute("VehicleId") or ""]
+	if not chassis or not spec then
+		return nil
+	end
+	return {
+		player = player,
+		name = player.DisplayName,
+		userId = player.UserId,
+		model = model,
+		chassis = chassis,
+		spec = spec,
+		slot = slot,
+		lap = 1,
+		next = 1,
+		dist = 0,
+		finished = false,
+		dnf = false,
+		reason = nil,
+		time = 0,
+		place = 0,
+		lastPos = chassis.Position,
+		lastT = now(),
+		strikes = 0,
+		offSince = nil,
+		lastWarn = 0,
+		lapStart = 0,
+		bestLap = 0,
+		reward = nil,
+	}
+end
+
+---------------------------------------------------------------------------
+-- Rewards + saving
+---------------------------------------------------------------------------
+local function underCap(player: Player): boolean
+	local log = rewardLog[player] or {}
+	local cutoff = os.time() - 3600
+	local kept = {}
+	for _, t in log do
+		if t > cutoff then
+			table.insert(kept, t)
+		end
+	end
+	rewardLog[player] = kept
+	if #kept >= RC.REWARD_CAP then
+		return false
+	end
+	table.insert(kept, os.time())
+	return true
+end
+
+local function submitBoard(player: Player, seconds: number)
+	local Leaderboards = sibling("Leaderboards")
+	if Leaderboards and type(Leaderboards.submit) == "function" then
+		pcall(Leaderboards.submit, "fastestRace", player, math.floor(seconds * 1000 + 0.5) / 1000)
+	end
+end
+
+local function pushRecent(sec: any, entry: { [string]: any })
+	table.insert(sec.recent, 1, entry)
+	while #sec.recent > 10 do
+		table.remove(sec.recent)
+	end
+end
+
+-- Pays out and records a finish. Runs once per finisher, at the moment they cross the line.
+local function onFinish(race: Race, r: Racer)
+	local player = r.player
+	local sec = section(player)
+	local reward: { [string]: any } = { cash = 0, xp = 0, rep = 0 }
+	if not sec or not player.Parent then
+		r.reward = reward
+		return
+	end
+	local full = underCap(player)
+	if race.kind == "trial" then
+		reward.xp = if full then RC.TRIAL_XP else math.floor(RC.TRIAL_XP / 2)
+		sec.trials += 1
+		local medal = RC.medalFor(r.time)
+		reward.medal = medal
+		if medal > (sec.medal or 0) then
+			for id = (sec.medal or 0) + 1, medal do
+				local info = RC.medalInfo(id)
+				if info then
+					reward.cash += info.cash
+					reward.xp += info.xp
+				end
+			end
+			sec.medal = medal
+			reward.newMedal = true
+			if medal >= 3 then
+				unlock(player, "trial_gold")
+			end
+		end
+		if sec.bestTrial == 0 or r.time < sec.bestTrial then
+			sec.bestTrial = r.time
+		end
+	else
+		local base = (if race.kind == "circuit" then RC.CIRCUIT_REWARDS else RC.STREET_REWARDS)[r.place]
+		base = base or (if race.kind == "circuit" then RC.CIRCUIT_REWARD_REST else RC.STREET_REWARD_REST)
+		local scale = if race.starters >= 2 then math.min(1, RC.FIELD_BASE + RC.FIELD_STEP * (race.starters - 1)) else 0
+		if full then
+			reward.cash = math.floor(base.cash * scale)
+			reward.xp = math.floor(base.xp * scale)
+			reward.rep = math.floor(base.rep * scale)
+		else
+			reward.xp = math.floor(base.xp * scale / 2)
+			reward.capped = true
+		end
+		if race.kind == "circuit" then
+			sec.races += 1
+			if r.place == 1 and race.starters >= 2 then
+				sec.wins += 1
+				unlock(player, "race_win")
+				if sec.wins >= 10 then
+					unlock(player, "race_wins_10")
+				end
+			end
+			if r.place <= 3 and race.starters >= 2 then
+				sec.podiums += 1
+			end
+		else
+			sec.streetRaces += 1
+			if r.place == 1 and race.starters >= 2 then
+				sec.streetWins += 1
+				unlock(player, "street_king")
+			end
+			local id = race.routeId or ""
+			local best = sec.routes[id]
+			if type(best) ~= "number" or r.time < best then
+				sec.routes[id] = r.time
+				reward.newBest = true
+			end
+		end
+		unlock(player, "race_first")
+	end
+	-- speedway bests (circuit races and trials run the same distance)
+	if race.kind ~= "street" then
+		if r.bestLap > 0 and (sec.bestLap == 0 or r.bestLap < sec.bestLap) then
+			sec.bestLap = r.bestLap
+		end
+		if sec.bestRace == 0 or r.time < sec.bestRace then
+			sec.bestRace = r.time
+			reward.newBest = true
+		end
+		submitBoard(player, sec.bestRace)
+	end
+	PlayerData.markChanged(player)
+	local label = if race.kind == "trial" then "Time trial" elseif race.kind == "circuit" then RC.TRACK_NAME .. " race (" .. RC.ordinal(r.place) .. ")" else race.name .. " (" .. RC.ordinal(r.place) .. ")"
+	if reward.cash > 0 then
+		PlayerData.addCash(player, reward.cash, label)
+	end
+	if reward.xp > 0 then
+		PlayerData.addXP(player, reward.xp)
+	end
+	if reward.rep > 0 then
+		PlayerData.addReputation(player, reward.rep)
+	end
+	r.reward = reward
+end
+
+---------------------------------------------------------------------------
+-- Race lifecycle
+---------------------------------------------------------------------------
+local function standings(race: Race): { Racer }
+	local list = table.clone(race.list)
+	local n = #race.cps
+	table.sort(list, function(a, b)
+		local ka = if a.finished then 0 elseif a.dnf then 2 else 1
+		local kb = if b.finished then 0 elseif b.dnf then 2 else 1
+		if ka ~= kb then
+			return ka < kb
+		end
+		if ka == 0 then
+			return a.place < b.place
+		elseif ka == 2 then
+			return a.slot < b.slot
+		end
+		local pa = (a.lap - 1) * n + a.next
+		local pb = (b.lap - 1) * n + b.next
+		if pa ~= pb then
+			return pa > pb
+		end
+		if a.dist ~= b.dist then
+			return a.dist < b.dist
+		end
+		return a.slot < b.slot
+	end)
+	return list
+end
+
+local function broadcast(race: Race)
+	local order = standings(race)
+	local board = {}
+	for i, r in order do
+		board[i] = { n = r.name, u = r.userId, s = if r.finished then "fin" elseif r.dnf then "dnf" else "", t = r.time }
+	end
+	for i, r in order do
+		fire(r.player, "State", {
+			id = race.id,
+			phase = race.phase,
+			lap = math.min(r.lap, race.laps),
+			laps = race.laps,
+			next = r.next,
+			n = #race.cps,
+			pos = i,
+			total = #order,
+			finished = r.finished,
+			dnf = r.dnf,
+			time = r.time,
+			bestLap = r.bestLap,
+			deadline = race.deadline,
+			board = board,
+		})
+	end
+end
+
+local function clearRacer(race: Race, r: Racer)
+	if racerOf[r.player] == race then
+		racerOf[r.player] = nil
+		setRace(r.player, "")
+	end
+end
+
+local function dnf(race: Race, r: Racer, reason: string)
+	if r.finished or r.dnf then
+		return
+	end
+	r.dnf = true
+	r.reason = reason
+	if r.chassis.Parent and r.chassis.Anchored then
+		release(r)
+	end
+	fire(r.player, "Out", { id = race.id, reason = reason })
+	clearRacer(race, r)
+end
+
+local function endRace(race: Race, note: string?)
+	if race.phase == "done" then
+		return
+	end
+	local wasCountdown = race.phase == "countdown"
+	race.phase = "done"
+	races[race.id] = nil
+	if circuitRace == race then
+		circuitRace = nil
+		if lobbyStartAt then
+			lobbyStartAt = math.max(lobbyStartAt, now() + 8)
+		end
+	end
+	for _, r in race.list do
+		if not r.finished and not r.dnf then
+			r.dnf = true
+			r.reason = note or "Did not finish"
+		end
+		if r.chassis.Parent and r.chassis.Anchored then
+			release(r)
+		end
+		clearRacer(race, r)
+	end
+	if race.folder then
+		race.folder:Destroy()
+		race.folder = nil
+	end
+	local order = standings(race)
+	local rows = {}
+	for _, r in order do
+		table.insert(rows, { name = r.name, userId = r.userId, place = r.place, time = r.time, bestLap = r.bestLap, status = if r.finished then "fin" else "dnf", reason = r.reason, vehicle = r.spec.name })
+	end
+	for _, r in race.list do
+		local player = r.player
+		if not player.Parent then
+			continue
+		end
+		local sec = section(player)
+		if sec and not wasCountdown then
+			pushRecent(sec, { k = race.kind, n = race.name, p = if r.finished then r.place else 0, of = #race.list, t = if r.finished then r.time else 0, at = os.time() })
+			PlayerData.markChanged(player)
+		end
+		fire(player, "Results", {
+			id = race.id,
+			kind = race.kind,
+			name = race.name,
+			laps = race.laps,
+			note = note,
+			rows = rows,
+			you = { place = r.place, time = r.time, bestLap = r.bestLap, finished = r.finished, reason = r.reason, reward = r.reward },
+			best = sec and sec.bestRace or 0,
+			routeBest = if sec and race.routeId then sec.routes[race.routeId] else nil,
+		})
+	end
+end
+
+local function finish(race: Race, r: Racer, time: number)
+	race.finishers += 1
+	r.finished = true
+	r.time = time
+	r.place = race.finishers
+	if race.finishers == 1 and race.kind ~= "trial" then
+		race.deadline = now() + (if race.kind == "street" then RC.STREET_DNF_AFTER_WINNER else RC.DNF_AFTER_WINNER)
+		for _, other in race.list do
+			if other ~= r and not other.finished and not other.dnf then
+				Net.notify(other.player, "WINNER IN", string.format("%s took the win. You have %ds to finish.", r.name, if race.kind == "street" then RC.STREET_DNF_AFTER_WINNER else RC.DNF_AFTER_WINNER))
+			end
+		end
+	end
+	onFinish(race, r)
+	fire(r.player, "Finished", { id = race.id, place = r.place, time = time, total = #race.list })
+	clearRacer(race, r)
+	Racing.raceFinished:Fire(r.player, r.place, time, race.kind, race.id)
+end
+
+local function advance(race: Race, r: Racer, p0: Vector3, p1: Vector3, t0: number, t1: number)
+	local n = #race.cps
+	local hit, frac = crossed(race.cps[r.next], p0, p1)
+	if hit then
+		local tc = t0 + (t1 - t0) * frac
+		if r.next == n then
+			local lapTime = tc - r.lapStart
+			r.lapStart = tc
+			if race.laps > 1 and (r.bestLap == 0 or lapTime < r.bestLap) then
+				r.bestLap = lapTime
+			end
+			if r.lap >= race.laps then
+				if race.laps == 1 then
+					r.bestLap = 0
+				end
+				finish(race, r, tc - race.goT)
+				return
+			end
+			r.lap += 1
+			r.next = 1
+			fire(r.player, "Lap", { id = race.id, lap = r.lap, laps = race.laps, lapTime = lapTime, best = r.bestLap })
+		else
+			r.next += 1
+		end
+		return
+	end
+	for j = r.next + 1, n do
+		-- the line itself is crossed at the start of the race / of every lap
+		if j == n and r.next == 1 and race.kind ~= "street" then
+			continue
+		end
+		if crossed(race.cps[j], p0, p1) then
+			if t1 - r.lastWarn > 3 then
+				r.lastWarn = t1
+				fire(r.player, "Missed", { id = race.id, next = r.next })
+			end
+			break
+		end
+	end
+end
+
+local function go(race: Race)
+	race.phase = "live"
+	local t = now()
+	local starters = 0
+	for _, r in race.list do
+		if r.dnf then
+			continue
+		end
+		if not r.player.Parent or Vehicles.drivingVehicle(r.player) ~= r.model then
+			dnf(race, r, "You weren't in your vehicle at the start.")
+			continue
+		end
+		starters += 1
+		release(r)
+		r.lastPos = r.chassis.Position
+		r.lastT = t
+		r.lapStart = race.goT
+	end
+	race.starters = starters
+	local needed = if race.kind == "trial" then 1 else RC.MIN_RACERS
+	if starters < needed then
+		race.phase = "countdown" -- cancelled before it really started: nothing is recorded
+		endRace(race, "Not enough racers at the start.")
+	end
+end
+
+local function stepRace(race: Race, t: number)
+	if race.phase == "countdown" then
+		for _, r in race.list do
+			if not r.dnf and not r.player.Parent then
+				dnf(race, r, "Left the game")
+			elseif not r.dnf and r.grid and r.chassis.Parent and not r.chassis.Anchored then
+				-- Vehicles unanchors a car when its driver sits back down: no rolling starts.
+				freezeAt(r, r.grid :: CFrame)
+			end
+		end
+		if t >= race.goT then
+			go(race)
+		end
+		race.tick += 1
+		if race.tick % 5 == 0 and race.phase == "countdown" then
+			broadcast(race)
+		end
+		return
+	end
+	if race.phase ~= "live" then
+		return
+	end
+	local n = #race.cps
+	for _, r in race.list do
+		if r.finished or r.dnf then
+			continue
+		end
+		local player = r.player
+		if not player.Parent then
+			dnf(race, r, "Left the game")
+			continue
+		end
+		if not r.model.Parent or not r.chassis.Parent then
+			dnf(race, r, "Your vehicle is gone.")
+			continue
+		end
+		local pos = r.chassis.Position
+		local dt = t - r.lastT
+		if dt <= 0 then
+			continue
+		end
+		if Vehicles.drivingVehicle(player) ~= r.model then
+			r.offSince = r.offSince or t
+			if t - (r.offSince :: number) > RC.OFF_VEHICLE_GRACE then
+				dnf(race, r, "You left your vehicle.")
+				continue
+			end
+			r.lastPos = pos
+			r.lastT = t
+			continue
+		end
+		r.offSince = nil
+		if not r.chassis.Anchored then
+			local moved = Vector3.new(pos.X - r.lastPos.X, 0, pos.Z - r.lastPos.Z).Magnitude
+			local limit = r.spec.topSpeed * RC.SPEED_FACTOR + RC.SPEED_MARGIN
+			if moved > limit * dt + RC.JUMP_STUDS then
+				dnf(race, r, "Disqualified: your car jumped across the map.")
+				continue
+			end
+			if moved / dt > limit then
+				r.strikes += 1
+				if r.strikes >= RC.STRIKES then
+					dnf(race, r, "Disqualified: impossible speed.")
+					continue
+				end
+			else
+				r.strikes = math.max(0, r.strikes - 0.15)
+			end
+			advance(race, r, r.lastPos, pos, r.lastT, t)
+		end
+		r.lastPos = pos
+		r.lastT = t
+		if not r.finished and r.next <= n then
+			local target = race.cps[r.next].pos
+			r.dist = Vector3.new(target.X - pos.X, 0, target.Z - pos.Z).Magnitude
+		end
+	end
+	race.tick += 1
+	if race.tick % 2 == 0 then
+		broadcast(race)
+	end
+	local active = 0
+	for _, r in race.list do
+		if not r.finished and not r.dnf then
+			active += 1
+		end
+	end
+	if active == 0 then
+		endRace(race)
+	elseif race.deadline and t >= race.deadline then
+		endRace(race, "Out of time")
+	elseif t >= race.maxEnd then
+		endRace(race, "Time limit reached")
+	end
+end
+
+local function newRace(kind: string, name: string, laps: number, cps: { CP }, countdown: number, maxSeconds: number): Race
+	raceCounter += 1
+	local t = now()
+	local race: Race = {
+		id = string.format("%s-%d-%d", kind, os.time(), raceCounter),
+		kind = kind,
+		name = name,
+		routeId = nil,
+		laps = laps,
+		cps = cps,
+		list = {},
+		phase = "countdown",
+		goT = t + countdown,
+		starters = 0,
+		finishers = 0,
+		deadline = nil,
+		maxEnd = t + countdown + maxSeconds,
+		folder = nil,
+		tick = 0,
+	}
+	return race
+end
+
+local function announce(race: Race)
+	local cps = {}
+	for i, cp in race.cps do
+		cps[i] = { p = cp.pos, g = cp.ground, f = cp.f, w = cp.hw }
+	end
+	races[race.id] = race
+	for _, r in race.list do
+		racerOf[r.player] = race
+		setRace(r.player, race.kind)
+		fire(r.player, "Race", { id = race.id, kind = race.kind, name = race.name, laps = race.laps, cps = cps, goT = race.goT, total = #race.list })
+	end
+	broadcast(race)
+end
+
+---------------------------------------------------------------------------
+-- Lobby (circuit races)
+---------------------------------------------------------------------------
+local function lobbyInfo(): { [string]: any }
+	local names = {}
+	for _, p in lobby do
+		table.insert(names, p.DisplayName)
+	end
+	local live = circuitRace
+	return {
+		names = names,
+		count = #lobby,
+		min = RC.MIN_RACERS,
+		max = RC.MAX_RACERS,
+		startAt = lobbyStartAt,
+		raceLive = live ~= nil,
+		raceCount = if live then #live.list else 0,
+		laps = RC.LAPS,
+	}
+end
+
+-- `left`: players just taken out of the lobby, so their client drops the lobby chip.
+local function broadcastLobby(left: { Player }?)
+	local info = lobbyInfo()
+	local sent: { [Player]: boolean } = {}
+	for _, p in lobby do
+		info.inLobby = true
+		fire(p, "Lobby", info)
+		sent[p] = true
+	end
+	info.inLobby = false
+	for _, p in (left or {}) :: { Player } do
+		if not sent[p] then
+			fire(p, "Lobby", info)
+			sent[p] = true
+		end
+	end
+	local t = os.clock()
+	for p, expires in watchers do
+		if t > expires or not p.Parent then
+			watchers[p] = nil
+		elseif not sent[p] then
+			fire(p, "Lobby", info)
+		end
+	end
+end
+
+local function removeFromLobby(player: Player, reason: string?)
+	local i = table.find(lobby, player)
+	if not i then
+		return
+	end
+	table.remove(lobby, i)
+	if player.Parent and not racerOf[player] then
+		setRace(player, "")
+	end
+	if reason then
+		Net.notify(player, "RACE LOBBY", reason)
+	end
+	if #lobby < RC.MIN_RACERS then
+		lobbyStartAt = nil
+	end
+	broadcastLobby({ player })
+end
+
+local function carNear(player: Player, pos: Vector3, range: number): Model?
+	local model = Vehicles.drivingVehicle(player)
+	local chassis = model and model.PrimaryPart
+	if not model or not chassis then
+		return nil
+	end
+	local d = chassis.Position - pos
+	if Vector3.new(d.X, 0, d.Z).Magnitude > range or math.abs(d.Y) > 40 then
+		return nil
+	end
+	return model
+end
+
+local function busyReason(player: Player): string?
+	if racerOf[player] then
+		return "You're already in a race."
+	end
+	if inEvent(player) then
+		return "Finish your event first."
+	end
+	local q = player:GetAttribute("RankedQueue")
+	if (type(q) == "string" and q ~= "") or player:GetAttribute("InGame") then
+		return "You're queued for (or playing) a basketball game."
+	end
+	return nil
+end
+
+local function cancelTrials(reason: string)
+	for _, race in races do
+		if race.kind == "trial" then
+			for _, r in race.list do
+				Net.notify(r.player, "TIME TRIAL", reason)
+			end
+			endRace(race, reason)
+		end
+	end
+end
+
+local function startCircuit()
+	local t = track
+	if not t then
+		return
+	end
+	local entrants: { Player } = {}
+	while #lobby > 0 and #entrants < RC.MAX_RACERS do
+		table.insert(entrants, table.remove(lobby, 1) :: Player)
+	end
+	lobbyStartAt = if #lobby >= RC.MIN_RACERS then now() + RC.LOBBY_WAIT else nil
+	cancelTrials("The track is closing for a race. Try again after it.")
+	local race = newRace("circuit", RC.TRACK_NAME, RC.LAPS, t.cps, RC.COUNTDOWN, RC.CIRCUIT_MAX_SECONDS)
+	for _, p in entrants do
+		local model = p.Parent and carNear(p, t.startPos, RC.LOBBY_RANGE * 2)
+		local r = model and newRacer(p, model, #race.list)
+		if r then
+			table.insert(race.list, r)
+		else
+			setRace(p, "")
+			Net.notify(p, "RACE", "You had to be in your car near the start line, so you missed the grid.")
+		end
+	end
+	if #race.list < RC.MIN_RACERS then
+		for _, r in race.list do
+			table.insert(lobby, r.player) -- back in the queue
+			setRace(r.player, "lobby")
+		end
+		lobbyStartAt = if #lobby >= RC.MIN_RACERS then now() + RC.LOBBY_WAIT else nil
+		broadcastLobby(entrants)
+		return
+	end
+	for _, r in race.list do
+		freezeAt(r, trackSlot(r.slot))
+	end
+	circuitRace = race
+	announce(race)
+	broadcastLobby(entrants)
+end
+
+local function lobbyTick()
+	local t = track
+	if not t then
+		return
+	end
+	for i = #lobby, 1, -1 do
+		local p = lobby[i]
+		if not p.Parent then
+			table.remove(lobby, i)
+		elseif not carNear(p, t.startPos, RC.LOBBY_RANGE) then
+			removeFromLobby(p, "You left the start area (or your car), so you were taken out of the lobby.")
+		end
+	end
+	if #lobby < RC.MIN_RACERS then
+		if lobbyStartAt then
+			lobbyStartAt = nil
+			broadcastLobby()
+		end
+		return
+	end
+	if lobbyStartAt and now() >= lobbyStartAt and circuitRace == nil then
+		startCircuit()
+	end
+end
+
+local function join(player: Player): (boolean, string)
+	local t = track
+	if not t then
+		return false, "The speedway isn't open."
+	end
+	if table.find(lobby, player) then
+		return false, "You're already in the lobby."
+	end
+	local busy = busyReason(player)
+	if busy then
+		return false, busy
+	end
+	if not Vehicles.drivingVehicle(player) then
+		return false, "Get in your vehicle first."
+	end
+	if not carNear(player, t.startPos, RC.LOBBY_RANGE) then
+		return false, "Drive up to the start line at the " .. RC.TRACK_NAME .. " to join."
+	end
+	if #lobby >= RC.MAX_RACERS then
+		return false, "The lobby is full. Catch the next one."
+	end
+	table.insert(lobby, player)
+	setRace(player, "lobby")
+	if #lobby >= RC.MIN_RACERS and not lobbyStartAt then
+		lobbyStartAt = now() + RC.LOBBY_WAIT
+	end
+	if #lobby >= RC.MAX_RACERS and lobbyStartAt then
+		lobbyStartAt = math.min(lobbyStartAt, now() + RC.LOBBY_FULL_WAIT)
+	end
+	broadcastLobby()
+	if #lobby < RC.MIN_RACERS then
+		return true, "You're in! Waiting for one more racer."
+	end
+	return true, "You're in! The race starts soon."
+end
+
+---------------------------------------------------------------------------
+-- Time trials
+---------------------------------------------------------------------------
+local function trial(player: Player): (boolean, string)
+	local t = track
+	if not t then
+		return false, "The speedway isn't open."
+	end
+	local busy = busyReason(player)
+	if busy then
+		return false, busy
+	end
+	if table.find(lobby, player) then
+		return false, "Leave the race lobby first."
+	end
+	if circuitRace then
+		return false, "A race is on the track right now. Join the next one or wait for it to finish."
+	end
+	if not Vehicles.drivingVehicle(player) then
+		return false, "Get in your vehicle first."
+	end
+	local model = carNear(player, t.startPos, RC.TRACK_RANGE)
+	if not model then
+		return false, "Drive to the " .. RC.TRACK_NAME .. " in Industrial to start a time trial."
+	end
+	local used: { [number]: boolean } = {}
+	for _, race in races do
+		if race.kind == "trial" then
+			for _, r in race.list do
+				used[r.slot] = true
+			end
+		end
+	end
+	local slot: number? = nil
+	for i = 0, RC.MAX_RACERS - 1 do
+		if not used[i] then
+			slot = i
+			break
+		end
+	end
+	if not slot then
+		return false, "The track is packed with time trials. Try again in a minute."
+	end
+	local race = newRace("trial", RC.TRACK_NAME .. " Time Trial", RC.LAPS, t.cps, RC.TRIAL_COUNTDOWN, RC.TRIAL_MAX_SECONDS)
+	local r = newRacer(player, model, slot)
+	if not r then
+		return false, "Your vehicle isn't ready."
+	end
+	table.insert(race.list, r)
+	freezeAt(r, trackSlot(slot))
+	announce(race)
+	return true, "Time trial: " .. RC.LAPS .. " laps. Go on green!"
+end
+
+---------------------------------------------------------------------------
+-- Street races
+---------------------------------------------------------------------------
+local function startStreet(a: Player, b: Player, routeId: string): (boolean, string)
+	local route = RC.ROUTE_BY_ID[routeId]
+	local pts = routePoints[routeId]
+	if not route or not pts or not routeOk[routeId] then
+		return false, "That route is closed."
+	end
+	local ma, mb = Vehicles.drivingVehicle(a), Vehicles.drivingVehicle(b)
+	if not ma or not mb then
+		return false, "Both drivers need to be in their vehicles."
+	end
+	local cps = {}
+	for i = 2, #pts do
+		local dirIn = flat(pts[i] - pts[i - 1])
+		local f = dirIn
+		if i < #pts then
+			local dirOut = flat(pts[i + 1] - pts[i])
+			local sum = dirIn + dirOut
+			f = if sum.Magnitude > 0.1 then sum.Unit else dirOut
+		end
+		local hw = RC.STREET_GATE_HALF_WIDTH / math.max(0.5, dirIn:Dot(f))
+		table.insert(cps, makeCP(pts[i], f, hw, RC.STREET_PROXIMITY))
+	end
+	local race = newRace("street", route.name, 1, cps, RC.COUNTDOWN, route.length / 12 + 60)
+	race.routeId = routeId
+	local ra, rb = newRacer(a, ma, 0), newRacer(b, mb, 1)
+	if not ra or not rb then
+		return false, "A vehicle isn't ready."
+	end
+	race.list = { ra, rb }
+	-- grid: side by side behind the first point; slide back if something is in the way
+	local dir = flat(pts[2] - pts[1])
+	local right = dir:Cross(Vector3.yAxis).Unit
+	local ignore: { Instance } = { liveFolder }
+	for _, p in Players:GetPlayers() do
+		if p.Character then
+			table.insert(ignore, p.Character)
+		end
+	end
+	for _, r in race.list do
+		table.insert(ignore, r.model)
+	end
+	for k, r in race.list do
+		local lateral = (if k == 1 then -1 else 1) * 6
+		local cf = groundCF(pts[1] - dir * 10 + right * lateral, dir)
+		for back = 1, 5 do
+			local size = Vector3.new(r.spec.width + 1, r.spec.height - 1, r.spec.length + 1)
+			if slotClear(cf, size, ignore) then
+				break
+			end
+			cf = groundCF(pts[1] - dir * (10 + back * 14) + right * lateral, dir)
+		end
+		freezeAt(r, cf)
+	end
+	-- checkpoint arches, only while this race is live
+	local folder = Instance.new("Folder")
+	folder.Name = race.id
+	folder.Parent = liveFolder
+	race.folder = folder
+	for i, cp in cps do
+		local color = if i == #cps then Color3.fromRGB(255, 255, 255) else Color3.fromRGB(255, 140, 40)
+		RC.buildArch(cp.ground, cp.f, math.min(cp.hw, 18), color, 0.35, folder)
+	end
+	announce(race)
+	return true, "Race on!"
+end
+
+local function closeChallenge(id: string, note: string?)
+	local c = challenges[id]
+	if not c then
+		return
+	end
+	challenges[id] = nil
+	fire(c.to, "ChallengeClosed", { id = id })
+	if note then
+		Net.notify(c.from, "STREET RACE", note)
+	end
+end
+
+local function challenge(from: Player, targetId: any, routeId: any): (boolean, string)
+	if type(targetId) ~= "number" or type(routeId) ~= "string" then
+		return false, "Invalid request."
+	end
+	local to = Players:GetPlayerByUserId(targetId)
+	if not to or to == from then
+		return false, "They're not here."
+	end
+	local route = RC.ROUTE_BY_ID[routeId]
+	if not route or not routeOk[routeId] then
+		return false, "That route is closed."
+	end
+	local busy = busyReason(from) or (if table.find(lobby, from) then "Leave the race lobby first." else nil)
+	if busy then
+		return false, busy
+	end
+	if busyReason(to) or table.find(lobby, to) then
+		return false, to.DisplayName .. " is busy right now."
+	end
+	local mine = Vehicles.drivingVehicle(from)
+	local theirs = Vehicles.drivingVehicle(to)
+	if not mine then
+		return false, "Get in your vehicle first."
+	end
+	if not theirs then
+		return false, to.DisplayName .. " isn't driving."
+	end
+	local pa, pb = (mine.PrimaryPart :: BasePart).Position, (theirs.PrimaryPart :: BasePart).Position
+	if (pa - pb).Magnitude > RC.CHALLENGE_RANGE then
+		return false, "Pull up next to them first."
+	end
+	local Social = sibling("Social")
+	if Social and type(Social.allows) == "function" then
+		local ok, allowed, reason = pcall(Social.allows, from, to, "invite")
+		if not ok or not allowed then
+			return false, (if ok then reason else nil) or "You can't challenge this player."
+		end
+	end
+	if not Net.allow(from, "RaceChallenge", RC.CHALLENGE_COOLDOWN) then
+		return false, "Give it a few seconds."
+	end
+	for id, c in challenges do
+		if c.from == from or c.to == from then
+			closeChallenge(id)
+		end
+	end
+	raceCounter += 1
+	local id = string.format("c%d-%d", os.time(), raceCounter)
+	local expires = now() + RC.CHALLENGE_SECONDS
+	challenges[id] = { id = id, from = from, to = to, routeId = routeId, expires = expires }
+	fire(to, "Challenge", { id = id, from = from.DisplayName, fromId = from.UserId, route = route.name, routeId = routeId, length = route.length, expires = expires })
+	return true, "Challenge sent to " .. to.DisplayName .. "."
+end
+
+local function respond(player: Player, id: any, accept: any): (boolean, string)
+	if type(id) ~= "string" then
+		return false, "Invalid request."
+	end
+	local c = challenges[id]
+	if not c or c.to ~= player then
+		return false, "That challenge isn't open anymore."
+	end
+	challenges[id] = nil
+	local from = c.from
+	if accept ~= true then
+		if from.Parent then
+			Net.notify(from, "STREET RACE", player.DisplayName .. " passed on your challenge.")
+		end
+		return true, "Declined."
+	end
+	if now() > c.expires then
+		return false, "That challenge expired."
+	end
+	if not from.Parent then
+		return false, "They left."
+	end
+	local busy = busyReason(player) or busyReason(from)
+	if busy or table.find(lobby, player) or table.find(lobby, from) then
+		return false, "One of you is busy right now."
+	end
+	local ma, mb = Vehicles.drivingVehicle(from), Vehicles.drivingVehicle(player)
+	if not ma or not mb then
+		return false, "Both drivers need to be in their vehicles."
+	end
+	if ((ma.PrimaryPart :: BasePart).Position - (mb.PrimaryPart :: BasePart).Position).Magnitude > RC.CHALLENGE_RANGE * 2 then
+		return false, "You drove too far apart."
+	end
+	local ok, message = startStreet(from, player, c.routeId)
+	if not ok then
+		Net.notify(from, "STREET RACE", message)
+	end
+	return ok, message
+end
+
+---------------------------------------------------------------------------
+-- Info for the panel / phone app
+---------------------------------------------------------------------------
+local function infoFor(player: Player): { [string]: any }
+	local sec = section(player)
+	local stats = {}
+	local recent = {}
+	if sec then
+		for _, k in { "bestRace", "bestLap", "bestTrial", "medal", "races", "wins", "podiums", "trials", "streetRaces", "streetWins" } do
+			stats[k] = sec[k]
+		end
+		recent = table.clone(sec.recent)
+	end
+	local routes = {}
+	for _, route in RC.ROUTES do
+		local pts = routePoints[route.id]
+		table.insert(routes, {
+			id = route.id,
+			ok = routeOk[route.id] == true,
+			best = if sec and type(sec.routes[route.id]) == "number" then sec.routes[route.id] else 0,
+			start = if pts and pts[1] then pts[1] else route.points[1],
+		})
+	end
+	local info = lobbyInfo()
+	info.inLobby = table.find(lobby, player) ~= nil
+	return {
+		track = if track then { pos = track.startPos, name = RC.TRACK_NAME } else nil,
+		lobby = info,
+		racing = if racerOf[player] then racerOf[player].kind else nil,
+		stats = stats,
+		recent = recent,
+		routes = routes,
+		loaded = sec ~= nil,
+	}
+end
+
+---------------------------------------------------------------------------
+-- Remotes
+---------------------------------------------------------------------------
+RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+	if type(action) ~= "string" then
+		return false, "Invalid request."
+	end
+	if action == "info" then
+		if not Net.allow(player, "RacingInfo", 0.5) then
+			return false, "Slow down."
+		end
+		return true, "", infoFor(player)
+	end
+	if not Net.allow(player, "RacingAction", 0.4) then
+		return false, "Slow down."
+	end
+	if not PlayerData.isLoaded(player) then
+		return false, "Your save is still loading."
+	end
+	if action == "join" then
+		local ok, message = join(player)
+		return ok, message
+	elseif action == "leave" then
+		if not table.find(lobby, player) then
+			return false, "You're not in the lobby."
+		end
+		removeFromLobby(player)
+		return true, "You left the lobby."
+	elseif action == "trial" then
+		local ok, message = trial(player)
+		return ok, message
+	elseif action == "quit" then
+		local race = racerOf[player]
+		if not race then
+			return false, "You're not racing."
+		end
+		for _, r in race.list do
+			if r.player == player then
+				if race.kind == "trial" then
+					endRace(race, "Abandoned")
+				else
+					dnf(race, r, "You quit the race.")
+				end
+			end
+		end
+		return true, "You quit."
+	elseif action == "challenge" then
+		local ok, message = challenge(player, a, b)
+		return ok, message
+	elseif action == "respond" then
+		local ok, message = respond(player, a, b)
+		return ok, message
+	end
+	return false, "Unknown action."
+end
+
+---------------------------------------------------------------------------
+-- RACE HQ kiosk by the start line
+---------------------------------------------------------------------------
+local function buildKiosk()
+	local t = track
+	if not t then
+		return
+	end
+	local model = Instance.new("Model")
+	model.Name = "RaceHQ"
+	model.Parent = root
+	local spot = t.startPos - t.forward * 22 - t.right * (t.width / 2 + 7)
+	local base = groundCF(spot, t.right)
+	local function part(name: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?): Part
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.Size = size
+		p.CFrame = cf
+		p.Color = color
+		p.Material = material or Enum.Material.SmoothPlastic
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = model
+		return p
+	end
+	part("Pad", Vector3.new(10, 0.3, 8), base * CFrame.new(0, 0.15, 0), Color3.fromRGB(40, 40, 46), Enum.Material.Concrete)
+	local booth = part("Booth", Vector3.new(4, 5, 3), base * CFrame.new(0, 2.8, 0), Color3.fromRGB(30, 30, 36), Enum.Material.Metal)
+	part("Stripe", Vector3.new(4.1, 0.4, 3.1), base * CFrame.new(0, 4.6, 0), Color3.fromRGB(255, 60, 60), Enum.Material.Neon)
+	for _, x in { -3.5, 3.5 } do
+		part("Pole", Vector3.new(0.5, 12, 0.5), base * CFrame.new(x, 6, 0), Color3.fromRGB(70, 72, 78), Enum.Material.Metal)
+	end
+	local sign = part("Sign", Vector3.new(9, 3, 0.4), base * CFrame.new(0, 11, 0), Color3.fromRGB(20, 20, 24))
+	for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 40
+		gui.LightInfluence = 0
+		gui.Parent = sign
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.fromScale(1, 0.62)
+		label.Text = "RACE HQ"
+		label.Font = Enum.Font.GothamBlack
+		label.TextScaled = true
+		label.TextColor3 = Color3.fromRGB(255, 220, 60)
+		label.Parent = gui
+		local sub = Instance.new("TextLabel")
+		sub.BackgroundTransparency = 1
+		sub.Position = UDim2.fromScale(0, 0.6)
+		sub.Size = UDim2.fromScale(1, 0.36)
+		sub.Text = "Races · Time trials"
+		sub.Font = Enum.Font.GothamBold
+		sub.TextScaled = true
+		sub.TextColor3 = Color3.fromRGB(230, 230, 235)
+		sub.Parent = gui
+	end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "RacePrompt"
+	prompt.ActionText = "Race"
+	prompt.ObjectText = RC.TRACK_NAME
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.MaxActivationDistance = 42
+	prompt.RequiresLineOfSight = false
+	prompt.HoldDuration = 0
+	prompt.Parent = booth
+	prompt.Triggered:Connect(function(player: Player)
+		if not Net.allow(player, "RacingPanel", 0.5) then
+			return
+		end
+		if Net.distance(player, booth.Position) > 60 then
+			return
+		end
+		watchers[player] = os.clock() + 120
+		fire(player, "Panel", infoFor(player))
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+function Racing.bestTime(player: Player): number?
+	local sec = section(player)
+	if sec and type(sec.bestRace) == "number" and sec.bestRace > 0 then
+		return sec.bestRace
+	end
+	return nil
+end
+
+function Racing.raceOf(player: Player): string?
+	local race = racerOf[player]
+	if race then
+		return race.kind
+	end
+	if table.find(lobby, player) then
+		return "lobby"
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Racing.start(city: Instance)
+	local old = city:FindFirstChild("Racing")
+	if old then
+		old:Destroy()
+	end
+	root = Instance.new("Folder")
+	root.Name = "Racing"
+	root.Parent = city
+	liveFolder = Instance.new("Folder")
+	liveFolder.Name = "Live"
+	liveFolder.Parent = root
+
+	loadTrack(city)
+	validateRoutes()
+	buildKiosk()
+
+	PlayerData.onPublish(function(player: Player, data: any)
+		local sec = data.sections and data.sections.racing
+		if sec then
+			if player:GetAttribute("RaceBest") ~= sec.bestRace then
+				player:SetAttribute("RaceBest", sec.bestRace)
+			end
+			if player:GetAttribute("RaceWins") ~= sec.wins then
+				player:SetAttribute("RaceWins", sec.wins)
+			end
+		end
+	end)
+	PlayerData.onLoaded(function(player: Player)
+		local sec = section(player)
+		if sec and sec.bestRace > 0 then
+			submitBoard(player, sec.bestRace)
+		end
+	end)
+
+	local function onPlayer(player: Player)
+		player:SetAttribute("Race", "")
+	end
+	Players.PlayerAdded:Connect(onPlayer)
+	for _, p in Players:GetPlayers() do
+		onPlayer(p)
+	end
+	Players.PlayerRemoving:Connect(function(player: Player)
+		local i = table.find(lobby, player)
+		if i then
+			table.remove(lobby, i)
+			if #lobby < RC.MIN_RACERS then
+				lobbyStartAt = nil
+			end
+			broadcastLobby()
+		end
+		for id, c in challenges do
+			if c.from == player or c.to == player then
+				closeChallenge(id, if c.to == player then c.to.DisplayName .. " left." else nil)
+			end
+		end
+		watchers[player] = nil
+		rewardLog[player] = nil
+		-- racerOf is cleared when the race notices (next tick)
+	end)
+
+	task.spawn(function()
+		local lobbyClock = 0
+		while true do
+			task.wait(RC.TICK)
+			local t = now()
+			for _, race in races do
+				local ok, err = pcall(stepRace, race, t)
+				if not ok then
+					warn("[Racing] race step failed:", err)
+					pcall(endRace, race, "Race cancelled")
+				end
+			end
+			for id, c in challenges do
+				if t > c.expires then
+					closeChallenge(id, c.to.DisplayName .. " didn't answer your challenge.")
+				end
+			end
+			lobbyClock += RC.TICK
+			if lobbyClock >= 0.5 then
+				lobbyClock = 0
+				local ok, err = pcall(lobbyTick)
+				if not ok then
+					warn("[Racing] lobby tick failed:", err)
+				end
+			end
+		end
+	end)
+end
+
+return Racing
+]=====])
+put(server, 'ModuleScript', 'Ranked', [=====[
+-- CITY GRIND: ranked basketball and seasons (spec 54, 55). Server side.
+--
+-- Ranked queue: 1v1 (solo) and 2v2 (a party of exactly 2 queues together, or
+-- solos get paired). Requirements: Level >= RankedConfig.MIN_LEVEL and a
+-- "hooper rating" (average basketball stat) >= MIN_HOOPER_RATING. Matchmaking
+-- runs inside this server: the allowed rating gap widens the longer you wait.
+-- A match takes a free public court (no event, no pickup game), summons both
+-- teams there and is played through CourtGames.startMatch; the result comes back
+-- through its onEnded callback.
+--
+-- Rating: Elo with a games-played K factor ("Glicko-lite"), start 1000, 5
+-- placement games per season (bigger K), margin-of-victory and win-streak
+-- bonuses, tiers Bronze..Legend with divisions III/II/I (RankedConfig.tierOf).
+-- Leavers lose rating (+ an extra penalty) and the remaining team wins.
+-- Anti-boosting: games shorter than MIN_SECONDS or under MIN_POINTS total are
+-- "no contest"; after MAX_SAME_OPPONENT_PER_DAY rated games against the same
+-- player in a UTC day, further games against them are unrated.
+--
+-- Seasons follow a fixed schedule from RankedConfig.SEASON_EPOCH, so every
+-- server agrees without talking. On the first tick after a season ends (and when
+-- a player joins with an older saved season) the player's final tier pays out
+-- cash, XP, the title "S<n> <Tier>" and, for Platinum and up, an exclusive season
+-- badge (a coloured tag over the head + profile badge colour) and, when the shop
+-- catalog defines it, a wardrobe item. Ratings then soft-reset toward 1000.
+-- Ranked.seasonEnded fires and one server (guarded by a DataStore key) calls
+-- Leaderboards.archive(seasonId).
+--
+-- Remotes: RankedRequest (RemoteFunction, client -> server: action, arg) -> (ok, message, state)
+--            actions: "Get" | "Queue" (mode "1v1"/"2v2") | "Leave" | "Badge" (season id or "" to hide)
+--          RankedEvent (RemoteEvent, server -> client):
+--            ("State", state) | ("Found", info) | ("Result", info) | ("Open")
+-- Player attributes: Rating, RankedWins, RankedLosses (this season), WinStreak,
+--   SeasonRank (tier name, or "Unranked" during placements), RankedTier ("Gold II"),
+--   RankedPlacements (placement games left), RankedPeak, RankedQueue ("" | "1v1" | "2v2"),
+--   RankedBadge ("S1 Diamond" or ""), RankedBadgeColor (Color3)
+-- Saved section "ranked": see the registerSection default below.
+--
+-- Public API:
+--   Ranked.season() -> {id, number, name, startsAt, endsAt}
+--   Ranked.seasonEnded: BindableEvent (seasonId)
+--   Ranked.ratingOf(player) -> number?        Ranked.isQueued(player) -> boolean
+--   Ranked.inMatch(player) -> boolean         Ranked.titles(player) -> {string}
+
+local CollectionService = game:GetService("CollectionService")
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local Config = require(shared:WaitForChild("Config"))
+local RC = require(shared:WaitForChild("RankedConfig"))
+local Net = require(script.Parent:WaitForChild("Net"))
+local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local Places = require(script.Parent:WaitForChild("Places"))
+local CourtGames = require(script.Parent:WaitForChild("CourtGames"))
+
+local Ranked = {}
+Ranked.seasonEnded = Instance.new("BindableEvent")
+
+local SECTION = "ranked"
+local LEAGUE = "City Hoops League"
+
+local function now(): number
+	return os.time()
+end
+
+local currentSeason: RC.Season = RC.seasonAt(now())
+
+PlayerData.registerSection(SECTION, function()
+	return {
+		season = RC.seasonAt(os.time()).id, -- season these numbers belong to
+		rating = RC.START_RATING,
+		peak = RC.START_RATING,
+		wins = 0,
+		losses = 0,
+		streak = 0, -- current win streak
+		bestStreak = 0,
+		placementsLeft = RC.PLACEMENTS,
+		games = 0, -- rated games this season
+		life = { wins = 0, losses = 0, games = 0, bestStreak = 0, peak = RC.START_RATING },
+		history = {}, -- last matches: { t, mode, result, score, delta, rating, opp }
+		seasons = {}, -- past seasons: { id, rating, peak, tier, wins, losses, placed, reward }
+		badges = {}, -- exclusive season badges: { id, tier }
+		badge = "", -- season id of the badge on show ("" = hidden)
+		titles = {}, -- season titles earned ("S1 Diamond")
+		daily = { day = 0, vs = {} }, -- rated games per opponent UserId today
+		quits = 0,
+	}
+end)
+
+local function sec(player: Player): any
+	return PlayerData.section(player, SECTION)
+end
+
+---------------------------------------------------------------------------
+-- Lazy links to optional modules
+---------------------------------------------------------------------------
+local function optional(name: string): any
+	local module = script.Parent:FindFirstChild(name)
+	if not module then
+		return nil
+	end
+	local ok, result = pcall(require, module)
+	return if ok then result else nil
+end
+
+local function unlock(player: Player, id: string)
+	local Quests = optional("Quests")
+	if Quests and Quests.unlock then
+		pcall(Quests.unlock, player, id)
+	end
+end
+
+local function submitRating(player: Player, r: any)
+	if r.placementsLeft > 0 then
+		return
+	end
+	local Leaderboards = optional("Leaderboards")
+	if Leaderboards and Leaderboards.submit then
+		pcall(Leaderboards.submit, "rating", player, r.rating)
+	end
+end
+
+local function systemMessage(player: Player, text: string)
+	local Messages = optional("Messages")
+	if Messages and Messages.sendSystem then
+		pcall(Messages.sendSystem, player, LEAGUE, text)
+	end
+end
+
+local function inEvent(player: Player): boolean
+	local ev = player:GetAttribute("Event")
+	return ev ~= nil and ev ~= ""
+end
+
+-- In a race, a race lobby or a street race (Racing's "Race" attribute).
+local function inRace(player: Player): boolean
+	local race = player:GetAttribute("Race")
+	return race ~= nil and race ~= ""
+end
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function hooperRating(player: Player): number
+	local total = 0
+	for _, stat in RC.HOOPER_STATS do
+		total += tonumber(player:GetAttribute(stat)) or 1
+	end
+	return math.floor(total / #RC.HOOPER_STATS * 10 + 0.5) / 10
+end
+
+local function label(r: any): string
+	if r.placementsLeft > 0 then
+		return string.format("Placement %d/%d", RC.PLACEMENTS - r.placementsLeft + 1, RC.PLACEMENTS)
+	end
+	return RC.tierOf(r.rating).label
+end
+
+local function seasonRankName(r: any): string
+	return if r.placementsLeft > 0 then "Unranked" else RC.tierOf(r.rating).tier
+end
+
+local function badgeTierOf(r: any, id: string): string?
+	for _, b in r.badges do
+		if b.id == id then
+			return b.tier
+		end
+	end
+	return nil
+end
+
+local function today(): number
+	return math.floor(now() / 86400)
+end
+
+local function dailyVs(r: any): { [string]: number }
+	if type(r.daily) ~= "table" or r.daily.day ~= today() then
+		r.daily = { day = today(), vs = {} }
+	end
+	return r.daily.vs
+end
+
+local function addTitle(player: Player, r: any, title: string)
+	if not table.find(r.titles, title) then
+		table.insert(r.titles, title)
+	end
+	-- Social's title picker lists Quests titles, so the season title goes there too.
+	local q = PlayerData.section(player, "quests")
+	if q and type(q.titles) == "table" and not table.find(q.titles, title) then
+		table.insert(q.titles, title)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Attributes and the season badge over the head
+---------------------------------------------------------------------------
+local function refreshBadgeTag(player: Player)
+	local character = player.Character
+	local head = character and character:FindFirstChild("Head")
+	if not head then
+		return
+	end
+	local text = player:GetAttribute("RankedBadge")
+	local color = player:GetAttribute("RankedBadgeColor")
+	local gui = head:FindFirstChild("RankedBadgeTag") :: BillboardGui?
+	if type(text) ~= "string" or text == "" or typeof(color) ~= "Color3" then
+		if gui then
+			gui:Destroy()
+		end
+		return
+	end
+	if not gui then
+		local g = Instance.new("BillboardGui")
+		g.Name = "RankedBadgeTag"
+		g.Size = UDim2.fromOffset(150, 22)
+		g.StudsOffset = Vector3.new(0, 4.9, 0) -- just above the name tag
+		g.MaxDistance = 80
+		g.LightInfluence = 0
+		g.ResetOnSpawn = false
+		g.Adornee = head
+		local pill = Instance.new("TextLabel")
+		pill.Name = "Pill"
+		pill.AnchorPoint = Vector2.new(0.5, 0.5)
+		pill.Position = UDim2.fromScale(0.5, 0.5)
+		pill.Size = UDim2.fromScale(1, 1)
+		pill.AutomaticSize = Enum.AutomaticSize.None
+		pill.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+		pill.BackgroundTransparency = 0.15
+		pill.Font = Enum.Font.GothamBlack
+		pill.TextSize = 12
+		pill.TextColor3 = Color3.new(1, 1, 1)
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = pill
+		local stroke = Instance.new("UIStroke")
+		stroke.Name = "Ring"
+		stroke.Thickness = 2
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Parent = pill
+		pill.Parent = g
+		g.Parent = head
+		gui = g
+	end
+	local pill = (gui :: BillboardGui):FindFirstChild("Pill") :: TextLabel?
+	if pill then
+		pill.Text = "◆ " .. string.upper(text) .. " ◆"
+		pill.TextColor3 = color
+		local ring = pill:FindFirstChild("Ring") :: UIStroke?
+		if ring then
+			ring.Color = color
+		end
+	end
+end
+
+local function publishRanked(player: Player, r: any)
+	player:SetAttribute("Rating", r.rating)
+	player:SetAttribute("RankedWins", r.wins)
+	player:SetAttribute("RankedLosses", r.losses)
+	player:SetAttribute("WinStreak", math.max(0, r.streak))
+	player:SetAttribute("SeasonRank", seasonRankName(r))
+	player:SetAttribute("RankedTier", label(r))
+	player:SetAttribute("RankedPlacements", r.placementsLeft)
+	player:SetAttribute("RankedPeak", r.peak)
+	local tier = if r.badge ~= "" then badgeTierOf(r, r.badge) else nil
+	local badgeText = if tier then RC.seasonTitle(r.badge, tier) else ""
+	if player:GetAttribute("RankedBadge") ~= badgeText then
+		player:SetAttribute("RankedBadge", badgeText)
+		player:SetAttribute("RankedBadgeColor", if tier then RC.tierColor(tier) else nil)
+		refreshBadgeTag(player)
+	end
+end
+
+PlayerData.onPublish(function(player, data)
+	local r = data.sections and data.sections[SECTION]
+	if r then
+		publishRanked(player, r)
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Remotes
+---------------------------------------------------------------------------
+local RankedRequest = Net.remote("RemoteFunction", "RankedRequest")
+local RankedEvent = Net.remote("RemoteEvent", "RankedEvent")
+
+---------------------------------------------------------------------------
+-- Seasons
+---------------------------------------------------------------------------
+function Ranked.season(): RC.Season
+	return table.clone(currentSeason)
+end
+
+-- Settles a player's finished season (rewards + soft reset) when their saved
+-- season is older than the live one. Safe to call any time.
+local function settleSeason(player: Player): boolean
+	local r = sec(player)
+	if not r or r.season == currentSeason.id then
+		return false
+	end
+	local oldId = tostring(r.season)
+	local placed = r.placementsLeft <= 0 and r.games > 0
+	local entry = { id = oldId, rating = r.rating, peak = r.peak, wins = r.wins, losses = r.losses, placed = placed, tier = "Unranked", reward = "" }
+	if placed then
+		local tier = RC.tierOf(r.rating).tier
+		local reward = RC.REWARDS[tier] or { cash = 0, xp = 0 }
+		entry.tier = tier
+		local parts = {}
+		if reward.cash and reward.cash > 0 then
+			PlayerData.addCash(player, reward.cash, oldId .. " ranked reward: " .. tier)
+			table.insert(parts, "$" .. reward.cash)
+		end
+		if reward.xp and reward.xp > 0 then
+			PlayerData.addXP(player, reward.xp)
+			table.insert(parts, reward.xp .. " XP")
+		end
+		local title = RC.seasonTitle(oldId, tier)
+		addTitle(player, r, title)
+		table.insert(parts, 'the "' .. title .. '" title')
+		if reward.badge then
+			if not badgeTierOf(r, oldId) then
+				table.insert(r.badges, { id = oldId, tier = tier })
+			end
+			r.badge = oldId -- show the newest one; the app can switch or hide it
+			table.insert(parts, "the exclusive " .. title .. " badge")
+		end
+		if reward.item then
+			local ok, SC = pcall(require, shared:FindFirstChild("ShopsConfig") :: ModuleScript)
+			local item = ok and SC and SC.ITEMS and SC.ITEMS[reward.item]
+			local w = PlayerData.section(player, "wardrobe")
+			if item and w and type(w.owned) == "table" then
+				if not table.find(w.owned, reward.item) then
+					table.insert(w.owned, reward.item)
+				end
+				table.insert(parts, "the " .. tostring(item.name) .. " (in your Closet)")
+			end
+		end
+		entry.reward = table.concat(parts, ", ")
+		unlock(player, "ranked_season_reward")
+		local text = string.format("%s is over! You finished %s (%d rating). Rewards: %s. %s has started: play %d placement games to get ranked again.", oldId, tier, r.rating, entry.reward, currentSeason.name, RC.PLACEMENTS)
+		systemMessage(player, text)
+		Net.notify(player, "SEASON REWARDS", oldId .. " finished " .. tier .. ": " .. entry.reward)
+	elseif r.games > 0 or r.placementsLeft < RC.PLACEMENTS then
+		Net.notify(player, "NEW SEASON", currentSeason.name .. " has started. Finish your placements to earn season rewards.")
+	end
+	table.insert(r.seasons, 1, entry)
+	while #r.seasons > RC.SEASON_HISTORY_LIMIT do
+		table.remove(r.seasons)
+	end
+	-- soft reset toward the start rating
+	r.rating = math.max(RC.MIN_RATING, math.floor(RC.START_RATING + (r.rating - RC.START_RATING) * RC.SOFT_RESET + 0.5))
+	r.peak = r.rating
+	r.wins, r.losses, r.streak, r.games = 0, 0, 0, 0
+	r.placementsLeft = RC.PLACEMENTS
+	r.season = currentSeason.id
+	PlayerData.markChanged(player)
+	return true
+end
+
+-- One server archives each finished season's leaderboards: the first to
+-- write the DataStore key wins.
+local archiveStore: DataStore? = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore("CityGrind_Ranked_v1")
+	end)
+	if ok then
+		archiveStore = result
+	end
+end
+local archivedHere: { [string]: boolean } = {}
+
+local function tryArchive(seasonId: string, witnessed: boolean)
+	if archivedHere[seasonId] then
+		return
+	end
+	local Leaderboards = optional("Leaderboards")
+	if not Leaderboards or not Leaderboards.archive then
+		return
+	end
+	local claimed = false
+	local reached = false
+	if archiveStore then
+		for attempt = 1, 3 do
+			local ok, err = pcall(function()
+				(archiveStore :: DataStore):UpdateAsync("archive_" .. seasonId, function(old)
+					claimed = false
+					if old ~= nil then
+						return nil -- someone already archived it
+					end
+					claimed = true
+					return { by = game.JobId, t = os.time() }
+				end)
+			end)
+			if ok then
+				reached = true
+				break
+			end
+			warn("[CityGrind] Ranked archive guard failed (attempt " .. attempt .. "):", err)
+			task.wait(2 * attempt)
+		end
+	end
+	if not reached then
+		-- No DataStore (Studio without API access): only the server that saw the
+		-- season end live archives, so nothing is archived twice by late starters.
+		claimed = witnessed and RunService:IsStudio()
+	end
+	archivedHere[seasonId] = true
+	if claimed then
+		local ok, err = pcall(Leaderboards.archive, seasonId)
+		if not ok then
+			warn("[CityGrind] Leaderboards.archive failed for", seasonId, err)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- State for the phone
+---------------------------------------------------------------------------
+type Entry = {
+	id: number,
+	mode: string,
+	players: { Player },
+	rating: number,
+	joinedAt: number, -- os.clock()
+	joinedTime: number, -- os.time()
+	status: string,
+}
+type Match = {
+	id: number,
+	mode: string,
+	court: Model,
+	courtName: string,
+	home: { Player },
+	away: { Player },
+	before: { [Player]: number },
+	names: { [Player]: string },
+	userIds: { [Player]: number },
+	penalized: { [Player]: boolean },
+	state: string, -- "Live" | "Done"
+}
+
+local queue: { Entry } = {}
+local entryOf: { [Player]: Entry } = {}
+local matchOf: { [Player]: Match } = {}
+local nextId = 0
+
+local function window(entry: Entry): number
+	local waited = os.clock() - entry.joinedAt
+	return math.min(RC.WINDOW_MAX, RC.WINDOW_START + math.floor(waited / RC.WINDOW_STEP) * RC.WINDOW_GROWTH)
+end
+
+local function eligibility(player: Player): (boolean, string?)
+	if not PlayerData.isLoaded(player) or not sec(player) then
+		return false, "Your save is still loading."
+	end
+	local level = tonumber(player:GetAttribute("Level")) or 1
+	if level < RC.MIN_LEVEL then
+		return false, "Ranked unlocks at level " .. RC.MIN_LEVEL .. " (you're level " .. level .. ")."
+	end
+	local hooper = hooperRating(player)
+	if hooper < RC.MIN_HOOPER_RATING then
+		return false, string.format("Your hooper rating is %.1f; ranked needs %d. Train at the gym or play pickup games.", hooper, RC.MIN_HOOPER_RATING)
+	end
+	return true, nil
+end
+
+local function availability(player: Player): (boolean, string?)
+	if entryOf[player] then
+		return false, "Already in the ranked queue."
+	end
+	if matchOf[player] then
+		return false, "Already in a ranked match."
+	end
+	if player:GetAttribute("InGame") then
+		return false, "Finish your current game first."
+	end
+	if inEvent(player) then
+		return false, "Leave your city event first."
+	end
+	if inRace(player) then
+		return false, "Finish your race first."
+	end
+	return true, nil
+end
+
+local function queueCounts(): { [string]: number }
+	local counts = { ["1v1"] = 0, ["2v2"] = 0 }
+	for _, e in queue do
+		counts[e.mode] += #e.players
+	end
+	return counts
+end
+
+local function stateFor(player: Player): any
+	local r = sec(player)
+	if not r then
+		return nil
+	end
+	local ok, reason = eligibility(player)
+	local entry = entryOf[player]
+	local match = matchOf[player]
+	local Party = optional("Party")
+	local party = Party and Party.partyOf and Party.partyOf(player)
+	local tier = RC.tierOf(r.rating)
+	return {
+		season = Ranked.season(),
+		serverNow = now(),
+		rating = r.rating,
+		peak = r.peak,
+		wins = r.wins,
+		losses = r.losses,
+		streak = r.streak,
+		bestStreak = r.bestStreak,
+		placementsLeft = r.placementsLeft,
+		games = r.games,
+		label = label(r),
+		tier = tier.tier,
+		progress = tier.progress,
+		nextAt = tier.nextAt,
+		life = table.clone(r.life),
+		history = table.clone(r.history),
+		seasons = table.clone(r.seasons),
+		badges = table.clone(r.badges),
+		badge = r.badge,
+		titles = table.clone(r.titles),
+		eligible = ok,
+		reason = reason,
+		level = tonumber(player:GetAttribute("Level")) or 1,
+		hooper = hooperRating(player),
+		partySize = if party then #party.members else 0,
+		queue = if entry
+			then {
+				mode = entry.mode,
+				waited = os.clock() - entry.joinedAt,
+				window = window(entry),
+				status = entry.status,
+				group = #entry.players,
+			}
+			else nil,
+		match = if match then { mode = match.mode, court = match.courtName } else nil,
+		counts = queueCounts(),
+	}
+end
+
+local function push(player: Player)
+	if player.Parent then
+		local state = stateFor(player)
+		if state then
+			RankedEvent:FireClient(player, "State", state)
+		end
+	end
+end
+
+local function setQueueAttr(player: Player, mode: string)
+	if player.Parent then
+		player:SetAttribute("RankedQueue", mode)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Queue
+---------------------------------------------------------------------------
+local function removeEntry(entry: Entry, notice: string?)
+	local i = table.find(queue, entry)
+	if i then
+		table.remove(queue, i)
+	end
+	for _, p in entry.players do
+		if entryOf[p] == entry then
+			entryOf[p] = nil
+			setQueueAttr(p, "")
+			if notice and p.Parent then
+				Net.notify(p, "RANKED QUEUE", notice)
+			end
+			push(p)
+		end
+	end
+end
+
+local function joinQueue(player: Player, mode: any): (boolean, string)
+	if mode ~= "1v1" and mode ~= "2v2" then
+		return false, "Pick 1v1 or 2v2."
+	end
+	local group = { player }
+	if mode == "2v2" then
+		local Party = optional("Party")
+		local party = Party and Party.partyOf and Party.partyOf(player)
+		if party and #party.members > 2 then
+			return false, "Ranked 2v2 takes a party of exactly 2. Leave the party to queue solo."
+		elseif party and #party.members == 2 then
+			group = table.clone(party.members)
+		end
+	end
+	for _, p in group do
+		local who = if p == player then "You" else p.DisplayName
+		local ok, reason = eligibility(p)
+		if not ok then
+			return false, if p == player then (reason or "You can't queue yet.") else (who .. " can't play ranked yet: " .. (reason or ""))
+		end
+		local free, why = availability(p)
+		if not free then
+			return false, if p == player then (why or "You're busy.") else (who .. " is busy: " .. (why or ""))
+		end
+	end
+	nextId += 1
+	local total = 0
+	for _, p in group do
+		total += sec(p).rating
+	end
+	local entry: Entry = {
+		id = nextId,
+		mode = mode,
+		players = group,
+		rating = total / #group,
+		joinedAt = os.clock(),
+		joinedTime = now(),
+		status = "Searching",
+	}
+	table.insert(queue, entry)
+	for _, p in group do
+		entryOf[p] = entry
+		setQueueAttr(p, mode)
+		if p ~= player then
+			Net.notify(p, "RANKED QUEUE", player.DisplayName .. " queued your party for ranked 2v2.")
+		end
+		push(p)
+	end
+	return true, if #group == 2 then "Queued for ranked 2v2 with your partner." else "Queued for ranked " .. mode .. "."
+end
+
+---------------------------------------------------------------------------
+-- Courts
+---------------------------------------------------------------------------
+local function publicCourt(m: Instance): boolean
+	if not m:IsA("Model") or not m.Parent or m.Name:find("Private") then
+		return false
+	end
+	local center = m:GetAttribute("CourtCenter")
+	return typeof(center) == "Vector3" and center.Y < 20 and typeof(m:GetAttribute("CourtSize")) == "Vector3"
+end
+
+local function pickCourt(): Model?
+	local courts = {}
+	for _, m in CollectionService:GetTagged("Court") do
+		if publicCourt(m) and CourtGames.isFree(m) then
+			table.insert(courts, m)
+		end
+	end
+	table.sort(courts, function(a, b)
+		local ia = table.find(RC.PREFERRED_COURTS, a.Name) or 99
+		local ib = table.find(RC.PREFERRED_COURTS, b.Name) or 99
+		if ia ~= ib then
+			return ia < ib
+		end
+		return a.Name < b.Name
+	end)
+	return courts[1]
+end
+
+---------------------------------------------------------------------------
+-- Rating math
+---------------------------------------------------------------------------
+local function kFactor(r: any): number
+	if r.placementsLeft > 0 then
+		return RC.K_PLACEMENT
+	elseif r.games < RC.K_NEW_GAMES then
+		return RC.K_NEW
+	end
+	return RC.K
+end
+
+local function expected(mine: number, theirs: number): number
+	return 1 / (1 + 10 ^ ((theirs - mine) / 400))
+end
+
+local function teamAverage(match: Match, list: { Player }): number
+	local total, n = 0, 0
+	for _, p in list do
+		total += match.before[p] or RC.START_RATING
+		n += 1
+	end
+	return if n > 0 then total / n else RC.START_RATING
+end
+
+local function sideOf(match: Match, player: Player): ({ Player }, { Player })
+	if table.find(match.home, player) then
+		return match.home, match.away
+	end
+	return match.away, match.home
+end
+
+local function oppNames(match: Match, opponents: { Player }): string
+	local names = {}
+	for _, p in opponents do
+		table.insert(names, match.names[p] or "?")
+	end
+	return table.concat(names, " & ")
+end
+
+local function addHistory(r: any, item: any)
+	table.insert(r.history, 1, item)
+	while #r.history > RC.HISTORY_LIMIT do
+		table.remove(r.history)
+	end
+end
+
+-- Applies one rated result to a player's save. Returns (delta, streakBonus).
+local function applyRated(player: Player, r: any, won: boolean, mine: number, theirs: number, margin: number, extraLoss: number): (number, number)
+	local k = kFactor(r)
+	local e = expected(mine, theirs)
+	local mov = 1 + RC.MARGIN_BONUS * math.clamp(margin / Config.Game.TARGET_SCORE, 0, 1)
+	local delta = math.floor(k * ((if won then 1 else 0) - e) * mov + 0.5)
+	local bonus = 0
+	local wasPlacement = r.placementsLeft > 0
+	if won then
+		delta = math.max(RC.MIN_CHANGE, delta)
+		r.wins += 1
+		r.life.wins += 1
+		r.streak = math.max(0, r.streak) + 1
+		r.bestStreak = math.max(r.bestStreak, r.streak)
+		r.life.bestStreak = math.max(r.life.bestStreak, r.streak)
+		if not wasPlacement and r.streak >= RC.STREAK_FROM then
+			bonus = math.min(RC.STREAK_BONUS_MAX, (r.streak - RC.STREAK_FROM + 1) * RC.STREAK_BONUS)
+		end
+	else
+		delta = math.min(-RC.MIN_CHANGE, delta) - extraLoss
+		r.losses += 1
+		r.life.losses += 1
+		r.streak = 0
+	end
+	delta += bonus
+	r.rating = math.max(RC.MIN_RATING, r.rating + delta)
+	r.peak = math.max(r.peak, r.rating)
+	r.life.peak = math.max(r.life.peak, r.rating)
+	r.games += 1
+	r.life.games += 1
+	if r.placementsLeft > 0 then
+		r.placementsLeft -= 1
+	end
+	-- achievements (the lead adds these ids to QuestsConfig)
+	if won and r.life.wins == 1 then
+		unlock(player, "ranked_first_win")
+	end
+	if r.streak >= 5 then
+		unlock(player, "ranked_streak_5")
+	end
+	if r.placementsLeft == 0 then
+		if wasPlacement then
+			unlock(player, "ranked_placed")
+		end
+		local idx = RC.tierOf(r.rating).index
+		if idx >= (RC.TIER_INDEX.Gold or 3) then
+			unlock(player, "ranked_gold")
+		end
+		if idx >= (RC.TIER_INDEX.Diamond or 5) then
+			unlock(player, "ranked_diamond")
+		end
+		if idx >= (RC.TIER_INDEX.Legend or 7) then
+			unlock(player, "ranked_legend")
+		end
+	end
+	return delta, bonus
+end
+
+local function sendResult(player: Player, info: any)
+	if player.Parent then
+		pcall(function()
+			RankedEvent:FireClient(player, "Result", info)
+		end)
+		push(player)
+	end
+end
+
+local function scoreText(match: Match, player: Player, score: { Home: number, Away: number }): string
+	if table.find(match.home, player) then
+		return score.Home .. "-" .. score.Away
+	end
+	return score.Away .. "-" .. score.Home
+end
+
+-- A player who quits a live ranked match: a loss plus the leaver penalty.
+-- Runs at most once per player per match, and synchronously on PlayerRemoving
+-- so the change lands before PlayerData's final save.
+local function penalizeLeaver(match: Match, player: Player, score: { Home: number, Away: number }?)
+	if match.penalized[player] then
+		return
+	end
+	match.penalized[player] = true
+	local r = sec(player)
+	if not r then
+		return
+	end
+	local mine, theirs = sideOf(match, player)
+	local oldLabel = label(r)
+	local delta = applyRated(player, r, false, teamAverage(match, mine), teamAverage(match, theirs), 0, RC.LEAVER_EXTRA)
+	r.quits = (r.quits or 0) + 1
+	addHistory(r, {
+		t = now(),
+		mode = match.mode,
+		result = "QUIT",
+		score = if score then scoreText(match, player, score) else "-",
+		delta = delta,
+		rating = r.rating,
+		opp = oppNames(match, theirs),
+	})
+	PlayerData.markChanged(player)
+	submitRating(player, r)
+	sendResult(player, {
+		result = "QUIT",
+		delta = delta,
+		bonus = 0,
+		rating = r.rating,
+		label = label(r),
+		oldLabel = oldLabel,
+		placementsLeft = r.placementsLeft,
+		streak = r.streak,
+		score = if score then scoreText(match, player, score) else "-",
+		reason = "You left a ranked match: counted as a loss with a " .. RC.LEAVER_EXTRA .. " point penalty.",
+	})
+end
+
+local function resolveMatch(match: Match, result: any)
+	if match.state == "Done" then
+		return
+	end
+	match.state = "Done"
+	local everyone = table.clone(match.home)
+	for _, p in match.away do
+		table.insert(everyone, p)
+	end
+	for _, p in everyone do
+		if matchOf[p] == match then
+			matchOf[p] = nil
+		end
+	end
+
+	local score = result.score
+	local total = score.Home + score.Away
+	local margin = math.abs(score.Home - score.Away)
+	local counts = result.duration >= RC.MIN_SECONDS and (result.forfeit or total >= RC.MIN_POINTS)
+	local leavers = {}
+	for _, p in result.leavers do
+		leavers[p] = true
+	end
+
+	for _, p in everyone do
+		if match.penalized[p] then
+			continue
+		end
+		if leavers[p] then
+			penalizeLeaver(match, p, score)
+			continue
+		end
+		local r = p.Parent and sec(p)
+		if not r then
+			continue
+		end
+		local mine, theirs = sideOf(match, p)
+		local side = if mine == match.home then "Home" else "Away"
+		local won = result.winner == side
+		local oldLabel = label(r)
+		local info: any = {
+			delta = 0,
+			bonus = 0,
+			score = scoreText(match, p, score),
+			oldLabel = oldLabel,
+		}
+		-- same-opponent cap for the day
+		local vs = dailyVs(r)
+		local capped = false
+		for _, o in theirs do
+			if (vs[tostring(match.userIds[o])] or 0) >= RC.MAX_SAME_OPPONENT_PER_DAY then
+				capped = true
+			end
+		end
+		if not counts or result.winner == nil then
+			info.result = "NC"
+			info.reason = string.format("No contest: ranked games need %d+ seconds and %d+ points to count.", RC.MIN_SECONDS, RC.MIN_POINTS)
+		elseif capped then
+			info.result = "UNRATED"
+			info.reason = string.format("Unrated: you've already played %s %d times today.", oppNames(match, theirs), RC.MAX_SAME_OPPONENT_PER_DAY)
+		else
+			for _, o in theirs do
+				local key = tostring(match.userIds[o])
+				vs[key] = (vs[key] or 0) + 1
+			end
+			local delta, bonus = applyRated(p, r, won, teamAverage(match, mine), teamAverage(match, theirs), margin, 0)
+			info.result = if won then "W" else "L"
+			info.delta = delta
+			info.bonus = bonus
+			if won then
+				PlayerData.addCash(p, RC.WIN_CASH, "Ranked " .. match.mode .. " win")
+				PlayerData.addXP(p, RC.WIN_XP)
+				PlayerData.addReputation(p, RC.WIN_REP)
+				info.cash, info.xp = RC.WIN_CASH, RC.WIN_XP
+			else
+				PlayerData.addCash(p, RC.LOSS_CASH, "Ranked " .. match.mode .. " game")
+				PlayerData.addXP(p, RC.LOSS_XP)
+				PlayerData.addReputation(p, RC.LOSS_REP)
+				info.cash, info.xp = RC.LOSS_CASH, RC.LOSS_XP
+			end
+			if result.forfeit then
+				info.reason = "Your opponent left: the win is yours."
+			end
+		end
+		addHistory(r, {
+			t = now(),
+			mode = match.mode,
+			result = info.result,
+			score = info.score,
+			delta = info.delta,
+			rating = r.rating,
+			opp = oppNames(match, theirs),
+		})
+		PlayerData.markChanged(p)
+		submitRating(p, r)
+		info.rating = r.rating
+		info.label = label(r)
+		info.placementsLeft = r.placementsLeft
+		info.streak = r.streak
+		sendResult(p, info)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Matchmaking
+---------------------------------------------------------------------------
+type Unit = { entries: { Entry }, players: { Player }, rating: number, joinedAt: number, window: number }
+
+local function unitOf(entries: { Entry }): Unit
+	local players, total, joined, win = {}, 0, math.huge, 0
+	for _, e in entries do
+		for _, p in e.players do
+			table.insert(players, p)
+			total += sec(p) and sec(p).rating or e.rating
+		end
+		joined = math.min(joined, e.joinedAt)
+		win = math.max(win, window(e))
+	end
+	return { entries = entries, players = players, rating = total / math.max(1, #players), joinedAt = joined, window = win }
+end
+
+-- Pairs units (oldest first) whose ratings fall inside the wider window.
+local function pairUnits(units: { Unit }): { { Unit } }
+	table.sort(units, function(a, b)
+		return a.joinedAt < b.joinedAt
+	end)
+	local used: { [Unit]: boolean } = {}
+	local pairs_ = {}
+	for _, a in units do
+		if not used[a] then
+			local best, bestGap = nil, math.huge
+			for _, b in units do
+				if b ~= a and not used[b] then
+					local gap = math.abs(a.rating - b.rating)
+					if gap <= math.max(a.window, b.window) and gap < bestGap then
+						best, bestGap = b, gap
+					end
+				end
+			end
+			if best then
+				used[a], used[best] = true, true
+				table.insert(pairs_, { a, best })
+			end
+		end
+	end
+	return pairs_
+end
+
+local function candidates(mode: string): { { Unit } }
+	local solos, units = {}, {}
+	for _, e in queue do
+		if e.mode == mode then
+			if #e.players == RC.TEAM_SIZE[mode] then
+				table.insert(units, unitOf({ e }))
+			else
+				table.insert(solos, unitOf({ e }))
+			end
+		end
+	end
+	if mode == "2v2" then
+		-- two solos make a team when their ratings are close enough
+		for _, duo in pairUnits(solos) do
+			table.insert(units, unitOf({ duo[1].entries[1], duo[2].entries[1] }))
+		end
+	end
+	return pairUnits(units)
+end
+
+local function summon(player: Player, court: Model, team: string, index: number, count: number)
+	local center = court:GetAttribute("CourtCenter") :: Vector3
+	local zSide = if team == "Home" then 6 else -6
+	local facing = if team == "Home" then Vector3.new(0, 0, -1) else Vector3.new(0, 0, 1)
+	local pos = center + Vector3.new((index - (count + 1) / 2) * 7, 0.5, zSide)
+	-- Out of any seat first: with the SeatWeld still there, moving the character
+	-- would drag (and fling) the car it sits in.
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	if humanoid and seat then
+		local weld = seat:FindFirstChild("SeatWeld")
+		if weld then
+			weld:Destroy()
+		end
+		humanoid.Sit = false
+	end
+	Places.leave(player, CFrame.lookAt(pos, pos + facing))
+end
+
+local function startMatch(mode: string, a: Unit, b: Unit, court: Model): boolean
+	nextId += 1
+	local match: Match = {
+		id = nextId,
+		mode = mode,
+		court = court,
+		courtName = tostring(court:GetAttribute("DisplayName") or court.Name),
+		home = a.players,
+		away = b.players,
+		before = {},
+		names = {},
+		userIds = {},
+		penalized = {},
+		state = "Live",
+	}
+	for _, list in { a.players, b.players } do
+		for _, p in list do
+			local r = sec(p)
+			match.before[p] = if r then r.rating else RC.START_RATING
+			match.names[p] = p.DisplayName
+			match.userIds[p] = p.UserId
+		end
+	end
+	local ok, err = CourtGames.startMatch(court, a.players, b.players, {
+		label = "RANKED " .. mode,
+		ranked = true,
+		countdown = RC.MATCH_COUNTDOWN,
+		onEnded = function(result)
+			resolveMatch(match, result)
+		end,
+	})
+	if not ok then
+		warn("[CityGrind] Ranked match couldn't start:", err)
+		return false
+	end
+	for _, unit in { a, b } do
+		for _, e in unit.entries do
+			local i = table.find(queue, e)
+			if i then
+				table.remove(queue, i)
+			end
+		end
+	end
+	for team, list in { Home = a.players, Away = b.players } do
+		local opponents = if team == "Home" then b.players else a.players
+		for i, p in list do
+			entryOf[p] = nil
+			matchOf[p] = match
+			setQueueAttr(p, "")
+			local vs = sec(p) and dailyVs(sec(p)) or {}
+			local capped = false
+			local opp = {}
+			for _, o in opponents do
+				if (vs[tostring(o.UserId)] or 0) >= RC.MAX_SAME_OPPONENT_PER_DAY then
+					capped = true
+				end
+				local orr = sec(o)
+				table.insert(opp, { name = o.DisplayName, userId = o.UserId, label = if orr then label(orr) else "?", rating = match.before[o] })
+			end
+			local mates = {}
+			for _, m in list do
+				if m ~= p then
+					table.insert(mates, { name = m.DisplayName, userId = m.UserId })
+				end
+			end
+			RankedEvent:FireClient(p, "Found", {
+				mode = mode,
+				court = match.courtName,
+				team = team,
+				opponents = opp,
+				teammates = mates,
+				countdown = RC.MATCH_COUNTDOWN,
+				unrated = capped,
+			})
+			task.spawn(summon, p, court, team, i, #list)
+			push(p)
+		end
+	end
+	return true
+end
+
+local function matchmake()
+	-- drop entries whose players can't play any more
+	for _, e in table.clone(queue) do
+		for _, p in e.players do
+			if not p.Parent then
+				removeEntry(e, p.DisplayName .. " left the server.")
+				break
+			elseif inEvent(p) or inRace(p) or p:GetAttribute("InGame") then
+				removeEntry(e, p.DisplayName .. " joined something else, so the ranked queue was cancelled.")
+				break
+			end
+		end
+	end
+	-- a match whose court vanished can never report back: call it no contest
+	for _, match in matchOf do
+		if match.state == "Live" and not match.court.Parent then
+			resolveMatch(match, { winner = nil, score = { Home = 0, Away = 0 }, forfeit = false, duration = 0, leavers = {} })
+		end
+	end
+	for _, e in queue do
+		e.status = "Searching"
+	end
+	for _, mode in RC.MODES do
+		for _, pair in candidates(mode) do
+			local court = pickCourt()
+			if not court then
+				for _, unit in pair do
+					for _, e in unit.entries do
+						e.status = "Waiting for a free court"
+					end
+				end
+				break
+			end
+			startMatch(mode, pair[1], pair[2], court)
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Court kiosks: a "Ranked Queue" prompt beside each public court
+---------------------------------------------------------------------------
+local kioskFolder: Folder? = nil
+local kiosked: { [Model]: boolean } = {}
+
+local function buildKiosk(court: Model)
+	if kiosked[court] or not kioskFolder or not publicCourt(court) then
+		return
+	end
+	kiosked[court] = true
+	local center = court:GetAttribute("CourtCenter") :: Vector3
+	local size = court:GetAttribute("CourtSize") :: Vector3
+	-- outside the south fence, east of the gate
+	local base = center + Vector3.new(size.X / 2 - 2, 0, size.Z / 2 + 7)
+	local model = Instance.new("Model")
+	model.Name = "RankedKiosk_" .. court.Name
+	local function part(name: string, s: Vector3, cf: CFrame, color: Color3, material: Enum.Material): Part
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = s
+		p.CFrame = cf
+		p.Color = color
+		p.Material = material
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanTouch = false
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = model
+		return p
+	end
+	local post = part("Post", Vector3.new(0.8, 5, 0.8), CFrame.new(base + Vector3.new(0, 2.5, 0)), Color3.fromRGB(35, 35, 42), Enum.Material.Metal)
+	local panel = part("Panel", Vector3.new(4.2, 2.6, 0.4), CFrame.new(base + Vector3.new(0, 5.6, 0)), Color3.fromRGB(18, 18, 24), Enum.Material.SmoothPlastic)
+	part("Glow", Vector3.new(4.4, 0.2, 0.5), CFrame.new(base + Vector3.new(0, 4.25, 0)), RC.TIERS[5].color, Enum.Material.Neon)
+	for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.CanvasSize = Vector2.new(210, 130)
+		gui.LightInfluence = 0
+		local title = Instance.new("TextLabel")
+		title.BackgroundTransparency = 1
+		title.Size = UDim2.new(1, 0, 0.55, 0)
+		title.Font = Enum.Font.GothamBlack
+		title.TextScaled = true
+		title.TextColor3 = RC.TIERS[3].color
+		title.Text = "RANKED"
+		title.Parent = gui
+		local sub = Instance.new("TextLabel")
+		sub.BackgroundTransparency = 1
+		sub.Position = UDim2.fromScale(0, 0.58)
+		sub.Size = UDim2.new(1, 0, 0.32, 0)
+		sub.Font = Enum.Font.GothamBold
+		sub.TextScaled = true
+		sub.TextColor3 = Color3.new(1, 1, 1)
+		sub.Text = "1v1  ·  2v2  ·  LV " .. RC.MIN_LEVEL .. "+"
+		sub.Parent = gui
+		gui.Parent = panel
+	end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "RankedQueue"
+	prompt.ActionText = "Ranked Queue"
+	prompt.ObjectText = "City Hoops League"
+	prompt.MaxActivationDistance = 9
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = post
+	prompt.Triggered:Connect(function(player)
+		if Net.allow(player, "RankedKiosk", 1) then
+			push(player)
+			RankedEvent:FireClient(player, "Open")
+		end
+	end)
+	model.Parent = kioskFolder
+	court.AncestryChanged:Connect(function()
+		if not court.Parent then
+			model:Destroy()
+			kiosked[court] = nil
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Remote handler
+---------------------------------------------------------------------------
+local function handle(player: Player, action: any, arg: any): (boolean, string?)
+	if action == "Get" then
+		return true, nil
+	elseif action == "Queue" then
+		return joinQueue(player, arg)
+	elseif action == "Leave" then
+		local entry = entryOf[player]
+		if not entry then
+			return false, "You're not in the queue."
+		end
+		removeEntry(entry, nil)
+		for _, p in entry.players do
+			if p ~= player and p.Parent then
+				Net.notify(p, "RANKED QUEUE", player.DisplayName .. " left the ranked queue.")
+			end
+		end
+		return true, "Left the ranked queue."
+	elseif action == "Badge" then
+		local r = sec(player)
+		if not r or type(arg) ~= "string" then
+			return false, "Try again."
+		end
+		if arg ~= "" and not badgeTierOf(r, arg) then
+			return false, "You don't own that badge."
+		end
+		r.badge = arg
+		PlayerData.markChanged(player)
+		return true, if arg == "" then "Season badge hidden." else "Showing your " .. arg .. " badge."
+	end
+	return false, "Unknown action."
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+function Ranked.ratingOf(player: Player): number?
+	local r = sec(player)
+	return r and r.rating
+end
+
+function Ranked.isQueued(player: Player): boolean
+	return entryOf[player] ~= nil
+end
+
+function Ranked.inMatch(player: Player): boolean
+	return matchOf[player] ~= nil
+end
+
+function Ranked.titles(player: Player): { string }
+	local r = sec(player)
+	return if r then table.clone(r.titles) else {}
+end
+
+function Ranked.start(city: Instance)
+	local folder = Instance.new("Folder")
+	folder.Name = "Ranked"
+	folder.Parent = city
+	kioskFolder = folder
+	for _, m in CollectionService:GetTagged("Court") do
+		if m:IsA("Model") then
+			buildKiosk(m)
+		end
+	end
+	CollectionService:GetInstanceAddedSignal("Court"):Connect(function(m)
+		if m:IsA("Model") then
+			task.delay(1, buildKiosk, m) -- the tag lands before the court is finished
+		end
+	end)
+
+	RankedRequest.OnServerInvoke = function(player: Player, action: any, arg: any)
+		if not Net.allow(player, "RankedRequest", 0.25) then
+			return false, "Slow down.", nil
+		end
+		local ok, msg = handle(player, action, arg)
+		return ok, msg, stateFor(player)
+	end
+
+	PlayerData.onLoaded(function(player)
+		settleSeason(player)
+		local r = sec(player)
+		if r then
+			publishRanked(player, r)
+			submitRating(player, r)
+		end
+	end)
+
+	local function onCharacter(player: Player)
+		player.CharacterAdded:Connect(function()
+			task.wait(0.5)
+			refreshBadgeTag(player)
+		end)
+		if player.Character then
+			task.defer(refreshBadgeTag, player)
+		end
+	end
+	Players.PlayerAdded:Connect(onCharacter)
+	for _, p in Players:GetPlayers() do
+		onCharacter(p)
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		local entry = entryOf[player]
+		if entry then
+			removeEntry(entry, player.DisplayName .. " left the server. You're out of the ranked queue.")
+		end
+		local match = matchOf[player]
+		if match and match.state == "Live" then
+			-- before PlayerData's final save completes (its UpdateAsync yields first)
+			local court = match.court
+			penalizeLeaver(match, player, { Home = tonumber(court:GetAttribute("HomeScore")) or 0, Away = tonumber(court:GetAttribute("AwayScore")) or 0 })
+		end
+		matchOf[player] = nil
+	end)
+
+	-- A finished season that nobody archived yet (this server started after it ended).
+	if currentSeason.number > 1 then
+		task.spawn(tryArchive, "S" .. (currentSeason.number - 1), false)
+	end
+
+	-- Matchmaking + queue status + the season clock.
+	task.spawn(function()
+		local lastPush = 0
+		while true do
+			task.wait(1)
+			local ok, err = pcall(matchmake)
+			if not ok then
+				warn("[CityGrind] Ranked matchmaking error:", err)
+			end
+			if os.clock() - lastPush >= 5 then
+				lastPush = os.clock()
+				for p in entryOf do
+					push(p)
+				end
+			end
+			local season = RC.seasonAt(now())
+			if season.id ~= currentSeason.id then
+				local ended = currentSeason.id
+				currentSeason = season
+				for _, p in Players:GetPlayers() do
+					local settled, settleErr = pcall(settleSeason, p)
+					if not settled then
+						warn("[CityGrind] Season settle failed for", p.Name, settleErr)
+					end
+					push(p)
+				end
+				Ranked.seasonEnded:Fire(ended)
+				task.spawn(tryArchive, ended, true)
+			end
+		end
+	end)
+end
+
+return Ranked
 ]=====])
 put(server, 'ModuleScript', 'Shops', [=====[
 -- CITY GRIND: shops and character customization (sections 1, 49, 74-77, 110).
@@ -36839,16 +43403,18 @@ local function titlesFor(player: Player): { string }
 		return { "Newcomer" }
 	end
 	local list = SC.unlockedTitles(data.level, data.reputation, data.basketball.wins, data.basketball.points)
-	-- Achievement titles from Quests (optional module).
-	local Q = script.Parent:FindFirstChild("Quests")
-	if Q then
-		local ok, extra = pcall(function()
-			return (require(Q) :: any).titles(player)
-		end)
-		if ok and type(extra) == "table" then
-			for _, t in extra do
-				if type(t) == "string" and not table.find(list, t) then
-					table.insert(list, t)
+	-- Titles from achievements (Quests) and ranked seasons (Ranked); both optional.
+	for _, name in { "Quests", "Ranked" } do
+		local module = script.Parent:FindFirstChild(name)
+		if module then
+			local ok, extra = pcall(function()
+				return (require(module) :: any).titles(player)
+			end)
+			if ok and type(extra) == "table" then
+				for _, t in extra do
+					if type(t) == "string" and not table.find(list, t) then
+						table.insert(list, t)
+					end
 				end
 			end
 		end
@@ -40657,7 +47223,7 @@ HUD.start()
 
 -- Phase 3 life systems. They start before the phone so their apps
 -- (Phone.addApp) land on the home screen.
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Subway" } do
+for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Subway", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()
@@ -46573,6 +53139,545 @@ end
 
 return CityTok
 ]=====])
+put(client, 'ModuleScript', 'CrewBattles', [=====[
+-- CITY GRIND: crew battles (section 62). Client side.
+-- * "Battles" phone app: crew rating card, current challenge / live scoreboard,
+--   challenge builder (leaders & officers), weekly City Crew Cup, recent results.
+-- * Live chip on screen while your crew is in a countdown / live battle (tap: open the app).
+-- * Results card when a battle ends.
+-- All actions go to the server (CrewBattleRequest), which validates everything.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local CB = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("CrewBattlesConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local CrewBattles = {}
+
+local APP_ID = "CrewBattles"
+local APP_COLOR = Color3.fromRGB(230, 70, 110)
+local GOOD = Color3.fromRGB(60, 170, 90)
+
+local requestRemote: RemoteFunction? = nil
+local getRemote: RemoteFunction? = nil
+local content: ScrollingFrame? = nil
+local snapshot: any = nil
+local receivedAt = os.clock()
+local busy = false
+local tickers: { () -> () } = {} -- refresh countdown labels without rebuilding the page
+
+-- challenge builder state
+local form = { format = "Basketball", metric = "jobs", target = nil :: string? }
+
+-- live chip
+local chipGui: ScreenGui? = nil
+local chip: TextButton? = nil
+local chipData: any = nil
+local chipReceivedAt = os.clock()
+local chipTop: TextLabel
+local chipBottom: TextLabel
+
+local function serverNow(): number
+	if snapshot and snapshot.serverNow then
+		return snapshot.serverNow + (os.clock() - receivedAt)
+	end
+	return os.time()
+end
+
+local function duration(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	local d, h, m = seconds // 86400, (seconds % 86400) // 3600, (seconds % 3600) // 60
+	if d > 0 then
+		return string.format("%dd %dh", d, h)
+	elseif h > 0 then
+		return string.format("%dh %dm", h, m)
+	end
+	return CB.clock(seconds)
+end
+
+local function onPage(): boolean
+	return content ~= nil and Phone.isOpen() and Phone.currentPage() == APP_ID
+end
+
+---------------------------------------------------------------------------
+-- Server calls
+---------------------------------------------------------------------------
+local render: () -> ()
+
+local function fetch()
+	if not getRemote then
+		return
+	end
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return (getRemote :: RemoteFunction):InvokeServer()
+		end)
+		if ok and type(result) == "table" then
+			snapshot = result
+			receivedAt = os.clock()
+			if onPage() then
+				render()
+			end
+		end
+	end)
+end
+
+local function request(action: string, args: any)
+	if not requestRemote or busy then
+		return
+	end
+	busy = true
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return (requestRemote :: RemoteFunction):InvokeServer(action, args)
+		end)
+		busy = false
+		if ok and type(result) == "table" then
+			if result.msg then
+				HUD.push(if result.ok then "CREW BATTLES" else "CAN'T DO THAT", tostring(result.msg))
+			end
+		else
+			HUD.push("CREW BATTLES", "Couldn't reach the server.")
+		end
+		fetch()
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Page
+---------------------------------------------------------------------------
+local function text(parent: Instance, props: { [string]: any }): TextLabel
+	local defaults = { TextSize = 13, TextWrapped = true, Size = UDim2.new(1, 0, 0, 18) }
+	for k, v in props do
+		defaults[k] = v
+	end
+	defaults.Parent = parent
+	return UI.label(defaults)
+end
+
+local function button(parent: Instance, label: string, color: Color3, pos: UDim2, size: UDim2, onTap: () -> ()): TextButton
+	local b = UI.button({ Text = label, TextSize = 13, BackgroundColor3 = color, Position = pos, Size = size, Parent = parent })
+	b.Activated:Connect(onTap)
+	return b
+end
+
+local function crewCard(c: ScrollingFrame, order: number)
+	local crew = snapshot.crew
+	local card = Phone.card(c, 84, order)
+	text(card, { Text = string.format("🛡️  %s  [%s]", crew.name, crew.tag), Font = UI.FONT_BLACK, TextSize = 16, Size = UDim2.new(1, 0, 0, 22) })
+	text(card, { Text = string.format("Crew rating %d  ·  %dW %dL %dD", crew.rating, crew.wins, crew.losses, crew.draws), TextColor3 = Color3.fromRGB(255, 210, 90), Font = UI.FONT_BOLD, Position = UDim2.fromOffset(0, 24) })
+	local me = snapshot.me
+	text(card, {
+		Text = if me then string.format("You: %d battles · %d wins · %d MVP", me.played, me.wins, me.mvps) else "",
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 42),
+	})
+end
+
+local function battleCard(c: ScrollingFrame, order: number)
+	local b = snapshot.battle
+	local mine = if b.mineIsA then b.a else b.b
+	local theirs = if b.mineIsA then b.b else b.a
+	local isPending = b.state == "pending"
+	local height = if isPending then 170 else 214 + 18 * #b.top
+	local card = Phone.card(c, height, order)
+	card.BackgroundColor3 = Color3.fromRGB(46, 30, 40)
+	text(card, { Text = b.icon .. "  " .. string.upper(b.formatName), Font = UI.FONT_BLACK, TextSize = 15, TextColor3 = APP_COLOR })
+	if isPending then
+		local who = if b.mineIsA then "Challenge sent to " .. theirs.name else theirs.name .. " challenges your crew!"
+		text(card, { Text = who, Font = UI.FONT_BOLD, Position = UDim2.fromOffset(0, 22) })
+		text(card, { Text = b.desc, TextColor3 = colors.subtext, TextSize = 12, Position = UDim2.fromOffset(0, 42), Size = UDim2.new(1, 0, 0, 44) })
+		local timer = text(card, { Text = "", TextColor3 = colors.stamina, Font = UI.FONT_BOLD, Position = UDim2.fromOffset(0, 88) })
+		table.insert(tickers, function()
+			timer.Text = "Expires in " .. CB.clock(b.acceptBy - serverNow())
+		end)
+		if b.canAccept then
+			button(card, "ACCEPT", GOOD, UDim2.fromOffset(0, 110), UDim2.new(0.5, -4, 0, 30), function()
+				request("Accept", b.id)
+			end)
+			button(card, "Decline", colors.panelLight, UDim2.new(0.5, 4, 0, 110), UDim2.new(0.5, -4, 0, 30), function()
+				request("Decline", b.id)
+			end)
+		elseif b.canCancel then
+			button(card, "Cancel challenge", colors.panelLight, UDim2.fromOffset(0, 110), UDim2.new(1, 0, 0, 30), function()
+				request("Cancel", b.id)
+			end)
+		else
+			text(card, { Text = if b.mineIsA then "Waiting for their leader or officers…" else "Your leader or officers can accept.", TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 114) })
+		end
+		return
+	end
+	-- scoreboard
+	local board = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 56), Parent = card })
+	local function side(s: any, x: number, align: Enum.TextXAlignment)
+		UI.label({ Text = "[" .. tostring(s.tag) .. "] " .. s.name, TextSize = 12, TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = align, TextColor3 = s.color, Position = UDim2.new(x, 0, 0, 0), Size = UDim2.new(0.5, -4, 0, 16), Parent = board })
+		UI.label({ Text = tostring(s.score), Font = UI.FONT_BLACK, TextSize = 30, TextXAlignment = align, Position = UDim2.new(x, 0, 0, 16), Size = UDim2.new(0.5, -4, 0, 38), Parent = board })
+	end
+	side(mine, 0, Enum.TextXAlignment.Left)
+	side(theirs, 0.5, Enum.TextXAlignment.Right)
+	local timer = text(card, { Text = "", Font = UI.FONT_BOLD, TextColor3 = colors.stamina, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 84) })
+	table.insert(tickers, function()
+		local t = serverNow()
+		if b.state == "countdown" and b.startsAt then
+			timer.Text = "Starts in " .. CB.clock(b.startsAt - t)
+		elseif b.state == "live" and b.endsAt then
+			timer.Text = "Time left " .. CB.clock(b.endsAt - t)
+		else
+			timer.Text = "Final scores coming in…"
+		end
+	end)
+	text(card, { Text = b.desc, TextColor3 = colors.subtext, TextSize = 12, Position = UDim2.fromOffset(0, 104), Size = UDim2.new(1, 0, 0, 44) })
+	text(card, { Text = string.format("Your contribution: %d %s", b.myScore, b.unit), Font = UI.FONT_BOLD, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 150) })
+	text(card, { Text = if #b.top > 0 then "TOP SCORERS ON THIS SERVER" else "", TextSize = 11, Font = UI.FONT_BOLD, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 170) })
+	for i, e in b.top do
+		text(card, {
+			Text = string.format("%d. %s — %d", i, e.name, e.score),
+			TextColor3 = if e.mine then mine.color else theirs.color,
+			Position = UDim2.fromOffset(0, 170 + 18 * i),
+		})
+	end
+end
+
+local function builderCard(c: ScrollingFrame, order: number)
+	local targets = snapshot.targets or {}
+	local isCity = form.format == "CityChallenge"
+	local rows = math.min(#targets, 8)
+	local height = 244 + (if isCity then 36 else 0) + math.max(rows, 1) * 34
+	local card = Phone.card(c, height, order)
+	text(card, { Text = "⚔️  CHALLENGE A CREW", Font = UI.FONT_BLACK, TextSize = 14 })
+	-- formats (2 rows)
+	local y = 24
+	for i, f in CB.FORMATS do
+		local col, rowN = (i - 1) % 3, (i - 1) // 3
+		local selected = form.format == f.id
+		button(card, f.icon .. " " .. f.label, if selected then f.color else colors.panel, UDim2.new(col / 3, 2, 0, y + rowN * 36), UDim2.new(1 / 3, -4, 0, 32), function()
+			form.format = f.id
+			render()
+		end).TextSize = 11
+	end
+	y += 76
+	if isCity then
+		for i, m in CB.METRICS do
+			local selected = form.metric == m.id
+			button(card, m.icon .. " " .. m.label, if selected then CB.BY_ID.CityChallenge.color else colors.panel, UDim2.new((i - 1) / 3, 2, 0, y), UDim2.new(1 / 3, -4, 0, 30), function()
+				form.metric = m.id
+				render()
+			end).TextSize = 11
+		end
+		y += 36
+	end
+	local f = CB.BY_ID[form.format]
+	local desc = if isCity then (CB.METRIC_BY_ID[form.metric].desc .. " " .. f.minutes .. " minutes.") else (f.desc .. " " .. f.minutes .. " minutes.")
+	text(card, { Text = desc, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 48) })
+	y += 52
+	text(card, { Text = "OPPONENT", TextSize = 11, Font = UI.FONT_BOLD, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y) })
+	y += 24
+	if #targets == 0 then
+		text(card, { Text = "No other crews found yet. Crews online in this server and crews on the rating board show up here.", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 30) })
+		y += 34
+	end
+	for i, t in targets do
+		if i > 8 then
+			break
+		end
+		local selected = form.target == t.id
+		local label = string.format("%s%s · %d%s", t.name, if t.tag ~= "" then " [" .. t.tag .. "]" else "", t.rating, if t.busy then " · busy" elseif t.here then " · here" else " · other server")
+		local b = button(card, label, if selected then APP_COLOR else colors.panel, UDim2.fromOffset(0, y), UDim2.new(1, 0, 0, 30), function()
+			if not t.busy then
+				form.target = t.id
+				render()
+			end
+		end)
+		b.TextSize = 12
+		b.TextTruncate = Enum.TextTruncate.AtEnd
+		if t.busy then
+			b.TextColor3 = colors.subtext
+		end
+		y += 34
+	end
+	local ready = form.target ~= nil
+	button(card, "SEND CHALLENGE", if ready then APP_COLOR else colors.panel, UDim2.fromOffset(0, y + 6), UDim2.new(1, 0, 0, 34), function()
+		if form.target then
+			request("Challenge", { target = form.target, format = form.format, metric = if isCity then form.metric else nil })
+		else
+			HUD.push("CREW BATTLES", "Pick an opponent first.")
+		end
+	end)
+end
+
+local function cupCard(c: ScrollingFrame, order: number)
+	local cup = snapshot.cup
+	if not cup then
+		return
+	end
+	local n = #cup.standings
+	local last = cup.lastWeek or {}
+	local height = 88 + math.max(n, 1) * 18 + (if #last > 0 then 26 + #last * 18 else 0)
+	local card = Phone.card(c, height, order)
+	text(card, { Text = "🏆  CITY CREW CUP", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = Color3.fromRGB(255, 205, 70) })
+	local timer = text(card, { Text = "", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 20) })
+	table.insert(tickers, function()
+		timer.Text = string.format("3 pts a win · 1 a draw · resets in %s", duration(cup.endsAt - serverNow()))
+	end)
+	text(card, { Text = if snapshot.crew then string.format("Your crew this week: %d pts", cup.myPoints) else "", TextSize = 12, Font = UI.FONT_BOLD, TextColor3 = colors.cash, Position = UDim2.fromOffset(0, 38) })
+	local y = 60
+	if n == 0 then
+		text(card, { Text = "No battles won yet this week.", TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y) })
+		y += 18
+	end
+	for i, e in cup.standings do
+		text(card, { Text = string.format("%d. %s — %d pts", i, e.name, e.points), Font = if e.mine then UI.FONT_BOLD else UI.FONT, TextColor3 = if e.mine then Color3.fromRGB(255, 225, 140) else colors.text, Position = UDim2.fromOffset(0, y) })
+		y += 18
+	end
+	if #last > 0 then
+		y += 8
+		text(card, { Text = "LAST WEEK'S PODIUM", TextSize = 11, Font = UI.FONT_BOLD, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y) })
+		y += 18
+		for i, e in last do
+			text(card, { Text = string.format("%s %s — %d pts", if i == 1 then "🥇" elseif i == 2 then "🥈" else "🥉", e.name, e.points), Position = UDim2.fromOffset(0, y) })
+			y += 18
+		end
+	end
+end
+
+local function historyCard(c: ScrollingFrame, order: number)
+	local hist = snapshot.history or {}
+	if #hist == 0 then
+		return
+	end
+	local card = Phone.card(c, 48 + #hist * 34, order)
+	text(card, { Text = "RECENT BATTLES", TextSize = 11, Font = UI.FONT_BOLD, TextColor3 = colors.subtext })
+	for i, r in hist do
+		local y = 22 + (i - 1) * 34
+		text(card, { Text = string.format("%s %s %d – %d %s", r.icon, r.a.name, r.a.score, r.b.score, r.b.name), Font = UI.FONT_BOLD, TextTruncate = Enum.TextTruncate.AtEnd, TextWrapped = false, Position = UDim2.fromOffset(0, y) })
+		local outcome = if r.noContest then "No contest" elseif r.winner then r.winner .. " won" else "Draw"
+		text(card, { Text = string.format("%s · %s · %s", r.formatName, outcome, UI.timeAgo(r.at)), TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, y + 16) })
+	end
+end
+
+render = function()
+	local c = content
+	if not c then
+		return
+	end
+	table.clear(tickers)
+	Phone.clear(c)
+	if not snapshot then
+		local card = Phone.card(c, 40, 1)
+		text(card, { Text = "Loading…", TextColor3 = colors.subtext })
+		return
+	end
+	if not snapshot.crew then
+		local card = Phone.card(c, 128, 1)
+		text(card, { Text = "⚔️  CREW BATTLES", Font = UI.FONT_BLACK, TextSize = 15 })
+		text(card, { Text = "Crews battle in basketball, racing, running, treasure hunts and city challenges. Join or start a crew to compete.", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 44) })
+		button(card, "Open the Crew app", APP_COLOR, UDim2.fromOffset(0, 70), UDim2.new(1, 0, 0, 30), function()
+			Phone.showPage("Crew")
+		end)
+	else
+		crewCard(c, 1)
+		if snapshot.battle then
+			battleCard(c, 2)
+		elseif snapshot.crew.canChallenge then
+			builderCard(c, 3)
+		else
+			local card = Phone.card(c, 60, 3)
+			text(card, { Text = "No battle right now. Your crew's leader or officers can challenge another crew from here.", TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1) })
+		end
+	end
+	cupCard(c, 4)
+	historyCard(c, 5)
+	local lb = UI.button({ Text = "🏆 Crew rating leaderboard", TextSize = 13, BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, -20, 0, 34), LayoutOrder = 6, Parent = c })
+	lb.Activated:Connect(function()
+		Phone.showPage("Leaderboards")
+	end)
+	if not snapshot.global then
+		local card = Phone.card(c, 48, 7)
+		text(card, { Text = "Offline mode: ratings and the cup are kept for this server only.", TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1) })
+	end
+	for _, fn in tickers do
+		fn()
+	end
+end
+
+---------------------------------------------------------------------------
+-- Live chip and results card
+---------------------------------------------------------------------------
+local function buildGui()
+	chipGui = UI.new("ScreenGui", {
+		Name = "CityGrindCrewBattles",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 4,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	local b = UI.new("TextButton", {
+		Name = "Chip",
+		Text = "",
+		AutoButtonColor = true,
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.1,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 12, 0.4, 0),
+		Size = UDim2.fromOffset(230, 54),
+		Visible = false,
+		Parent = chipGui,
+	}, { UI.corner(12), UI.stroke(APP_COLOR, 2) })
+	chipTop = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(6, 4), Size = UDim2.new(1, -12, 0, 24), Parent = b })
+	chipBottom = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(6, 28), Size = UDim2.new(1, -12, 0, 20), Parent = b })
+	b.Activated:Connect(function()
+		Phone.setOpen(true)
+		Phone.showPage(APP_ID)
+	end)
+	chip = b
+end
+
+local function updateChip()
+	if not chip then
+		return
+	end
+	local d = chipData
+	if not d or os.clock() - chipReceivedAt > 8 then
+		chip.Visible = false
+		return
+	end
+	chip.Visible = true
+	local t = d.serverNow + (os.clock() - chipReceivedAt)
+	chipTop.Text = string.format("%s  %s %d – %d %s", d.icon, d.mine.tag, d.mine.score, d.theirs.score, d.theirs.tag)
+	local lead = d.mine.score - d.theirs.score
+	chipTop.TextColor3 = if lead > 0 then Color3.fromRGB(120, 230, 140) elseif lead < 0 then Color3.fromRGB(255, 120, 120) else colors.text
+	if d.state == "countdown" and d.startsAt then
+		chipBottom.Text = string.format("%s · starts in %s", d.formatName, CB.clock(d.startsAt - t))
+	elseif d.state == "live" and d.endsAt then
+		chipBottom.Text = string.format("%s · %s left · you %d", d.formatName, CB.clock(d.endsAt - t), d.myScore)
+	else
+		chipBottom.Text = "Final scores coming in…"
+	end
+end
+
+local function showResult(r: any)
+	if not chipGui then
+		return
+	end
+	local old = (chipGui :: ScreenGui):FindFirstChild("Result")
+	if old then
+		old:Destroy()
+	end
+	local accent = if r.outcome == "win" then Color3.fromRGB(90, 220, 120) elseif r.outcome == "loss" then Color3.fromRGB(255, 100, 100) else Color3.fromRGB(255, 200, 60)
+	local card = UI.new("Frame", {
+		Name = "Result",
+		BackgroundColor3 = colors.panel,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.45),
+		Size = UDim2.fromOffset(320, 270),
+		Parent = chipGui,
+	}, { UI.corner(18), UI.stroke(accent, 3), UI.padding(14) })
+	local headline = if r.outcome == "win" then "VICTORY!" elseif r.outcome == "loss" then "DEFEAT" elseif r.outcome == "draw" then "DRAW" else "NO CONTEST"
+	UI.label({ Text = headline, Font = UI.FONT_BLACK, TextSize = 28, TextColor3 = accent, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 34), Parent = card })
+	UI.label({ Text = tostring(r.icon) .. "  " .. tostring(r.formatName), TextSize = 13, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 18), Parent = card })
+	UI.label({
+		Text = string.format("%s  %d – %d  %s", r.mine.name, r.mine.score, r.theirs.score, r.theirs.name),
+		Font = UI.FONT_BLACK,
+		TextSize = 17,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromOffset(0, 56),
+		Size = UDim2.new(1, 0, 0, 44),
+		Parent = card,
+	})
+	local lines = {}
+	if r.outcome ~= "none" then
+		table.insert(lines, string.format("Crew rating %d (%s%d)", r.mine.rating, if r.mine.delta >= 0 then "+" else "", r.mine.delta))
+	end
+	table.insert(lines, string.format("Your contribution: %d %s", r.myScore or 0, tostring(r.unit)))
+	if r.mvp then
+		table.insert(lines, string.format("MVP: %s (%d)", r.mvp.name, r.mvp.score))
+	end
+	if r.reward then
+		table.insert(lines, "Reward: " .. r.reward)
+	end
+	if r.note then
+		table.insert(lines, tostring(r.note))
+	end
+	UI.label({ Text = table.concat(lines, "\n"), TextSize = 14, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 104), Size = UDim2.new(1, 0, 0, 90), Parent = card })
+	local close = UI.button({ Text = "NICE", BackgroundColor3 = accent, TextColor3 = Color3.fromRGB(20, 20, 24), Position = UDim2.new(0, 0, 1, -38), Size = UDim2.new(1, 0, 0, 38), Parent = card })
+	close.Activated:Connect(function()
+		card:Destroy()
+	end)
+	task.delay(25, function()
+		if card.Parent then
+			card:Destroy()
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function CrewBattles.start()
+	Phone.addApp({ id = APP_ID, label = "Battles", icon = "⚔️", color = APP_COLOR }, function(page: ScrollingFrame)
+		content = page
+		render()
+		return function()
+			render()
+			fetch()
+		end
+	end)
+
+	task.spawn(function()
+		local remotes = ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Remotes")
+		requestRemote = remotes:WaitForChild("CrewBattleRequest") :: RemoteFunction
+		getRemote = remotes:WaitForChild("CrewBattleGet") :: RemoteFunction
+		local event = remotes:WaitForChild("CrewBattleEvent") :: RemoteEvent
+		buildGui()
+		event.OnClientEvent:Connect(function(kind: any, data: any)
+			if kind == "changed" then
+				if onPage() then
+					fetch()
+				end
+			elseif kind == "live" then
+				chipData = if type(data) == "table" then data else nil
+				chipReceivedAt = os.clock()
+				updateChip()
+			elseif kind == "result" and type(data) == "table" then
+				chipData = nil
+				updateChip()
+				showResult(data)
+				fetch()
+			end
+		end)
+		-- countdown labels / chip, and a slow refresh while the page shows a live battle
+		local acc, slow = 0, 0
+		RunService.Heartbeat:Connect(function(dt)
+			acc += dt
+			if acc < 0.5 then
+				return
+			end
+			acc = 0
+			updateChip()
+			if onPage() then
+				for _, fn in tickers do
+					pcall(fn)
+				end
+				slow += 1
+				if slow >= 10 and snapshot and snapshot.battle then
+					slow = 0
+					fetch()
+				end
+			end
+		end)
+	end)
+end
+
+return CrewBattles
+]=====])
 put(client, 'ModuleScript', 'Crews', [=====[
 -- CITY GRIND: crews (sections 60, 61, 62). Client side: the "Crew" phone app.
 -- No crew: create form (name, tag, colour, logo), pending invites, leaderboard.
@@ -50624,6 +57729,340 @@ function Jobs.start()
 end
 
 return Jobs
+]=====])
+put(client, 'ModuleScript', 'Leaderboards', [=====[
+-- CITY GRIND: leaderboards (section 98). Client side: the "Leaderboards" phone app.
+-- Category tabs (level, cash, rep, fame, rating, wins, points, 5K, race, crews),
+-- scopes All time / This season / Friends, your own rank line, and archived
+-- seasons. Everything is read from the server (LeaderboardsGet); tapping a
+-- player opens their profile card.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local LC = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("LeaderboardsConfig"))
+
+local colors = UI.colors
+
+local Leaderboards = {}
+
+local APP_ID = "Leaderboards"
+local APP_COLOR = Color3.fromRGB(255, 190, 40)
+local ME_COLOR = Color3.fromRGB(60, 50, 20)
+
+local remote: RemoteFunction? = nil
+local content: ScrollingFrame? = nil
+
+local state = {
+	stat = "level",
+	scope = "all", -- "all" | "season" | "friends"
+	meta = nil :: any,
+	board = nil :: any, -- last board reply
+	boardKey = "", -- stat .. "|" .. scope of `board`
+	seq = 0,
+	archiveId = nil :: string?, -- viewing an archived season
+	archive = nil :: any,
+	archiveStat = "rating",
+}
+
+local function invoke(action: string, a: any?, b: any?): any
+	if not remote then
+		return nil
+	end
+	local ok, result = pcall(function()
+		return (remote :: RemoteFunction):InvokeServer(action, a, b)
+	end)
+	return if ok and type(result) == "table" then result else nil
+end
+
+local function ago(t: number?): string
+	if not t then
+		return "live"
+	end
+	return "updated " .. UI.timeAgo(t)
+end
+
+local function socialClient(): any
+	local m = script.Parent:FindFirstChild("Social")
+	if not m then
+		return nil
+	end
+	local ok, mod = pcall(require, m)
+	return if ok then mod else nil
+end
+
+---------------------------------------------------------------------------
+-- Rendering
+---------------------------------------------------------------------------
+local render: () -> ()
+
+local function chip(parent: Instance, text: string, selected: boolean, color: Color3, width: number, order: number, onTap: () -> ()): TextButton
+	local b = UI.button({
+		Text = text,
+		TextSize = 13,
+		Size = UDim2.fromOffset(width, 30),
+		LayoutOrder = order,
+		BackgroundColor3 = if selected then color else colors.panelLight,
+		TextColor3 = if selected then Color3.fromRGB(20, 20, 24) else colors.text,
+		Parent = parent,
+	})
+	b.Activated:Connect(onTap)
+	return b
+end
+
+local function row(parent: Instance, order: number, rank: number, name: string, value: string, me: boolean, userId: number?)
+	local f = UI.new("TextButton", {
+		Text = "",
+		AutoButtonColor = userId ~= nil,
+		BackgroundColor3 = if me then ME_COLOR else colors.panelLight,
+		Size = UDim2.new(1, -20, 0, 34),
+		LayoutOrder = order,
+		Parent = parent,
+	}, { UI.corner(10) })
+	local rankColor = if rank == 1 then Color3.fromRGB(255, 210, 70) elseif rank == 2 then Color3.fromRGB(205, 210, 220) elseif rank == 3 then Color3.fromRGB(215, 140, 70) else colors.subtext
+	UI.label({ Text = "#" .. rank, Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = rankColor, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(0, 40, 1, 0), Parent = f })
+	UI.label({ Text = name .. (if me then "  (you)" else ""), Font = UI.FONT_BOLD, TextSize = 14, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(50, 0), Size = UDim2.new(1, -150, 1, 0), Parent = f })
+	UI.label({ Text = value, Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = colors.cash, TextXAlignment = Enum.TextXAlignment.Right, Position = UDim2.new(1, -100, 0, 0), Size = UDim2.new(0, 90, 1, 0), Parent = f })
+	if userId and userId > 0 then
+		f.Activated:Connect(function()
+			local Social = socialClient()
+			if Social and type(Social.openProfile) == "function" then
+				Social.openProfile(userId)
+			end
+		end)
+	end
+end
+
+local function note(parent: Instance, order: number, text: string, color: Color3?)
+	local c = Phone.card(parent, 56, order)
+	UI.label({ Text = text, TextSize = 13, TextWrapped = true, TextColor3 = color or colors.subtext, Size = UDim2.fromScale(1, 1), Parent = c })
+end
+
+local function fetchBoard()
+	local key = state.stat .. "|" .. state.scope
+	state.seq += 1
+	local seq = state.seq
+	task.spawn(function()
+		local reply = invoke("Board", state.stat, state.scope)
+		if seq == state.seq and state.stat .. "|" .. state.scope == key then
+			state.board = reply or { ok = false, msg = "Couldn't reach the server." }
+			state.boardKey = key
+			render()
+		end
+	end)
+end
+
+local function fetchMeta()
+	task.spawn(function()
+		local reply = invoke("Meta")
+		if reply and reply.ok then
+			state.meta = reply
+			render()
+		end
+	end)
+end
+
+local function selectStat(id: string)
+	state.stat = id
+	local s = LC.BY_ID[id]
+	local seasonGone = state.scope == "season" and not (s.seasonal and state.meta and state.meta.season)
+	if seasonGone or (state.scope == "friends" and s.crew) then
+		state.scope = "all"
+	end
+	state.board = nil
+	render()
+	fetchBoard()
+end
+
+local function renderArchive(c: ScrollingFrame)
+	local back = UI.button({ Text = "‹ Back to live boards", TextSize = 14, TextColor3 = colors.xp, BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, -20, 0, 32), LayoutOrder = 1, Parent = c })
+	back.Activated:Connect(function()
+		state.archiveId = nil
+		state.archive = nil
+		render()
+	end)
+	local a = state.archive
+	if not a then
+		note(c, 2, "Loading the archive…")
+		return
+	end
+	if not a.ok then
+		note(c, 2, a.msg or "Archive unavailable.", colors.danger)
+		return
+	end
+	local head = Phone.card(c, 68, 2)
+	UI.label({ Text = "🏛️  " .. tostring(a.name), Font = UI.FONT_BLACK, TextSize = 17, Size = UDim2.new(1, 0, 0, 24), Parent = head })
+	UI.label({ Text = "Final standings · archived " .. UI.timeAgo(a.at or os.time()), TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 16), Parent = head })
+	local tabs = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 30), LayoutOrder = 3, Parent = c }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local i = 0
+	for _, s in LC.STATS do
+		if s.seasonal then
+			i += 1
+			chip(tabs, s.icon .. " " .. s.short, state.archiveStat == s.id, s.color, 82, i, function()
+				state.archiveStat = s.id
+				render()
+			end)
+		end
+	end
+	local list = a.boards and a.boards[state.archiveStat] or {}
+	if #list == 0 then
+		note(c, 4, "Nobody placed on this board that season.")
+	end
+	for n, e in list do
+		row(c, 10 + n, e.rank, e.name, e.text, e.me == true, nil)
+	end
+end
+
+render = function()
+	local c = content
+	if not c then
+		return
+	end
+	Phone.clear(c)
+	if state.archiveId then
+		renderArchive(c)
+		return
+	end
+	local meta = state.meta
+	local s = LC.BY_ID[state.stat]
+
+	-- category tabs (horizontal scroller)
+	local tabs = UI.new("ScrollingFrame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -20, 0, 38),
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollingDirection = Enum.ScrollingDirection.X,
+		ScrollBarThickness = 2,
+		LayoutOrder = 1,
+		Parent = c,
+	}, { UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }) })
+	for i, st in LC.STATS do
+		chip(tabs, st.icon .. " " .. st.short, st.id == state.stat, st.color, 80, i, function()
+			selectStat(st.id)
+		end)
+	end
+
+	-- scope tabs
+	local scopes = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 30), LayoutOrder = 2, Parent = c }, {
+		UI.new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local seasonOk = s.seasonal and meta and meta.season ~= nil
+	local scopeList = { { "all", "All time" } }
+	if seasonOk then
+		table.insert(scopeList, { "season", "Season" })
+	end
+	if not s.crew then
+		table.insert(scopeList, { "friends", "Friends" })
+	end
+	local w = math.floor((Phone.width - 20 - 6 * (#scopeList - 1)) / #scopeList)
+	for i, sc in scopeList do
+		chip(scopes, sc[2], state.scope == sc[1], APP_COLOR, w, i, function()
+			if state.scope ~= sc[1] then
+				state.scope = sc[1]
+				state.board = nil
+				render()
+				fetchBoard()
+			end
+		end)
+	end
+
+	-- header
+	local head = Phone.card(c, 80, 3)
+	UI.label({ Text = s.icon .. "  " .. s.label, Font = UI.FONT_BLACK, TextSize = 17, TextColor3 = s.color, Size = UDim2.new(1, 0, 0, 22), Parent = head })
+	local sub
+	if state.scope == "season" and meta and meta.season then
+		sub = meta.season.name .. (if meta.season.endsAt then " · ends " .. os.date("%b %d", meta.season.endsAt) else "")
+	elseif state.scope == "friends" then
+		sub = "You and your in-game friends"
+	else
+		sub = "All time"
+	end
+	local board = if state.boardKey == state.stat .. "|" .. state.scope then state.board else nil
+	local where = if board and board.ok then (if board.global then "All servers · " .. ago(board.updatedAt) else "This server (offline boards)") else ""
+	UI.label({ Text = sub .. (if where ~= "" then "  ·  " .. where else ""), TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 30), Parent = head })
+
+	if not board then
+		note(c, 4, "Loading…")
+		return
+	end
+	if not board.ok then
+		note(c, 4, board.msg or "Board unavailable.", colors.danger)
+		return
+	end
+
+	-- your rank line
+	local mine = board.mine
+	local meCard = Phone.card(c, 40, 4)
+	meCard.BackgroundColor3 = ME_COLOR
+	local meText
+	if s.crew and not (meta and meta.inCrew) then
+		meText = "Join a crew to get on the crew board."
+	elseif mine and mine.rank then
+		meText = string.format("%s #%d  ·  %s", if s.crew then "Your crew:" else "You:", mine.rank, mine.text)
+	elseif mine then
+		meText = string.format("%s %s  ·  outside the top %d", if s.crew then "Your crew:" else "You:", mine.text, LC.TOP_N)
+	else
+		meText = if s.lowerBetter then "No time yet. Finish one to get ranked!" else "Not ranked yet."
+	end
+	UI.label({ Text = meText, Font = UI.FONT_BOLD, TextSize = 14, TextColor3 = Color3.fromRGB(255, 225, 140), Size = UDim2.fromScale(1, 1), Parent = meCard })
+
+	if #board.entries == 0 then
+		note(c, 5, if state.scope == "friends" then "None of your friends are on this board yet." else "No entries yet. Be the first!")
+	end
+	for i, e in board.entries do
+		row(c, 10 + i, e.rank, e.name, e.text, e.me == true, e.userId)
+	end
+
+	-- archived seasons
+	local archives = meta and meta.archives or {}
+	if #archives > 0 then
+		local h = Phone.card(c, 44 + 36 * math.min(#archives, 6), 200)
+		UI.label({ Text = "🏛️  PAST SEASONS", Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 20), Parent = h })
+		for i, a in archives do
+			if i > 6 then
+				break
+			end
+			local b = UI.button({ Text = tostring(a.name), TextSize = 13, BackgroundColor3 = Color3.fromRGB(48, 48, 60), Position = UDim2.fromOffset(0, 24 + (i - 1) * 36), Size = UDim2.new(1, 0, 0, 30), Parent = h })
+			b.Activated:Connect(function()
+				state.archiveId = a.id
+				state.archive = nil
+				state.archiveStat = "rating"
+				render()
+				task.spawn(function()
+					local reply = invoke("Archive", a.id)
+					if state.archiveId == a.id then
+						state.archive = reply or { ok = false, msg = "Couldn't reach the server." }
+						render()
+					end
+				end)
+			end)
+		end
+	end
+end
+
+function Leaderboards.start()
+	Phone.addApp({ id = APP_ID, label = "Leaders", icon = "🏆", color = APP_COLOR }, function(page: ScrollingFrame)
+		content = page
+		render()
+		return function()
+			if state.archiveId == nil then
+				fetchMeta()
+				fetchBoard()
+			end
+			render()
+		end
+	end)
+	task.spawn(function()
+		local folder = ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Remotes")
+		remote = folder:WaitForChild("LeaderboardsGet") :: RemoteFunction
+	end)
+end
+
+return Leaderboards
 ]=====])
 put(client, 'ModuleScript', 'Media', [=====[
 -- CITY GRIND: Camera + Gallery apps (sections 30-33, 59, 86).
@@ -56254,6 +63693,1664 @@ function Quests.start()
 end
 
 return Quests
+]=====])
+put(client, 'ModuleScript', 'Racing', [=====[
+-- CITY GRIND: racing on the client (spec sections 58, 62, 98).
+-- * RACE HQ panel (opened by the kiosk prompt at the City Speedway start line):
+--   circuit race lobby (join / leave) and time trial start.
+-- * Race HUD: position, lap, timer, best lap, mini standings, "Wet track" when
+--   the weather lowers grip, quit button; big countdown; banners for laps and
+--   missed checkpoints; next-checkpoint highlight arch (local only) and an
+--   on-screen arrow with the distance to it.
+-- * Results screen, street race challenges (player menu action
+--   "Challenge to race" + route picker, incoming challenge with a 15 s window).
+-- * Phone app "Racing": best times, medals, stats, street routes with GPS,
+--   recent results, time trial start / GPS to the speedway.
+-- The server validates everything (server/Racing).
+
+local GuiService = game:GetService("GuiService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local RC = require(shared:WaitForChild("RacingConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Racing = {}
+
+local APP_ID = "Racing"
+local APP_COLOR = Color3.fromRGB(220, 50, 60)
+local METERS_PER_STUD = 0.49 -- matches the speedometer (1.1 mph per stud/s)
+
+local remotes: Instance? = nil
+local gui: ScreenGui
+
+type Setup = { id: string, kind: string, name: string, laps: number, cps: { { p: Vector3, g: Vector3, f: Vector3, w: number } }, goT: number, total: number }
+local current: Setup? = nil
+local state: { [string]: any }? = nil
+local outOfRace = false
+local finishedTime: number? = nil
+local highlight: Model? = nil
+local highlightKey = ""
+local goShownUntil = 0
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function invoke(action: string, a: any?, b: any?): (boolean, string, any)
+	if not remotes then
+		return false, "Still connecting...", nil
+	end
+	local rf = (remotes :: Instance):FindFirstChild("RacingAction")
+	if not rf or not rf:IsA("RemoteFunction") then
+		return false, "Racing isn't available.", nil
+	end
+	local ok, success, message, data = pcall(function()
+		return rf:InvokeServer(action, a, b)
+	end)
+	if not ok then
+		return false, "Connection problem. Try again.", nil
+	end
+	return success == true, if type(message) == "string" then message else "", data
+end
+
+local function now(): number
+	return workspace:GetServerTimeNow()
+end
+
+local function isDriving(p: Player): boolean
+	local d = p:GetAttribute("Driving")
+	return type(d) == "string" and d ~= ""
+end
+
+local function distanceText(studs: number): string
+	local m = studs * METERS_PER_STUD
+	if m >= 1000 then
+		return string.format("%.1f km", m / 1000)
+	end
+	return string.format("%d m", math.floor(m + 0.5))
+end
+
+local function isWet(): boolean
+	local grip = workspace:GetAttribute("WeatherGrip")
+	return type(grip) == "number" and grip < 0.999
+end
+
+local function selectForGamepad(button: GuiObject?)
+	if button and UserInputService.GamepadEnabled then
+		GuiService.SelectedObject = button
+	end
+end
+
+local function rewardText(reward: any): string
+	if type(reward) ~= "table" then
+		return ""
+	end
+	local parts = {}
+	if (reward.cash or 0) > 0 then
+		table.insert(parts, "+" .. UI.formatCash(reward.cash))
+	end
+	if (reward.xp or 0) > 0 then
+		table.insert(parts, "+" .. reward.xp .. " XP")
+	end
+	if (reward.rep or 0) > 0 then
+		table.insert(parts, "+" .. reward.rep .. " rep")
+	end
+	return table.concat(parts, "  ·  ")
+end
+
+local function modal(name: string, width: number, height: number, accent: Color3): Frame
+	local frame = UI.new("Frame", {
+		Name = name,
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.03,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(width, height),
+		Visible = false,
+		ZIndex = 5,
+		Parent = gui,
+	}, { UI.corner(18), UI.padding(14), UI.stroke(accent, 1.5, 0.3) })
+	local scale = UI.new("UIScale", { Parent = frame })
+	local function fit()
+		local camera = workspace.CurrentCamera
+		local vp = if camera then camera.ViewportSize else Vector2.new(1280, 720)
+		scale.Scale = math.min(1, (vp.Y - 20) / height, (vp.X - 20) / width)
+	end
+	fit()
+	frame:GetPropertyChangedSignal("Visible"):Connect(fit)
+	return frame
+end
+
+local function clearChildren(frame: Instance)
+	for _, c in frame:GetChildren() do
+		if c:IsA("GuiObject") then
+			c:Destroy()
+		end
+	end
+end
+
+local function closeButton(parent: Frame, onClose: () -> ())
+	local close = UI.button({
+		Text = "✕",
+		TextSize = 18,
+		BackgroundColor3 = colors.panelLight,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 0),
+		Size = UDim2.fromOffset(34, 34),
+		Parent = parent,
+	})
+	close.Activated:Connect(onClose)
+end
+
+---------------------------------------------------------------------------
+-- Race HUD
+---------------------------------------------------------------------------
+local hud: Frame
+local hudTitle: TextLabel
+local posLabel: TextLabel
+local lapLabel: TextLabel
+local timeLabel: TextLabel
+local bestLabel: TextLabel
+local wetLabel: TextLabel
+local board: Frame
+local quitButton: TextButton
+local lobbyChip: TextLabel
+local countdownLabel: TextLabel
+local banner: TextLabel
+local arrowFrame: Frame
+local arrow: TextLabel
+local arrowText: TextLabel
+local bannerToken = 0
+local quitArmed = 0
+local lobbyState: { [string]: any }? = nil
+
+local function showBanner(text: string, color: Color3, seconds: number)
+	bannerToken += 1
+	local token = bannerToken
+	banner.Text = text
+	banner.TextColor3 = color
+	banner.Visible = true
+	task.delay(seconds, function()
+		if bannerToken == token then
+			banner.Visible = false
+		end
+	end)
+end
+
+local function clearHighlight()
+	if highlight then
+		highlight:Destroy()
+		highlight = nil
+	end
+	highlightKey = ""
+end
+
+local function updateHighlight()
+	local setup = current
+	local s = state
+	if not setup or outOfRace or finishedTime or not s then
+		clearHighlight()
+		return
+	end
+	local index = s.next
+	local key = setup.id .. ":" .. tostring(index) .. ":" .. tostring(s.lap)
+	if key == highlightKey then
+		return
+	end
+	clearHighlight()
+	local cp = setup.cps[index]
+	if not cp then
+		return
+	end
+	highlightKey = key
+	local last = index == #setup.cps
+	local finalLap = last and (s.lap or 1) >= (setup.laps or 1)
+	local color = if finalLap then Color3.fromRGB(255, 255, 255) elseif last then Color3.fromRGB(255, 220, 60) else Color3.fromRGB(60, 230, 255)
+	highlight = RC.buildArch(cp.g, cp.f, math.min(cp.w, 18) + 1.5, color, 0.15, workspace)
+end
+
+local function renderBoard()
+	clearChildren(board)
+	local s = state
+	if not s or type(s.board) ~= "table" then
+		return
+	end
+	for i, row in s.board do
+		if i > RC.MAX_RACERS then
+			break
+		end
+		local me = row.u == player.UserId
+		local text = string.format("%d. %s", i, tostring(row.n))
+		if row.s == "fin" then
+			text ..= "  " .. RC.formatTime(row.t)
+		elseif row.s == "dnf" then
+			text ..= "  DNF"
+		end
+		UI.label({
+			Text = text,
+			Font = if me then UI.FONT_BLACK else UI.FONT,
+			TextSize = 12,
+			TextColor3 = if me then colors.stamina elseif row.s == "dnf" then colors.subtext else colors.text,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Size = UDim2.new(1, 0, 0, 15),
+			LayoutOrder = i,
+			Parent = board,
+		})
+	end
+end
+
+local function refreshHud()
+	local setup = current
+	local s = state
+	if not setup or outOfRace then
+		hud.Visible = false
+		return
+	end
+	hud.Visible = true
+	hudTitle.Text = setup.name:upper()
+	if s then
+		posLabel.Text = if setup.kind == "trial" then "SOLO" else string.format("P%d/%d", s.pos or 1, s.total or setup.total)
+		lapLabel.Text = if (setup.laps or 1) > 1 then string.format("LAP %d/%d", s.lap or 1, setup.laps) else string.format("CP %d/%d", math.min(s.next or 1, #setup.cps), #setup.cps)
+		bestLabel.Text = if (s.bestLap or 0) > 0 then "BEST LAP " .. RC.formatTime(s.bestLap) else ""
+	end
+	renderBoard()
+end
+
+local function onRace(setup: any)
+	if type(setup) ~= "table" or type(setup.cps) ~= "table" then
+		return
+	end
+	current = setup :: Setup
+	state = nil
+	outOfRace = false
+	finishedTime = nil
+	quitArmed = 0
+	quitButton.Text = if setup.kind == "trial" then "ABANDON" else "QUIT"
+	clearHighlight()
+	refreshHud()
+	if setup.kind == "street" then
+		HUD.push("STREET RACE", setup.name .. " — follow the arches. Go on green!")
+	end
+end
+
+local function onState(s: any)
+	if type(s) ~= "table" or not current or s.id ~= (current :: Setup).id then
+		return
+	end
+	state = s
+	if s.finished and not finishedTime then
+		finishedTime = s.time
+	end
+	refreshHud()
+	updateHighlight()
+end
+
+local function buildHud()
+	hud = UI.new("Frame", {
+		Name = "RaceHud",
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.12,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 14, 0.46, 0),
+		Size = UDim2.fromOffset(200, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Visible = false,
+		Parent = gui,
+	}, {
+		UI.corner(14),
+		UI.padding(10),
+		UI.stroke(Color3.fromRGB(220, 50, 60), 1.5, 0.3),
+		UI.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }),
+	})
+	hudTitle = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.subtext, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 0, 13), LayoutOrder = 1, Parent = hud })
+	local top = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), LayoutOrder = 2, Parent = hud })
+	posLabel = UI.label({ Text = "P1/1", Font = UI.FONT_BLACK, TextSize = 30, Size = UDim2.new(0.55, 0, 1, 0), Parent = top })
+	lapLabel = UI.label({ Text = "LAP 1/3", Font = UI.FONT_BLACK, TextSize = 15, TextColor3 = colors.stamina, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.45, 0, 1, 0), Parent = top })
+	timeLabel = UI.label({ Text = "0:00.00", Font = UI.FONT_BLACK, TextSize = 22, Size = UDim2.new(1, 0, 0, 24), LayoutOrder = 3, Parent = hud })
+	bestLabel = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.cash, Size = UDim2.new(1, 0, 0, 13), LayoutOrder = 4, Parent = hud })
+	wetLabel = UI.label({ Text = "🌧 WET TRACK · less grip", Font = UI.FONT_BOLD, TextSize = 11, TextColor3 = colors.xp, Size = UDim2.new(1, 0, 0, 13), Visible = false, LayoutOrder = 5, Parent = hud })
+	board = UI.new("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		LayoutOrder = 6,
+		Parent = hud,
+	}, { UI.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }) })
+	quitButton = UI.button({ Text = "QUIT", TextSize = 12, BackgroundColor3 = Color3.fromRGB(150, 60, 60), Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 7, Parent = hud })
+	quitButton.Activated:Connect(function()
+		if os.clock() > quitArmed then
+			quitArmed = os.clock() + 3
+			quitButton.Text = "TAP AGAIN TO QUIT"
+			task.delay(3, function()
+				if os.clock() >= quitArmed and quitButton.Parent then
+					quitButton.Text = if current and (current :: Setup).kind == "trial" then "ABANDON" else "QUIT"
+				end
+			end)
+			return
+		end
+		quitArmed = 0
+		local _, message = invoke("quit")
+		if message ~= "" then
+			HUD.push("RACE", message)
+		end
+	end)
+
+	lobbyChip = UI.label({
+		Text = "",
+		Font = UI.FONT_BOLD,
+		TextSize = 13,
+		TextWrapped = true,
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.12,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 14, 0.46, 0),
+		Size = UDim2.fromOffset(200, 54),
+		Visible = false,
+		Parent = gui,
+	}, { UI.corner(12), UI.padding(8), UI.stroke(colors.stamina, 1.5, 0.4) })
+
+	countdownLabel = UI.label({
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 110,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextStrokeTransparency = 0.3,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.38),
+		Size = UDim2.fromOffset(400, 130),
+		Visible = false,
+		Parent = gui,
+	})
+	banner = UI.label({
+		Text = "",
+		Font = UI.FONT_BLACK,
+		TextSize = 26,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextStrokeTransparency = 0.35,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.26),
+		Size = UDim2.new(0.8, 0, 0, 64),
+		Visible = false,
+		Parent = gui,
+	})
+	arrowFrame = UI.new("Frame", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 128),
+		Size = UDim2.fromOffset(140, 70),
+		Visible = false,
+		Parent = gui,
+	})
+	arrow = UI.label({
+		Text = "▲",
+		Font = UI.FONT_BLACK,
+		TextSize = 40,
+		TextColor3 = Color3.fromRGB(60, 230, 255),
+		TextStrokeTransparency = 0.3,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromOffset(46, 46),
+		Parent = arrowFrame,
+	})
+	arrowText = UI.label({
+		Text = "",
+		Font = UI.FONT_BOLD,
+		TextSize = 13,
+		TextStrokeTransparency = 0.4,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromOffset(0, 48),
+		Size = UDim2.new(1, 0, 0, 16),
+		Parent = arrowFrame,
+	})
+end
+
+local function updateFrame()
+	local setup = current
+	local t = now()
+	-- countdown / GO
+	if setup and not outOfRace and t < setup.goT then
+		countdownLabel.Visible = true
+		countdownLabel.Text = tostring(math.ceil(setup.goT - t))
+		countdownLabel.TextColor3 = colors.stamina
+		goShownUntil = setup.goT + 1
+	elseif setup and t < goShownUntil then
+		countdownLabel.Visible = true
+		countdownLabel.Text = "GO!"
+		countdownLabel.TextColor3 = colors.cash
+	else
+		countdownLabel.Visible = false
+	end
+	-- lobby chip (only while queued, not racing)
+	local lobbyInfo = lobbyState
+	if not setup and lobbyInfo and lobbyInfo.inLobby then
+		lobbyChip.Visible = true
+		local status
+		if lobbyInfo.raceLive then
+			status = "Race on track, you're next"
+		elseif lobbyInfo.startAt then
+			status = string.format("Grid in %ds", math.max(0, math.ceil(lobbyInfo.startAt - t)))
+		else
+			status = "Waiting for racers"
+		end
+		lobbyChip.Text = string.format("🏁 RACE LOBBY %d/%d\n%s", lobbyInfo.count or 0, lobbyInfo.max or RC.MAX_RACERS, status)
+	else
+		lobbyChip.Visible = false
+	end
+	if not setup or outOfRace then
+		arrowFrame.Visible = false
+		return
+	end
+	wetLabel.Visible = isWet()
+	-- timer
+	local elapsed = if finishedTime then finishedTime else math.max(0, t - setup.goT)
+	timeLabel.Text = RC.formatTime(math.max(elapsed, 0.001))
+	if finishedTime then
+		timeLabel.TextColor3 = colors.cash
+	else
+		timeLabel.TextColor3 = colors.text
+	end
+	-- arrow to the next checkpoint
+	local s = state
+	local cp = s and setup.cps[s.next or 1]
+	local camera = workspace.CurrentCamera
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if cp and camera and rootPart and not finishedTime then
+		arrowFrame.Visible = true
+		local to = cp.p - camera.CFrame.Position
+		local look = camera.CFrame.LookVector
+		local right = camera.CFrame.RightVector
+		local angle = math.atan2(to.X * right.X + to.Z * right.Z, to.X * look.X + to.Z * look.Z)
+		arrow.Rotation = math.deg(angle)
+		local d = Vector3.new(cp.p.X - rootPart.Position.X, 0, cp.p.Z - rootPart.Position.Z).Magnitude
+		local last = (s :: any).next == #setup.cps
+		arrowText.Text = (if last and ((s :: any).lap or 1) >= setup.laps then "FINISH" elseif last then "LINE" else "CP " .. tostring((s :: any).next)) .. " · " .. distanceText(d)
+	else
+		arrowFrame.Visible = false
+	end
+end
+
+---------------------------------------------------------------------------
+-- RACE HQ panel
+---------------------------------------------------------------------------
+local panel: Frame
+local panelInfo: { [string]: any }? = nil
+local panelStatus: TextLabel? = nil
+local panelLobbyText: TextLabel? = nil
+local panelNames: TextLabel? = nil
+local panelJoin: TextButton? = nil
+
+local function setPanelStatus(text: string, good: boolean)
+	if panelStatus then
+		panelStatus.Text = text
+		panelStatus.TextColor3 = if good then colors.cash else colors.danger
+	end
+end
+
+local function refreshPanelLobby()
+	local info = panelInfo
+	local l = lobbyState or (info and info.lobby)
+	if not l or not panelLobbyText or not panelNames or not panelJoin then
+		return
+	end
+	local status
+	if l.raceLive then
+		status = string.format("Race in progress (%d racers). The lobby fills the next grid.", l.raceCount or 0)
+	elseif l.startAt then
+		status = string.format("Grid forms in %ds", math.max(0, math.ceil(l.startAt - now())))
+	elseif (l.count or 0) < (l.min or 2) then
+		status = string.format("Waiting for racers: %d/%d (need %d)", l.count or 0, l.max or 8, l.min or 2)
+	else
+		status = "Starting soon"
+	end
+	panelLobbyText.Text = status
+	panelNames.Text = if #(l.names or {}) > 0 then table.concat(l.names, ", ") else "Nobody yet. Be the first!"
+	local joined = l.inLobby == true
+	panelJoin.Text = if joined then "LEAVE LOBBY" else "JOIN RACE"
+	panelJoin.BackgroundColor3 = if joined then Color3.fromRGB(150, 60, 60) else colors.accent
+end
+
+local function closePanel()
+	panel.Visible = false
+	panelInfo = nil
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(panel) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function openPanel(info: any)
+	if type(info) ~= "table" then
+		return
+	end
+	panelInfo = info
+	lobbyState = info.lobby or lobbyState
+	clearChildren(panel)
+	UI.label({ Text = "RACE HQ", Font = UI.FONT_BLACK, TextSize = 22, Size = UDim2.new(1, -44, 0, 26), Parent = panel })
+	UI.label({ Text = string.format("%s · %d LAPS", RC.TRACK_NAME:upper(), RC.LAPS), Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = APP_COLOR, Position = UDim2.fromOffset(0, 27), Size = UDim2.new(1, -44, 0, 16), Parent = panel })
+	closeButton(panel, closePanel)
+
+	-- circuit race lobby
+	local lobbyCard = UI.new("Frame", { BackgroundColor3 = colors.panelLight, Position = UDim2.fromOffset(0, 52), Size = UDim2.new(1, 0, 0, 150), Parent = panel }, { UI.corner(12), UI.padding(10) })
+	UI.label({ Text = "CIRCUIT RACE · 2-8 DRIVERS", Font = UI.FONT_BLACK, TextSize = 13, Size = UDim2.new(1, 0, 0, 16), Parent = lobbyCard })
+	panelLobbyText = UI.label({ Text = "", TextSize = 13, TextColor3 = colors.stamina, TextWrapped = true, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 32), Parent = lobbyCard })
+	panelNames = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 50), Size = UDim2.new(1, 0, 0, 36), Parent = lobbyCard })
+	panelJoin = UI.button({ Text = "JOIN RACE", TextSize = 15, Font = UI.FONT_BLACK, BackgroundColor3 = colors.accent, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 38), Parent = lobbyCard })
+	local busy = false
+	;(panelJoin :: TextButton).Activated:Connect(function()
+		if busy then
+			return
+		end
+		busy = true
+		local l = lobbyState
+		local leaving = l ~= nil and l.inLobby == true
+		local ok, message = invoke(if leaving then "leave" else "join")
+		setPanelStatus(message, ok)
+		busy = false
+	end)
+
+	-- time trial
+	local stats = info.stats or {}
+	local trialCard = UI.new("Frame", { BackgroundColor3 = colors.panelLight, Position = UDim2.fromOffset(0, 212), Size = UDim2.new(1, 0, 0, 128), Parent = panel }, { UI.corner(12), UI.padding(10) })
+	UI.label({ Text = "TIME TRIAL · SOLO", Font = UI.FONT_BLACK, TextSize = 13, Size = UDim2.new(1, 0, 0, 16), Parent = trialCard })
+	local medal = RC.medalInfo(stats.medal or 0)
+	UI.label({
+		Text = string.format("Your best: %s%s", RC.formatTime(stats.bestRace), if medal then "   " .. medal.icon .. " " .. medal.name else ""),
+		TextSize = 13,
+		Position = UDim2.fromOffset(0, 18),
+		Size = UDim2.new(1, 0, 0, 16),
+		Parent = trialCard,
+	})
+	local medalLine = {}
+	for _, m in RC.MEDALS do
+		table.insert(medalLine, m.icon .. " " .. RC.formatTime(m.time))
+	end
+	UI.label({ Text = table.concat(medalLine, "   "), TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 36), Size = UDim2.new(1, 0, 0, 16), Parent = trialCard })
+	local trialButton = UI.button({ Text = "START TIME TRIAL", TextSize = 15, Font = UI.FONT_BLACK, BackgroundColor3 = colors.xp, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 38), Parent = trialCard })
+	trialButton.Activated:Connect(function()
+		if busy then
+			return
+		end
+		busy = true
+		local ok, message = invoke("trial")
+		setPanelStatus(message, ok)
+		busy = false
+		if ok then
+			closePanel()
+		end
+	end)
+
+	panelStatus = UI.label({ Text = if isDriving(player) then "" else "Get in your car to race.", TextSize = 13, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = colors.stamina, Position = UDim2.fromOffset(0, 342), Size = UDim2.new(1, 0, 0, 30), Parent = panel })
+	panel.Visible = true
+	refreshPanelLobby()
+	selectForGamepad(panelJoin)
+end
+
+---------------------------------------------------------------------------
+-- Results screen
+---------------------------------------------------------------------------
+local results: Frame
+
+local function closeResults()
+	results.Visible = false
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(results) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function showResults(data: any)
+	if type(data) ~= "table" or type(data.rows) ~= "table" then
+		return
+	end
+	if current and (current :: Setup).id == data.id then
+		current = nil
+		state = nil
+		outOfRace = false
+		finishedTime = nil
+		clearHighlight()
+		refreshHud()
+	end
+	clearChildren(results)
+	local you = data.you or {}
+	local title = if data.kind == "trial" then "TIME TRIAL" elseif data.kind == "street" then "STREET RACE" else "RACE RESULTS"
+	UI.label({ Text = title, Font = UI.FONT_BLACK, TextSize = 22, Size = UDim2.new(1, -44, 0, 26), Parent = results })
+	UI.label({ Text = tostring(data.name or ""):upper() .. (if (data.laps or 1) > 1 then " · " .. data.laps .. " LAPS" else ""), Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = APP_COLOR, Position = UDim2.fromOffset(0, 27), Size = UDim2.new(1, -44, 0, 16), Parent = results })
+	closeButton(results, closeResults)
+
+	local headline, color
+	if you.finished then
+		headline = (if data.kind == "trial" then "" else RC.ordinal(you.place or 0) .. "  ·  ") .. RC.formatTime(you.time)
+		color = if (you.place or 0) == 1 and data.kind ~= "trial" then Color3.fromRGB(255, 215, 60) else colors.text
+	else
+		headline = "DNF"
+		color = colors.danger
+	end
+	UI.label({ Text = headline, Font = UI.FONT_BLACK, TextSize = 30, TextColor3 = color, Position = UDim2.fromOffset(0, 50), Size = UDim2.new(1, 0, 0, 34), Parent = results })
+	local lines = {}
+	if not you.finished and you.reason then
+		table.insert(lines, tostring(you.reason))
+	end
+	local reward = you.reward
+	if type(reward) == "table" then
+		local m = RC.medalInfo(reward.medal or 0)
+		if m then
+			table.insert(lines, m.icon .. " " .. m.name:upper() .. " MEDAL" .. (if reward.newMedal then "  (NEW!)" else ""))
+		elseif data.kind == "trial" and you.finished then
+			local bronze = RC.medalInfo(1)
+			if bronze then
+				table.insert(lines, "No medal. Bronze is under " .. RC.formatTime(bronze.time) .. ".")
+			end
+		end
+		if reward.newBest then
+			table.insert(lines, "🔥 NEW PERSONAL BEST")
+		end
+		local rt = rewardText(reward)
+		if rt ~= "" then
+			table.insert(lines, rt)
+		end
+		if reward.capped then
+			table.insert(lines, "Reward limit reached for this hour: XP only.")
+		end
+	end
+	if (you.bestLap or 0) > 0 then
+		table.insert(lines, "Best lap " .. RC.formatTime(you.bestLap))
+	end
+	if data.note and data.note ~= "" and you.finished then
+		table.insert(lines, tostring(data.note))
+	end
+	UI.label({ Text = table.concat(lines, "\n"), TextSize = 13, TextColor3 = colors.cash, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 86), Size = UDim2.new(1, 0, 0, 84), Parent = results })
+
+	if data.kind ~= "trial" then
+		local list = UI.new("Frame", { BackgroundColor3 = colors.panelLight, Position = UDim2.fromOffset(0, 176), Size = UDim2.new(1, 0, 0, 170), Parent = results }, {
+			UI.corner(12),
+			UI.padding(8),
+			UI.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }),
+		})
+		for i, row in data.rows do
+			if i > RC.MAX_RACERS then
+				break
+			end
+			local me = row.userId == player.UserId
+			local right = if row.status == "fin" then RC.formatTime(row.time) else "DNF"
+			UI.label({
+				Text = string.format("%s  %s  ·  %s  (%s)", if row.status == "fin" then RC.ordinal(row.place) else "—", tostring(row.name), right, tostring(row.vehicle or "")),
+				Font = if me then UI.FONT_BLACK else UI.FONT,
+				TextSize = 13,
+				TextColor3 = if me then colors.stamina else colors.text,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Size = UDim2.new(1, 0, 0, 18),
+				LayoutOrder = i,
+				Parent = list,
+			})
+		end
+	else
+		local medalLine = {}
+		for _, m in RC.MEDALS do
+			table.insert(medalLine, m.icon .. " " .. m.name .. " " .. RC.formatTime(m.time))
+		end
+		UI.label({ Text = table.concat(medalLine, "\n"), TextSize = 13, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 176), Size = UDim2.new(1, 0, 0, 60), Parent = results })
+		UI.label({ Text = "Personal best: " .. RC.formatTime(data.best), Font = UI.FONT_BOLD, TextSize = 14, Position = UDim2.fromOffset(0, 244), Size = UDim2.new(1, 0, 0, 18), Parent = results })
+	end
+	local ok = UI.button({ Text = "OK", TextSize = 16, Font = UI.FONT_BLACK, BackgroundColor3 = colors.accent, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 40), Parent = results })
+	ok.Activated:Connect(closeResults)
+	results.Visible = true
+	selectForGamepad(ok)
+	Phone.refresh(APP_ID)
+end
+
+---------------------------------------------------------------------------
+-- Street race challenges
+---------------------------------------------------------------------------
+local picker: Frame
+local incoming: Frame
+local incomingId: string? = nil
+
+local function closePicker()
+	picker.Visible = false
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(picker) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function openPicker(target: Player)
+	clearChildren(picker)
+	UI.label({ Text = "STREET RACE", Font = UI.FONT_BLACK, TextSize = 22, Size = UDim2.new(1, -44, 0, 26), Parent = picker })
+	UI.label({ Text = "CHALLENGE " .. target.DisplayName:upper(), Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = APP_COLOR, Position = UDim2.fromOffset(0, 27), Size = UDim2.new(1, -44, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = picker })
+	closeButton(picker, closePicker)
+	local status = UI.label({ Text = "Pick a route. You'll both be taken to the start.", TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 30), Parent = picker })
+	local list = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 50), Size = UDim2.new(1, 0, 1, -84), Parent = picker }, {
+		UI.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6) }),
+	})
+	local busy = false
+	local first: TextButton? = nil
+	for i, route in RC.ROUTES do
+		local b = UI.button({ Text = "", BackgroundColor3 = colors.panelLight, Size = UDim2.new(1, 0, 0, 56), LayoutOrder = i, Parent = list }, { UI.padding(8) })
+		first = first or b
+		UI.label({ Text = route.name, Font = UI.FONT_BLACK, TextSize = 14, Size = UDim2.new(1, -70, 0, 18), Parent = b })
+		UI.label({ Text = distanceText(route.length), Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = colors.stamina, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(70, 18), Parent = b })
+		UI.label({ Text = route.blurb, TextSize = 11, TextColor3 = colors.subtext, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, 22), Parent = b })
+		b.Activated:Connect(function()
+			if busy then
+				return
+			end
+			busy = true
+			status.Text = "Sending..."
+			status.TextColor3 = colors.text
+			local ok, message = invoke("challenge", target.UserId, route.id)
+			busy = false
+			if ok then
+				closePicker()
+				HUD.push("STREET RACE", message .. " They have " .. RC.CHALLENGE_SECONDS .. "s to accept.")
+			else
+				status.Text = message
+				status.TextColor3 = colors.danger
+			end
+		end)
+	end
+	picker.Visible = true
+	selectForGamepad(first)
+end
+
+local function closeIncoming()
+	incoming.Visible = false
+	incomingId = nil
+	if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(incoming) then
+		GuiService.SelectedObject = nil
+	end
+end
+
+local function showChallenge(data: any)
+	if type(data) ~= "table" or type(data.id) ~= "string" then
+		return
+	end
+	clearChildren(incoming)
+	incomingId = data.id
+	local id = data.id
+	UI.label({ Text = "🏁 STREET RACE CHALLENGE", Font = UI.FONT_BLACK, TextSize = 18, Size = UDim2.new(1, 0, 0, 24), Parent = incoming })
+	UI.label({
+		Text = string.format("%s wants to race you on %s (%s). You'll both be taken to the start line.", tostring(data.from), tostring(data.route), distanceText(tonumber(data.length) or 0)),
+		TextSize = 13,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Position = UDim2.fromOffset(0, 28),
+		Size = UDim2.new(1, 0, 0, 52),
+		Parent = incoming,
+	})
+	local _, setFill = UI.bar({ Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 6), Parent = incoming }, colors.stamina)
+	local status = UI.label({ Text = "", TextSize = 12, TextColor3 = colors.danger, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 94), Size = UDim2.new(1, 0, 0, 16), Parent = incoming })
+	local accept = UI.button({ Text = "ACCEPT", TextSize = 15, Font = UI.FONT_BLACK, BackgroundColor3 = colors.cash, TextColor3 = Color3.fromRGB(20, 30, 20), AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(0.5, -4, 0, 40), Parent = incoming })
+	local decline = UI.button({ Text = "DECLINE", TextSize = 15, Font = UI.FONT_BLACK, BackgroundColor3 = Color3.fromRGB(150, 60, 60), AnchorPoint = Vector2.new(1, 1), Position = UDim2.fromScale(1, 1), Size = UDim2.new(0.5, -4, 0, 40), Parent = incoming })
+	local busy = false
+	local function answer(yes: boolean)
+		if busy or incomingId ~= id then
+			return
+		end
+		busy = true
+		local ok, message = invoke("respond", id, yes)
+		busy = false
+		if ok or not yes then
+			closeIncoming()
+			if message ~= "" and yes then
+				HUD.push("STREET RACE", message)
+			end
+		else
+			status.Text = message
+		end
+	end
+	accept.Activated:Connect(function()
+		answer(true)
+	end)
+	decline.Activated:Connect(function()
+		answer(false)
+	end)
+	incoming.Visible = true
+	selectForGamepad(accept)
+	local expires = tonumber(data.expires) or (now() + RC.CHALLENGE_SECONDS)
+	task.spawn(function()
+		while incomingId == id and incoming.Visible do
+			local left = expires - now()
+			setFill(left / RC.CHALLENGE_SECONDS)
+			if left <= 0 then
+				closeIncoming()
+				break
+			end
+			task.wait(0.1)
+		end
+	end)
+end
+
+local function addMenuAction()
+	local module = script.Parent:FindFirstChild("Social")
+	if not module then
+		return
+	end
+	local ok, Social = pcall(require, module)
+	if not ok or type(Social) ~= "table" or type(Social.addMenuAction) ~= "function" then
+		return
+	end
+	Social.addMenuAction({
+		id = "race",
+		label = "CHALLENGE TO RACE",
+		order = 40,
+		visible = function(target: Player)
+			return isDriving(player) and isDriving(target) and (player:GetAttribute("Race") or "") == ""
+		end,
+		run = function(target: Player)
+			openPicker(target)
+		end,
+	})
+end
+
+---------------------------------------------------------------------------
+-- Phone app
+---------------------------------------------------------------------------
+local function buildApp(content: ScrollingFrame)
+	local token = 0
+	local function line(parent: Instance, text: string, y: number, props: { [string]: any }?): TextLabel
+		local p: { [string]: any } = { Text = text, TextSize = 13, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 16), Parent = parent }
+		if props then
+			for k, v in props do
+				p[k] = v
+			end
+		end
+		return UI.label(p)
+	end
+
+	local function draw(info: any, myToken: number)
+		if myToken ~= token then
+			return
+		end
+		Phone.clear(content)
+		if type(info) ~= "table" then
+			local c = Phone.card(content, 60, 1)
+			line(c, "Couldn't reach Race Control. Try again in a moment.", 0, { TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 1, 0) })
+			return
+		end
+		local stats = info.stats or {}
+		local order = 0
+		local function nextOrder(): number
+			order += 1
+			return order
+		end
+		if isWet() then
+			UI.label({ Text = "🌧 Wet roads right now: less grip in every corner.", TextSize = 12, TextColor3 = colors.xp, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, -20, 0, 18), LayoutOrder = nextOrder(), Parent = content })
+		end
+
+		-- speedway
+		local speedway = Phone.card(content, 196, nextOrder())
+		line(speedway, RC.TRACK_NAME:upper(), 0, { Font = UI.FONT_BLACK, TextSize = 16, Size = UDim2.new(1, 0, 0, 20) })
+		local medal = RC.medalInfo(stats.medal or 0)
+		line(speedway, string.format("Best %d-lap time: %s%s", RC.LAPS, RC.formatTime(stats.bestRace), if medal then "  " .. medal.icon else ""), 24, { Font = UI.FONT_BOLD })
+		line(speedway, "Best lap: " .. RC.formatTime(stats.bestLap), 42, { TextColor3 = colors.subtext })
+		local status = line(speedway, "", 60, { TextSize = 12, TextColor3 = colors.stamina, Size = UDim2.new(1, 0, 0, 30) })
+		local trialButton = UI.button({ Text = "🏁 START TIME TRIAL", TextSize = 13, BackgroundColor3 = APP_COLOR, Position = UDim2.fromOffset(0, 94), Size = UDim2.new(1, 0, 0, 34), Parent = speedway })
+		local gps = UI.button({ Text = "📍 GPS TO SPEEDWAY", TextSize = 13, BackgroundColor3 = colors.xp, Position = UDim2.fromOffset(0, 134), Size = UDim2.new(1, 0, 0, 34), Parent = speedway })
+		local busy = false
+		trialButton.Activated:Connect(function()
+			if busy then
+				return
+			end
+			busy = true
+			local ok, message = invoke("trial")
+			busy = false
+			status.Text = message
+			status.TextColor3 = if ok then colors.cash else colors.stamina
+			if ok then
+				Phone.setOpen(false)
+			end
+		end)
+		gps.Activated:Connect(function()
+			local t = info.track
+			if type(t) == "table" and typeof(t.pos) == "Vector3" then
+				Phone.setGPS(RC.TRACK_NAME, t.pos)
+				status.Text = "GPS set. Drive up to RACE HQ by the start line."
+				status.TextColor3 = colors.cash
+			else
+				status.Text = "The speedway is closed right now."
+			end
+		end)
+
+		-- medals
+		local medals = Phone.card(content, 100, nextOrder())
+		line(medals, "TIME TRIAL MEDALS (" .. RC.LAPS .. " LAPS)", 0, { Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext })
+		for i, m in RC.MEDALS do
+			local have = (stats.medal or 0) >= m.id
+			line(medals, string.format("%s %s under %s  ·  %s%s", m.icon, m.name, RC.formatTime(m.time), UI.formatCash(m.cash), if have then "  ✓" else ""), 4 + i * 18, { TextColor3 = if have then m.color else colors.text })
+		end
+
+		-- stats
+		local statsCard = Phone.card(content, 76, nextOrder())
+		line(statsCard, "YOUR RACING", 0, { Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext })
+		line(statsCard, string.format("Races %d · Wins %d · Podiums %d · Trials %d\nStreet races %d · Street wins %d", stats.races or 0, stats.wins or 0, stats.podiums or 0, stats.trials or 0, stats.streetRaces or 0, stats.streetWins or 0), 18, { Size = UDim2.new(1, 0, 0, 34) })
+
+		-- street routes
+		UI.label({ Text = "STREET ROUTES", Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, -20, 0, 16), LayoutOrder = nextOrder(), Parent = content })
+		local note = Phone.card(content, 58, nextOrder())
+		line(note, "Pull up next to another driver, open the player menu on them and pick CHALLENGE TO RACE.", 0, { TextSize = 12, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 1, 0) })
+		local routeInfo: { [string]: any } = {}
+		local routeList = if type(info.routes) == "table" then info.routes else {}
+		for _, r in routeList do
+			if type(r) == "table" and type(r.id) == "string" then
+				routeInfo[r.id] = r
+			end
+		end
+		for _, route in RC.ROUTES do
+			local ri = routeInfo[route.id] or {}
+			local c = Phone.card(content, 116, nextOrder())
+			line(c, route.name, 0, { Font = UI.FONT_BOLD, TextSize = 14 })
+			line(c, distanceText(route.length) .. "  ·  PB " .. RC.formatTime(ri.best) .. (if ri.ok == false then "  ·  CLOSED" else ""), 18, { TextSize = 12, TextColor3 = if ri.ok == false then colors.danger else colors.stamina })
+			line(c, route.blurb, 34, { TextSize = 11, TextColor3 = colors.subtext, Size = UDim2.new(1, 0, 0, 28) })
+			local routeGps = UI.button({ Text = "📍 GPS TO START", TextSize = 12, BackgroundColor3 = colors.panel, Position = UDim2.fromOffset(0, 64), Size = UDim2.new(1, 0, 0, 28), Parent = c })
+			routeGps.Activated:Connect(function()
+				local start = if typeof(ri.start) == "Vector3" then ri.start else route.points[1]
+				Phone.setGPS(route.name, start)
+			end)
+		end
+
+		-- recent results
+		local recent = if type(info.recent) == "table" then info.recent else {}
+		local rc = Phone.card(content, 42 + math.max(1, #recent) * 18, nextOrder())
+		line(rc, "RECENT RESULTS", 0, { Font = UI.FONT_BLACK, TextSize = 12, TextColor3 = colors.subtext })
+		if #recent == 0 then
+			line(rc, "No races yet.", 20, { TextColor3 = colors.subtext })
+		end
+		for i, e in recent do
+			if type(e) ~= "table" then
+				continue
+			end
+			local kind = if e.k == "trial" then "Trial" elseif e.k == "street" then "Street" else "Race"
+			local result = if (e.p or 0) == 0 then "DNF" elseif e.k == "trial" then RC.formatTime(e.t) else string.format("%s of %d · %s", RC.ordinal(e.p), e.of or 1, RC.formatTime(e.t))
+			line(rc, string.format("%s · %s · %s", kind, tostring(e.n or ""), result), 2 + i * 18, { TextSize = 12, TextTruncate = Enum.TextTruncate.AtEnd, TextWrapped = false })
+		end
+	end
+
+	local function render()
+		token += 1
+		local myToken = token
+		Phone.clear(content)
+		UI.label({ Text = "Loading...", TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 30), Parent = content })
+		task.spawn(function()
+			local ok, _, info = invoke("info")
+			draw(if ok then info else nil, myToken)
+		end)
+	end
+	return render
+end
+
+---------------------------------------------------------------------------
+-- Events from the server
+---------------------------------------------------------------------------
+local function onEvent(kind: any, data: any)
+	if kind == "Race" then
+		onRace(data)
+	elseif kind == "State" then
+		onState(data)
+	elseif kind == "Lap" and type(data) == "table" and current and data.id == (current :: Setup).id then
+		local lastLap = data.lap == data.laps
+		showBanner(string.format("%s  ·  %s", if lastLap then "FINAL LAP" else string.format("LAP %d/%d", data.lap, data.laps), RC.formatTime(data.lapTime)), if lastLap then Color3.fromRGB(255, 220, 60) else colors.text, 2.5)
+	elseif kind == "Missed" and type(data) == "table" and current and data.id == (current :: Setup).id then
+		showBanner("MISSED CHECKPOINT " .. tostring(data.next) .. "!\nTurn back and drive through it.", colors.danger, 2.5)
+	elseif kind == "Finished" and type(data) == "table" and current and data.id == (current :: Setup).id then
+		finishedTime = data.time
+		local setup = current :: Setup
+		local text = if setup.kind == "trial" then "FINISHED  ·  " .. RC.formatTime(data.time) else string.format("FINISHED %s  ·  %s", RC.ordinal(data.place), RC.formatTime(data.time))
+		showBanner(text, Color3.fromRGB(255, 215, 60), 4)
+		clearHighlight()
+	elseif kind == "Out" and type(data) == "table" and current and data.id == (current :: Setup).id then
+		outOfRace = true
+		clearHighlight()
+		refreshHud()
+		showBanner("OUT OF THE RACE\n" .. tostring(data.reason or ""), colors.danger, 4)
+	elseif kind == "Results" then
+		showResults(data)
+	elseif kind == "Lobby" and type(data) == "table" then
+		lobbyState = data
+		if panel.Visible then
+			refreshPanelLobby()
+		end
+	elseif kind == "Panel" then
+		openPanel(data)
+	elseif kind == "Challenge" then
+		showChallenge(data)
+	elseif kind == "ChallengeClosed" and type(data) == "table" and data.id == incomingId then
+		closeIncoming()
+	end
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Racing.start()
+	Phone.addApp({ id = APP_ID, label = "Racing", icon = "🏁", color = APP_COLOR }, buildApp)
+
+	gui = UI.new("ScreenGui", {
+		Name = "CityGrindRacing",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 7,
+		Parent = player:WaitForChild("PlayerGui"),
+	})
+	buildHud()
+	panel = modal("RaceHQ", 360, 400, APP_COLOR)
+	results = modal("RaceResults", 380, 420, Color3.fromRGB(255, 215, 60))
+	picker = modal("RaceRoutes", 360, 380, APP_COLOR)
+	incoming = modal("RaceChallenge", 340, 200, colors.stamina)
+
+	task.spawn(addMenuAction)
+	task.spawn(function()
+		local folder = shared:WaitForChild("Remotes")
+		local event = folder:WaitForChild("RacingEvent")
+		remotes = folder
+		event.OnClientEvent:Connect(onEvent)
+	end)
+
+	RunService.RenderStepped:Connect(updateFrame)
+
+	-- close the HQ panel when you leave the start area; keep its countdown fresh
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			if panel.Visible then
+				local info = panelInfo
+				local t = info and info.track
+				local character = player.Character
+				local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				if t and typeof(t.pos) == "Vector3" and rootPart and (rootPart.Position - t.pos).Magnitude > RC.TRACK_RANGE then
+					closePanel()
+				else
+					refreshPanelLobby()
+				end
+			end
+		end
+	end)
+
+	-- a respawn ends any race HUD that is still around
+	player.CharacterAdded:Connect(function()
+		clearHighlight()
+	end)
+end
+
+return Racing
+]=====])
+put(client, 'ModuleScript', 'Ranked', [=====[
+-- CITY GRIND: ranked basketball client (spec 54, 55).
+-- The phone's Ranked app (queue buttons, tier + progress, placements, season
+-- countdown, last 10 matches, season rewards, season badges), the on-screen
+-- queue chip while searching, the "match found" banner and the post-match
+-- rating card. The server decides everything; this only shows state and sends taps.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local UI = require(script.Parent:WaitForChild("UI"))
+local HUD = require(script.Parent:WaitForChild("HUD"))
+local Phone = require(script.Parent:WaitForChild("Phone"))
+local shared = ReplicatedStorage:WaitForChild("CityGrind")
+local RC = require(shared:WaitForChild("RankedConfig"))
+
+local player = Players.LocalPlayer
+local colors = UI.colors
+
+local Ranked = {}
+
+local APP_ID = "Ranked"
+local APP_COLOR = Color3.fromRGB(120, 180, 255)
+local GOLD = Color3.fromRGB(255, 200, 60)
+local WIN = Color3.fromRGB(110, 230, 120)
+local LOSS = Color3.fromRGB(255, 95, 95)
+
+local state: any = nil
+local requestRemote: RemoteFunction? = nil
+local appContent: ScrollingFrame? = nil
+local busy = false
+local gui: ScreenGui? = nil
+local chip: Frame? = nil
+local chipText: TextLabel? = nil
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+local function duration(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	local d, h, m = seconds // 86400, (seconds % 86400) // 3600, (seconds % 3600) // 60
+	if d > 0 then
+		return string.format("%dd %dh", d, h)
+	elseif h > 0 then
+		return string.format("%dh %dm", h, m)
+	end
+	return string.format("%dm", math.max(1, m))
+end
+
+local function clock(seconds: number): string
+	seconds = math.max(0, math.floor(seconds))
+	return string.format("%d:%02d", seconds // 60, seconds % 60)
+end
+
+local function commas(n: number): string
+	return UI.formatCash(n):sub(2)
+end
+
+local function serverNow(): number
+	if state and state.serverNow and state.receivedAt then
+		return state.serverNow + (os.clock() - state.receivedAt)
+	end
+	return os.time()
+end
+
+local function signed(n: number): string
+	return if n > 0 then "+" .. n elseif n < 0 then tostring(n) else "±0"
+end
+
+local render: () -> ()
+local refreshChip: () -> ()
+
+local function setState(newState: any)
+	if type(newState) ~= "table" then
+		return
+	end
+	newState.receivedAt = os.clock()
+	state = newState
+	refreshChip()
+	if appContent and Phone.isOpen() and Phone.currentPage() == APP_ID then
+		render()
+	end
+end
+
+local function request(action: string, arg: any?): (boolean, string?)
+	if not requestRemote or busy then
+		return false, nil
+	end
+	busy = true
+	local ok, success, msg, newState = pcall(function()
+		return (requestRemote :: RemoteFunction):InvokeServer(action, arg)
+	end)
+	busy = false
+	if not ok then
+		return false, "Couldn't reach the server."
+	end
+	if newState then
+		setState(newState)
+	end
+	return success == true, msg
+end
+
+local function card(height: number, order: number): Frame
+	return Phone.card(appContent :: ScrollingFrame, height, order)
+end
+
+local function heading(parent: Instance, text: string, color: Color3?)
+	UI.label({ Text = text, Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = color or APP_COLOR, Size = UDim2.new(1, 0, 0, 16), Parent = parent })
+end
+
+---------------------------------------------------------------------------
+-- App sections
+---------------------------------------------------------------------------
+local function renderSeason(order: number)
+	local s = state.season
+	local c = card(44, order)
+	heading(c, string.upper(s.name) .. "  ·  " .. RC.SEASON_WEEKS .. " WEEKS", GOLD)
+	UI.label({
+		Text = "Ends in " .. duration(s.endsAt - serverNow()) .. "  ·  " .. os.date("!%b %d", s.endsAt) .. " UTC",
+		TextSize = 12,
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 18),
+		Size = UDim2.new(1, 0, 0, 14),
+		Parent = c,
+	})
+end
+
+local function renderTier(order: number)
+	local placing = state.placementsLeft > 0
+	local tierColor = if placing then RC.UNRANKED_COLOR else RC.tierColor(state.tier)
+	local c = card(128, order)
+	UI.stroke(tierColor, 1.5, 0.2).Parent = c
+	local info = RC.tierOf(state.rating)
+	UI.label({ Text = if placing then "❔" else info.icon, TextSize = 34, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromOffset(44, 44), Parent = c })
+	UI.label({ Text = if placing then "UNRANKED" else string.upper(state.label), Font = UI.FONT_BLACK, TextSize = 20, TextColor3 = tierColor, Position = UDim2.fromOffset(52, 0), Size = UDim2.new(1, -52, 0, 24), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+	local sub = if placing
+		then string.format("Placement games: %d of %d left", state.placementsLeft, RC.PLACEMENTS)
+		else string.format("%s rating  ·  peak %s", commas(state.rating), commas(state.peak))
+	UI.label({ Text = sub, TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(52, 24), Size = UDim2.new(1, -52, 0, 14), Parent = c })
+
+	local _, setFill = UI.bar({ Position = UDim2.fromOffset(0, 52), Size = UDim2.new(1, 0, 0, 10), Parent = c }, tierColor)
+	local barText
+	if placing then
+		setFill((RC.PLACEMENTS - state.placementsLeft) / RC.PLACEMENTS)
+		barText = "Finish your placements to get a tier."
+	elseif state.nextAt then
+		setFill(state.progress)
+		local nextInfo = RC.tierOf(state.nextAt)
+		barText = string.format("%d to %s", math.max(0, state.nextAt - state.rating), nextInfo.label)
+	else
+		setFill(1)
+		barText = "Top tier. Defend it."
+	end
+	UI.label({ Text = barText, TextSize = 11, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 64), Size = UDim2.new(1, 0, 0, 14), Parent = c })
+
+	local streak = if state.streak >= 2 then "  ·  🔥 " .. state.streak .. " streak" else ""
+	UI.label({
+		Text = string.format("%dW - %dL this season%s", state.wins, state.losses, streak),
+		Font = UI.FONT_BOLD,
+		TextSize = 13,
+		Position = UDim2.fromOffset(0, 82),
+		Size = UDim2.new(1, 0, 0, 16),
+		Parent = c,
+	})
+	UI.label({
+		Text = string.format("Best streak %d  ·  Career %dW - %dL", state.bestStreak, state.life.wins, state.life.losses),
+		TextSize = 11,
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 100),
+		Size = UDim2.new(1, 0, 0, 14),
+		Parent = c,
+	})
+end
+
+local function renderQueue(order: number)
+	local c = card(150, order)
+	heading(c, "PLAY RANKED")
+	if state.match then
+		UI.label({ Text = "You're in a ranked " .. state.match.mode .. " at " .. state.match.court .. ". Good luck!", TextSize = 13, TextWrapped = true, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 40), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+		c.Size = UDim2.new(1, -20, 0, 76)
+		return
+	end
+	if state.queue then
+		local q = state.queue
+		UI.label({
+			Text = string.format("Searching for ranked %s%s...", q.mode, if q.group == 2 then " with your partner" else ""),
+			Font = UI.FONT_BOLD,
+			TextSize = 13,
+			Position = UDim2.fromOffset(0, 22),
+			Size = UDim2.new(1, 0, 0, 16),
+			Parent = c,
+		})
+		UI.label({
+			Text = string.format("%s  ·  rating range ±%d  ·  %d in queue", q.status, q.window, state.counts[q.mode] or 0),
+			TextSize = 11,
+			TextColor3 = colors.subtext,
+			Position = UDim2.fromOffset(0, 40),
+			Size = UDim2.new(1, 0, 0, 14),
+			Parent = c,
+		})
+		local leave = UI.button({ Text = "LEAVE QUEUE", TextSize = 13, BackgroundColor3 = LOSS, Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 34), Parent = c })
+		leave.Activated:Connect(function()
+			local _, msg = request("Leave")
+			if msg then
+				HUD.push("RANKED", msg)
+			end
+		end)
+		c.Size = UDim2.new(1, -20, 0, 120)
+		return
+	end
+	if not state.eligible then
+		UI.label({ Text = "🔒 " .. (state.reason or "Not available yet."), TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 44), TextYAlignment = Enum.TextYAlignment.Top, Parent = c })
+		UI.label({
+			Text = string.format("Needs level %d+ (you: %d) and hooper rating %d+ (you: %.1f)", RC.MIN_LEVEL, state.level, RC.MIN_HOOPER_RATING, state.hooper),
+			TextSize = 11,
+			TextWrapped = true,
+			TextColor3 = colors.subtext,
+			Position = UDim2.fromOffset(0, 70),
+			Size = UDim2.new(1, 0, 0, 30),
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Parent = c,
+		})
+		c.Size = UDim2.new(1, -20, 0, 116)
+		return
+	end
+	local row = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 24), Size = UDim2.new(1, 0, 0, 40), Parent = c }, {
+		UI.new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 1, 0), CellPadding = UDim2.fromOffset(8, 0), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	for i, mode in RC.MODES do
+		local b = UI.button({ Text = "QUEUE " .. mode, TextSize = 15, Font = UI.FONT_BLACK, BackgroundColor3 = APP_COLOR, TextColor3 = Color3.fromRGB(10, 20, 40), LayoutOrder = i, Parent = row })
+		b.Activated:Connect(function()
+			local ok, msg = request("Queue", mode)
+			HUD.push(if ok then "RANKED QUEUE" else "RANKED", msg or "Try again.")
+		end)
+	end
+	local partyHint = if state.partySize == 2
+		then "2v2: you and your party partner queue together."
+		elseif state.partySize > 2 then "2v2 takes a party of exactly 2 (solo players are paired up)."
+		else "2v2 solo: you'll be paired with a teammate. Party up with one friend to queue together."
+	UI.label({
+		Text = string.format("In queue: %d (1v1)  ·  %d (2v2)\n%s\nFirst to %d · %d placement games per season · leaving = loss", state.counts["1v1"] or 0, state.counts["2v2"] or 0, partyHint, 11, RC.PLACEMENTS),
+		TextSize = 11,
+		TextWrapped = true,
+		TextColor3 = colors.subtext,
+		Position = UDim2.fromOffset(0, 70),
+		Size = UDim2.new(1, 0, 0, 56),
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Parent = c,
+	})
+end
+
+local RESULT_TEXT = { W = "WIN", L = "LOSS", NC = "NO CONTEST", UNRATED = "UNRATED", QUIT = "QUIT" }
+local function resultColor(result: string): Color3
+	return if result == "W" then WIN elseif result == "L" or result == "QUIT" then LOSS else colors.subtext
+end
+
+local function renderHistory(order: number)
+	local list = state.history
+	local c = card(26 + math.max(1, #list) * 34, order)
+	heading(c, "LAST " .. RC.HISTORY_LIMIT .. " MATCHES")
+	if #list == 0 then
+		UI.label({ Text = "No ranked games yet.", TextSize = 12, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 16), Parent = c })
+		return
+	end
+	for i, h in list do
+		local y = 22 + (i - 1) * 34
+		local col = resultColor(h.result)
+		UI.label({ Text = RESULT_TEXT[h.result] or h.result, Font = UI.FONT_BLACK, TextSize = 11, TextColor3 = col, Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(72, 14), Parent = c })
+		UI.label({ Text = h.mode .. "  " .. h.score .. "  vs " .. h.opp, TextSize = 12, Position = UDim2.fromOffset(74, y), Size = UDim2.new(1, -140, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+		UI.label({ Text = signed(h.delta), Font = UI.FONT_BOLD, TextSize = 13, TextColor3 = col, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y), Size = UDim2.fromOffset(60, 14), Parent = c })
+		UI.label({ Text = UI.timeAgo(h.t) .. "  ·  " .. commas(h.rating) .. " after", TextSize = 10, TextColor3 = colors.subtext, Position = UDim2.fromOffset(74, y + 15), Size = UDim2.new(1, -74, 0, 12), Parent = c })
+	end
+end
+
+local function rewardLine(tier: string): string
+	local r = RC.REWARDS[tier]
+	local parts = { "$" .. commas(r.cash), commas(r.xp) .. " XP", "title" }
+	if r.badge then
+		table.insert(parts, "badge")
+	end
+	if r.item then
+		table.insert(parts, "jacket")
+	end
+	return table.concat(parts, " · ")
+end
+
+local function renderRewards(order: number)
+	local c = card(40 + #RC.TIERS * 22, order)
+	heading(c, "SEASON REWARDS (FINAL TIER)", GOLD)
+	UI.label({ Text = "Title \"" .. RC.seasonTitle(state.season.id, "Tier") .. "\" for every placed player. Platinum+ get an exclusive season badge.", TextSize = 10, TextWrapped = true, TextColor3 = colors.subtext, Position = UDim2.fromOffset(0, 16), Size = UDim2.new(1, 0, 0, 22), Parent = c })
+	for i = #RC.TIERS, 1, -1 do
+		local t = RC.TIERS[i]
+		local y = 40 + (#RC.TIERS - i) * 22
+		local mine = state.placementsLeft == 0 and state.tier == t.name
+		if mine then
+			UI.new("Frame", { BackgroundColor3 = t.color, BackgroundTransparency = 0.8, Position = UDim2.fromOffset(-4, y - 2), Size = UDim2.new(1, 8, 0, 20), Parent = c }, { UI.corner(6) })
+		end
+		local floor = if t.floor == -math.huge then "" else " " .. t.floor .. "+"
+		UI.label({ Text = t.icon .. " " .. t.name .. floor, Font = UI.FONT_BOLD, TextSize = 12, TextColor3 = t.color, Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(120, 16), Parent = c })
+		UI.label({ Text = rewardLine(t.name), TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y), Size = UDim2.new(1, -120, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+	end
+end
+
+local function renderBadges(order: number)
+	local badges = state.badges
+	local seasons = state.seasons
+	if #badges == 0 and #seasons == 0 then
+		return
+	end
+	local rows = #badges + math.min(#seasons, 5)
+	local c = card(46 + rows * 26 + (if #badges > 0 then 32 else 0), order)
+	heading(c, "SEASON BADGES & HISTORY", GOLD)
+	local y = 22
+	for _, b in badges do
+		local col = RC.tierColor(b.tier)
+		local showing = state.badge == b.id
+		UI.label({ Text = "◆ " .. RC.seasonTitle(b.id, b.tier), Font = UI.FONT_BLACK, TextSize = 13, TextColor3 = col, Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, -90, 0, 20), Parent = c })
+		local btn = UI.button({ Text = if showing then "SHOWING ✓" else "SHOW", TextSize = 11, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, y), Size = UDim2.fromOffset(84, 22), Parent = c })
+		btn.Activated:Connect(function()
+			local _, msg = request("Badge", b.id)
+			if msg then
+				HUD.push("SEASON BADGE", msg)
+			end
+		end)
+		y += 26
+	end
+	if #badges > 0 then
+		local hide = UI.button({ Text = "HIDE BADGE", TextSize = 11, Position = UDim2.fromOffset(0, y), Size = UDim2.fromOffset(100, 24), Parent = c })
+		hide.Activated:Connect(function()
+			local _, msg = request("Badge", "")
+			if msg then
+				HUD.push("SEASON BADGE", msg)
+			end
+		end)
+		y += 32
+	end
+	for i = 1, math.min(#seasons, 5) do
+		local s = seasons[i]
+		UI.label({
+			Text = string.format("%s  ·  %s  ·  %s rating  ·  %dW-%dL", s.id, s.tier, commas(s.rating), s.wins, s.losses),
+			TextSize = 11,
+			TextColor3 = RC.tierColor(s.tier),
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.new(1, 0, 0, 22),
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = c,
+		})
+		y += 26
+	end
+end
+
+render = function()
+	local content = appContent
+	if not content then
+		return
+	end
+	Phone.clear(content)
+	if not state then
+		local c = Phone.card(content, 40, 1)
+		UI.label({ Text = "Loading ranked...", TextSize = 13, TextColor3 = colors.subtext, Size = UDim2.fromScale(1, 1), Parent = c })
+		return
+	end
+	renderSeason(1)
+	renderTier(2)
+	renderQueue(3)
+	renderHistory(4)
+	renderRewards(5)
+	renderBadges(6)
+end
+
+---------------------------------------------------------------------------
+-- Queue chip, match found banner, result card
+---------------------------------------------------------------------------
+refreshChip = function()
+	if not chip then
+		return
+	end
+	local q = state and state.queue
+	chip.Visible = q ~= nil and state.match == nil
+end
+
+local function buildOverlay()
+	local g = UI.new("ScreenGui", { Name = "CityGrindRanked", ResetOnSpawn = false, IgnoreGuiInset = false, DisplayOrder = 4, Parent = player:WaitForChild("PlayerGui") })
+	gui = g
+	local c = UI.new("Frame", {
+		Name = "QueueChip",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 52),
+		Size = UDim2.fromOffset(280, 34),
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.08,
+		Visible = false,
+		Parent = g,
+	}, { UI.corner(17), UI.stroke(APP_COLOR, 1.5, 0.2) })
+	chip = c
+	chipText = UI.label({ Text = "", Font = UI.FONT_BOLD, TextSize = 13, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -60, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = c })
+	local x = UI.button({ Text = "✕", TextSize = 14, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -5, 0.5, 0), Size = UDim2.fromOffset(40, 26), BackgroundColor3 = LOSS, Parent = c })
+	x.Activated:Connect(function()
+		local _, msg = request("Leave")
+		if msg then
+			HUD.push("RANKED", msg)
+		end
+	end)
+	local accumulator = 0
+	RunService.Heartbeat:Connect(function(dt)
+		accumulator += dt
+		if accumulator < 0.5 then
+			return
+		end
+		accumulator = 0
+		local q = state and state.queue
+		if c.Visible and q and chipText then
+			local waited = q.waited + (os.clock() - state.receivedAt)
+			chipText.Text = string.format("🏆 RANKED %s  ·  %s  ·  %s", q.mode, clock(waited), q.status)
+		end
+	end)
+end
+
+local function popup(height: number, stroke: Color3): Frame
+	local frame = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 96),
+		Size = UDim2.fromOffset(330, height),
+		BackgroundColor3 = colors.panel,
+		BackgroundTransparency = 0.04,
+		Parent = gui,
+	}, { UI.corner(16), UI.stroke(stroke, 2, 0.1), UI.padding(14) })
+	local scale = UI.new("UIScale", { Scale = 0.6, Parent = frame })
+	TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	return frame
+end
+
+local function dismissLater(frame: Frame, seconds: number)
+	local closed = false
+	local function close()
+		if closed then
+			return
+		end
+		closed = true
+		local scale = frame:FindFirstChildOfClass("UIScale")
+		if scale then
+			local t = TweenService:Create(scale, TweenInfo.new(0.2), { Scale = 0 })
+			t:Play()
+			t.Completed:Wait()
+		end
+		frame:Destroy()
+	end
+	local tap = UI.new("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = frame })
+	tap.Activated:Connect(close)
+	task.delay(seconds, close)
+end
+
+local function names(list: { any }): string
+	local out = {}
+	for _, o in list do
+		table.insert(out, o.name .. (if o.label then " (" .. o.label .. ")" else ""))
+	end
+	return table.concat(out, " & ")
+end
+
+local function showFound(info: any)
+	if not gui or type(info) ~= "table" then
+		return
+	end
+	local frame = popup(132, GOLD)
+	UI.label({ Text = "MATCH FOUND", Font = UI.FONT_BLACK, TextSize = 24, TextColor3 = GOLD, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = frame })
+	UI.label({ Text = "RANKED " .. tostring(info.mode) .. "  ·  " .. tostring(info.court), Font = UI.FONT_BOLD, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 28), Size = UDim2.new(1, 0, 0, 16), Parent = frame })
+	local vs = "vs " .. names(info.opponents or {})
+	if info.teammates and #info.teammates > 0 then
+		vs = "with " .. names(info.teammates) .. "\n" .. vs
+	end
+	UI.label({ Text = vs, TextSize = 12, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 46), Size = UDim2.new(1, 0, 0, 32), Parent = frame })
+	local countdown = UI.label({ Text = "", Font = UI.FONT_BLACK, TextSize = 14, TextColor3 = if info.unrated then colors.subtext else APP_COLOR, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 18), Parent = frame })
+	local ends = os.clock() + (tonumber(info.countdown) or 6)
+	task.spawn(function()
+		while frame.Parent and os.clock() < ends do
+			countdown.Text = (if info.unrated then "UNRATED (same opponent, daily limit)  ·  " else "") .. "TIP-OFF IN " .. math.ceil(ends - os.clock())
+			task.wait(0.2)
+		end
+	end)
+	dismissLater(frame, (tonumber(info.countdown) or 6) + 1)
+end
+
+local function showResult(info: any)
+	if not gui or type(info) ~= "table" then
+		return
+	end
+	local col = resultColor(info.result)
+	local frame = popup(170, col)
+	local title = RESULT_TEXT[info.result] or tostring(info.result)
+	UI.label({ Text = title .. "  " .. tostring(info.score or ""), Font = UI.FONT_BLACK, TextSize = 24, TextColor3 = col, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(1, 0, 0, 26), Parent = frame })
+	local deltaText = signed(tonumber(info.delta) or 0)
+	if (tonumber(info.bonus) or 0) > 0 then
+		deltaText ..= "  (🔥 +" .. info.bonus .. " streak)"
+	end
+	UI.label({ Text = deltaText, Font = UI.FONT_BLACK, TextSize = 30, TextColor3 = col, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 30), Size = UDim2.new(1, 0, 0, 34), Parent = frame })
+	local line = tostring(info.label) .. "  ·  " .. commas(tonumber(info.rating) or 0) .. " rating"
+	if info.oldLabel and info.oldLabel ~= info.label and (info.placementsLeft or 0) == 0 then
+		local old = RC.TIER_INDEX[tostring(info.oldLabel):match("^(%a+)") or ""] or 0
+		local new = RC.TIER_INDEX[tostring(info.label):match("^(%a+)") or ""] or 0
+		if tostring(info.oldLabel):find("^Placement") then
+			line = "PLACED: " .. line
+		elseif new > old or (new == old and (tonumber(info.delta) or 0) > 0) then
+			line = "PROMOTED! " .. line
+		else
+			line = "Demoted. " .. line
+		end
+	end
+	UI.label({ Text = line, Font = UI.FONT_BOLD, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 68), Size = UDim2.new(1, 0, 0, 18), Parent = frame })
+	local extra = {}
+	if info.cash then
+		table.insert(extra, "+$" .. commas(info.cash) .. "  ·  +" .. commas(info.xp or 0) .. " XP")
+	end
+	if (info.streak or 0) >= 2 then
+		table.insert(extra, "🔥 " .. info.streak .. " win streak")
+	end
+	if info.reason then
+		table.insert(extra, info.reason)
+	end
+	UI.label({ Text = table.concat(extra, "\n"), TextSize = 12, TextWrapped = true, TextColor3 = colors.subtext, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(0, 90), Size = UDim2.new(1, 0, 0, 52), Parent = frame })
+	dismissLater(frame, 8)
+end
+
+---------------------------------------------------------------------------
+-- Start
+---------------------------------------------------------------------------
+function Ranked.start()
+	Phone.addApp({ id = APP_ID, label = "Ranked", icon = "🏆", color = APP_COLOR }, function(content)
+		appContent = content
+		render()
+		return function()
+			render()
+			task.spawn(request, "Get")
+		end
+	end)
+
+	task.spawn(function()
+		buildOverlay()
+		local remotes = shared:WaitForChild("Remotes")
+		local event = remotes:WaitForChild("RankedEvent") :: RemoteEvent
+		requestRemote = remotes:WaitForChild("RankedRequest") :: RemoteFunction
+		event.OnClientEvent:Connect(function(kind: string, data: any)
+			if kind == "State" then
+				setState(data)
+			elseif kind == "Found" then
+				showFound(data)
+			elseif kind == "Result" then
+				showResult(data)
+			elseif kind == "Open" then
+				Phone.setOpen(true)
+				Phone.showPage(APP_ID)
+			end
+		end)
+		if not player:GetAttribute("DataLoaded") then
+			player:GetAttributeChangedSignal("DataLoaded"):Wait()
+		end
+		request("Get")
+		-- keep the season countdown and queue numbers fresh while the app is open
+		while true do
+			task.wait(10)
+			if Phone.isOpen() and Phone.currentPage() == APP_ID and not busy then
+				request("Get")
+			end
+		end
+	end)
+end
+
+return Ranked
 ]=====])
 put(client, 'ModuleScript', 'Shops', [=====[
 -- CITY GRIND: shop panels, try-on preview, mirror camera, Closet phone app

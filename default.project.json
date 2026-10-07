@@ -20,6 +20,9 @@
         "Config": {
           "$path": "src/shared/Config.luau"
         },
+        "CrewBattlesConfig": {
+          "$path": "src/shared/CrewBattlesConfig.luau"
+        },
         "CrewsConfig": {
           "$path": "src/shared/CrewsConfig.luau"
         },
@@ -38,6 +41,9 @@
         "JobsConfig": {
           "$path": "src/shared/JobsConfig.luau"
         },
+        "LeaderboardsConfig": {
+          "$path": "src/shared/LeaderboardsConfig.luau"
+        },
         "MediaConfig": {
           "$path": "src/shared/MediaConfig.luau"
         },
@@ -49,6 +55,12 @@
         },
         "QuestsConfig": {
           "$path": "src/shared/QuestsConfig.luau"
+        },
+        "RacingConfig": {
+          "$path": "src/shared/RacingConfig.luau"
+        },
+        "RankedConfig": {
+          "$path": "src/shared/RankedConfig.luau"
         },
         "Replay": {
           "$path": "src/shared/Replay.luau"
@@ -100,6 +112,9 @@
         "CourtGames": {
           "$path": "src/server/CourtGames.luau"
         },
+        "CrewBattles": {
+          "$path": "src/server/CrewBattles.luau"
+        },
         "Crews": {
           "$path": "src/server/Crews.luau"
         },
@@ -136,6 +151,9 @@
         "Jobs": {
           "$path": "src/server/Jobs.luau"
         },
+        "Leaderboards": {
+          "$path": "src/server/Leaderboards.luau"
+        },
         "Media": {
           "$path": "src/server/Media.luau"
         },
@@ -156,6 +174,12 @@
         },
         "Quests": {
           "$path": "src/server/Quests.luau"
+        },
+        "Racing": {
+          "$path": "src/server/Racing.luau"
+        },
+        "Ranked": {
+          "$path": "src/server/Ranked.luau"
         },
         "Shops": {
           "$path": "src/server/Shops.luau"
@@ -199,6 +223,9 @@
           "CityTok": {
             "$path": "src/client/CityTok.luau"
           },
+          "CrewBattles": {
+            "$path": "src/client/CrewBattles.luau"
+          },
           "Crews": {
             "$path": "src/client/Crews.luau"
           },
@@ -220,6 +247,9 @@
           "Jobs": {
             "$path": "src/client/Jobs.luau"
           },
+          "Leaderboards": {
+            "$path": "src/client/Leaderboards.luau"
+          },
           "Media": {
             "$path": "src/client/Media.luau"
           },
@@ -240,6 +270,12 @@
           },
           "Quests": {
             "$path": "src/client/Quests.luau"
+          },
+          "Racing": {
+            "$path": "src/client/Racing.luau"
+          },
+          "Ranked": {
+            "$path": "src/client/Ranked.luau"
           },
           "Shops": {
             "$path": "src/client/Shops.luau"
