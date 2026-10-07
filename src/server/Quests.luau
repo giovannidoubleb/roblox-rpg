@@ -958,12 +958,20 @@ function Quests.start(city: Instance)
 		if type(action) ~= "string" or not Net.allow(player, "QuestsRequest", 0.25) then
 			return false, "Slow down.", nil
 		end
-		local ok, msg = handle(player, action, a, b)
-		if ok and action ~= "Get" then
-			process(player) -- reflect the claim immediately
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, msg, state = pcall(function()
+			local ok, msg = handle(player, action, a, b)
+			if ok and action ~= "Get" then
+				process(player) -- reflect the claim immediately
+			end
+			local state = stateFor(player)
+			return ok, msg, state and withTimers(state)
+		end)
+		if not pok then
+			warn("[Security] QuestsRequest failed:", ok)
+			return false, "Something went wrong.", nil
 		end
-		local state = stateFor(player)
-		return ok, msg, state and withTimers(state)
+		return ok, msg, state
 	end
 
 	-- Every made shot on any court (pickup games or just shooting around).

@@ -40,6 +40,7 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local WC = require(shared:WaitForChild("WorldConfig"))
 local DC = require(shared:WaitForChild("DistrictsConfig"))
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local World = {}
@@ -339,8 +340,8 @@ function World.collect(player: Player, id: string)
 	if not w or w.c[id] then
 		return
 	end
-	if Net.distance(player, item.center) > WC.COLLECT_RANGE then
-		return
+	if Net.distance(player, item.center) > WC.COLLECT_RANGE or not AntiCheat.positionOk(player) then
+		return -- [Security] out of reach, or got there faster than anyone can run
 	end
 	if not Net.allow(player, "WorldCollect:" .. id, 1) then
 		return
@@ -427,7 +428,7 @@ local function checkSecrets()
 	for _, player in Players:GetPlayers() do
 		local r = rootPart(player)
 		local w = r and sec(player)
-		if r and w and Net.alive(player) then
+		if r and w and Net.alive(player) and AntiCheat.positionOk(player) then
 			local pos = r.Position
 			for _, part in secretParts do
 				local id = part:GetAttribute("SecretId") :: string

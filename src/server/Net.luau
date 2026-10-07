@@ -41,8 +41,36 @@ function Net.allow(player: Player, key: string, cooldown: number): boolean
 	return true
 end
 
+-- Rolling-window budget: at most `max` calls per `window` seconds (for actions whose cost is
+-- a DataStore read on an id the client picks, where a short cooldown alone still allows a flood).
+local budgets: { [Player]: { [string]: { start: number, count: number } } } = {}
+function Net.budget(player: Player, key: string, max: number, window: number): boolean
+	local now = os.clock()
+	local mine = budgets[player]
+	if not mine then
+		mine = {}
+		budgets[player] = mine
+	end
+	local b = mine[key]
+	if not b or now - b.start >= window then
+		mine[key] = { start = now, count = 1 }
+		return true
+	end
+	if b.count >= max then
+		return false
+	end
+	b.count += 1
+	return true
+end
+
+-- [Security] finite number check for client-sent numbers (rejects NaN and +/-inf).
+function Net.isFiniteNumber(v: any): boolean
+	return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+end
+
 Players.PlayerRemoving:Connect(function(player)
 	lastCall[player] = nil
+	budgets[player] = nil
 end)
 
 local NotifyRemote = Net.remote("RemoteEvent", "Notify") -- server -> client (title, body)

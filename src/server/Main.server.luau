@@ -237,7 +237,9 @@ local function onCheckpoint(player: Player, index: number)
 	end
 
 	local previous = if expected == 1 then #route else expected - 1
-	local minTime = legDistance(previous, expected) / MAX_AVG_SPEED
+	-- a gate counts from ~8 studs out (trigger + body), so a leg can be cut short
+	-- by that much at each end; without the margin a tight corner was a false DQ
+	local minTime = math.max(0, legDistance(previous, expected) - 16) / MAX_AVG_SPEED
 	if now - run.legStartedAt < minTime then
 		runs[player] = nil
 		setRunAttributes(player)
@@ -298,6 +300,8 @@ Basketball.announce = function(players: { Player }, text: string)
 	end
 end
 Basketball.dunkJump = function(player: Player, rim: Vector3)
+	-- the dunk launch is a fast scripted leap toward the rim; let movement checks skip it
+	require(script:WaitForChild("AntiCheat")).allowTeleport(player, 2)
 	BallFx:FireClient(player, "Dunk", rim)
 end
 Basketball.onTrain = function(player: Player, statName: string, amount: number)
@@ -322,7 +326,7 @@ CourtGames.start()
 ---------------------------------------------------------------------------
 -- Phase 3 life systems and Phase 4 social systems. Each builds its own places and remotes.
 ---------------------------------------------------------------------------
-for _, name in { "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
+for _, name in { "AntiCheat", "Jobs", "Gym", "Vehicles", "Apartments", "Shops", "Social", "Messages", "Party", "Crews", "Emotes", "Media", "CityGram", "CityTok", "Calls", "Bank", "Events", "Music", "Quests", "Story", "World", "Leaderboards", "Ranked", "Racing", "CrewBattles" } do
 	local module = script:FindFirstChild(name)
 	if module then
 		local ok, err = pcall(function()

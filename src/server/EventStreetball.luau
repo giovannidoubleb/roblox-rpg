@@ -17,6 +17,7 @@
 local Players = game:GetService("Players")
 
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local EventStreetball = {}
@@ -241,6 +242,7 @@ function EventStreetball.init(ctx: any): any
 					local pos = Vector3.new(lane.rim.X, d.floorY + 3, lane.rim.Z) + lane.dir * dist + side * ((i - (#team.players + 1) / 2) * 6)
 					local character = p.Character
 					if character then
+						AntiCheat.allowTeleport(p, 3)
 						character:PivotTo(CFrame.lookAt(pos, Vector3.new(lane.rim.X, pos.Y, lane.rim.Z)))
 					end
 				end

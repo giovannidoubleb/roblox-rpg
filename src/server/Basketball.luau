@@ -37,6 +37,11 @@ local heldBy: { [Player]: Ball } = {}
 local hoops: { Hoop } = {}
 local stealCooldown: { [Player]: number } = {}
 local trainCooldown: { [Player]: { [string]: number } } = {}
+-- [Security] Hourly stat-XP budget per stat from court training (two alts passing back and
+-- forth could otherwise farm ~5,000 Passing XP an hour with no level softening or fatigue).
+-- Keyed by UserId so rejoining doesn't reset it.
+local TRAIN_XP_PER_HOUR = 900
+local trainBudget: { [number]: { [string]: { start: number, total: number } } } = {}
 local rng = Random.new()
 
 local ballFolder = Instance.new("Folder")
@@ -169,6 +174,20 @@ local function train(player: Player, statName: string, amount: number)
 		return
 	end
 	cooldowns[statName] = now
+	local mine = trainBudget[player.UserId]
+	if not mine then
+		mine = {}
+		trainBudget[player.UserId] = mine
+	end
+	local b = mine[statName]
+	if not b or now - b.start >= 3600 then
+		b = { start = now, total = 0 }
+		mine[statName] = b
+	end
+	if b.total >= TRAIN_XP_PER_HOUR then
+		return
+	end
+	b.total += amount
 	Basketball.onTrain(player, statName, amount)
 end
 Basketball.train = train
@@ -475,6 +494,8 @@ local function shoot(player: Player, ball: Ball, held: number)
 		task.delay(0.28, function()
 			if balls[ball] then
 				ball.part.Anchored = false
+				-- unanchoring drops the manual owner; keep the free ball on the server
+				pcall(ball.part.SetNetworkOwner, ball.part, nil)
 				ball.lastPos = ball.part.Position
 				ball.part.AssemblyLinearVelocity = Vector3.new(0, -45, 0)
 			end
@@ -617,6 +638,15 @@ RunService.Heartbeat:Connect(function()
 
 		local part = ball.part
 		local pos = part.Position
+
+		-- [Security] a free ball is always simulated by the server: a client that
+		-- owned it could fly it through any rim (anchoring/unanchoring resets owners)
+		if not part.Anchored then
+			local okOwner, owner = pcall(part.GetNetworkOwner, part)
+			if okOwner and owner ~= nil then
+				pcall(part.SetNetworkOwner, part, nil)
+			end
+		end
 
 		-- Scoring: the ball's centre passes down through the rim.
 		if now > ball.scoreDebounce then

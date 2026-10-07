@@ -699,7 +699,26 @@ local function releaseName(lower: string, id: string)
 	end)
 end
 
+local creating: { [Player]: boolean } = {}
+local createCrew: (Player, any) -> (boolean, string?)
+
+-- [Security] create yields (text filter + DataStore) for longer than its cooldown, so two
+-- requests could both pass the "not in a crew" check and found (and pay for) two crews.
 function Crews.create(player: Player, args: any): (boolean, string?)
+	if creating[player] then
+		return false, "Your crew is still being set up."
+	end
+	creating[player] = true
+	local ok, okResult, msg = pcall(createCrew, player, args)
+	creating[player] = nil
+	if not ok then
+		warn("[CityGrind] Crew create failed:", okResult)
+		return false, "Something went wrong. Try again."
+	end
+	return okResult, msg
+end
+
+createCrew = function(player: Player, args: any): (boolean, string?)
 	if type(args) ~= "table" then
 		return false, "Fill in the form."
 	end
@@ -935,8 +954,20 @@ function Crews.accept(player: Player, crewId: any): (boolean, string?)
 end
 
 function Crews.decline(player: Player, crewId: any): (boolean, string?)
-	if type(crewId) ~= "string" then
+	if type(crewId) ~= "string" or #crewId > 40 then
 		return false, nil
+	end
+	-- [Security] only touch the crew record (a DataStore write) for an invite this player actually holds
+	local section = PlayerData.section(player, "crew")
+	local held = false
+	for _, inv in (section and section.invites) or {} do
+		if inv.crewId == crewId then
+			held = true
+			break
+		end
+	end
+	if not held then
+		return true, "Invite declined."
 	end
 	dropInvite(player, crewId)
 	local key = uidKey(player.UserId)

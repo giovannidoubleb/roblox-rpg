@@ -49,7 +49,7 @@ local TOPIC = "CityTok_v1"
 local CityTok = {}
 
 PlayerData.registerSection("citytok", function()
-	return { posts = {}, favs = {}, inbox = {}, repDay = "", repToday = 0 }
+	return { posts = {}, favs = {}, inbox = {}, repDay = "", repToday = 0, fameToday = 0 }
 end)
 
 local city: Instance? = nil
@@ -1104,6 +1104,10 @@ local function scoreOf(m: Meta): number
 end
 
 local function getMeta(id: string, maxAge: number?): Meta?
+	-- [Security] post ids are short alphanumerics (newId); anything else would cost a DataStore read per call
+	if type(id) ~= "string" or #id == 0 or #id > 32 or not id:match("^%w+$") then
+		return nil
+	end
 	local c = metaCache[id]
 	if c and os.clock() - c.at < (maxAge or 45) then
 		return c.meta
@@ -1316,25 +1320,30 @@ end
 local function reward(player: Player, kind: string)
 	local r = if kind == "viral" then Cfg.VIRAL_REWARD else Cfg.TRENDING_REWARD
 	local sec = section(player)
-	local rep = 0
+	local rep, fame = 0, 0
 	if sec then
 		local day = os.date("!%Y-%m-%d")
 		if sec.repDay ~= day then
 			sec.repDay = day
 			sec.repToday = 0
+			sec.fameToday = 0
 		end
 		rep = math.max(0, math.min(r.rep, Cfg.DAILY_REP_CAP - (sec.repToday or 0)))
 		sec.repToday = (sec.repToday or 0) + rep
+		fame = math.max(0, math.min(r.fame, Cfg.DAILY_FAME_CAP - (sec.fameToday or 0)))
+		sec.fameToday = (sec.fameToday or 0) + fame
 		PlayerData.markChanged(player)
 	end
 	if rep > 0 then
 		PlayerData.addReputation(player, rep)
 	end
-	PlayerData.addFame(player, r.fame)
+	if fame > 0 then
+		PlayerData.addFame(player, fame)
+	end
 	if kind == "viral" then
-		Net.notify(player, "CityTok", "Your video went viral! +" .. rep .. " rep, +" .. r.fame .. " fame.")
+		Net.notify(player, "CityTok", "Your video went viral! +" .. rep .. " rep, +" .. fame .. " fame.")
 	else
-		Net.notify(player, "CityTok", "Your video is trending. +" .. rep .. " rep, +" .. r.fame .. " fame.")
+		Net.notify(player, "CityTok", "Your video is trending. +" .. rep .. " rep, +" .. fame .. " fame.")
 	end
 end
 

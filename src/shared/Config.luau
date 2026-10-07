@@ -140,6 +140,7 @@ Config.Game = {
 	LOSS_CASH = 20,
 	LOSS_XP = 30,
 	LOSS_REP = 3,
+	REWARDED_PER_HOUR = 12, -- [Security] pickup games paying cash/rep per rolling hour (a real game takes 3-6 min)
 }
 
 return Config

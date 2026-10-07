@@ -164,6 +164,9 @@ function PlayerData.load(player: Player)
 			local ok, result = retry(3, function()
 				return (store :: DataStore):UpdateAsync(key, function(saved)
 					saved = saved or defaultProfile()
+					if type(saved) ~= "table" then
+						return nil -- corrupt record: leave it alone (load refuses it below)
+					end
 					local lock = saved.sessionLock
 					if lock and lock.server ~= SERVER_ID and os.time() - lock.time < Config.SESSION_LOCK_SECONDS then
 						lockedElsewhere = true
@@ -195,7 +198,27 @@ function PlayerData.load(player: Player)
 	end
 
 	if not player.Parent then
+		-- [Security] left while loading: hand our session lock back so their next server
+		-- doesn't have to wait SESSION_LOCK_SECONDS (never touches the data itself).
+		if store then
+			pcall(function()
+				(store :: DataStore):UpdateAsync(key, function(saved)
+					if type(saved) ~= "table" or not saved.sessionLock or saved.sessionLock.server ~= SERVER_ID then
+						return nil
+					end
+					saved.sessionLock = nil
+					return saved
+				end)
+			end)
+		end
 		return -- left while loading
+	end
+	if type(data) ~= "table" then
+		-- [Security] corrupt record: never play on (and later save over) a blank profile.
+		warn("[Security] Save for", player.Name, "is not a table; refusing to load it")
+		loadFailed[player] = true
+		player:Kick("City Grind could not read your save. Please rejoin in a minute.")
+		return
 	end
 	data.sessionLock = nil
 	profiles[player] = reconcile(data)
@@ -205,27 +228,51 @@ function PlayerData.load(player: Player)
 	end
 end
 
+-- [Security] One save per player at a time: an autosave still in flight when the player
+-- leaves (or two releases from PlayerRemoving + BindToClose) must not race, or a late
+-- autosave could re-write the lock after the release and strand the player for 3 minutes.
+local saving: { [Player]: boolean } = {}
+local lostLock: { [Player]: boolean } = {}
+local SIZE_WARN_BYTES = 3_500_000 -- DataStore keys hold 4 MB
+
 function PlayerData.save(player: Player, releaseLock: boolean)
+	while saving[player] do
+		task.wait(0.1)
+	end
 	local data = profiles[player]
-	if not data or not store or loadFailed[player] then
+	if not data or not store or loadFailed[player] or lostLock[player] then
 		return
 	end
+	saving[player] = true
+	dirty[player] = nil -- cleared up front so a change made while we yield marks it dirty again
 	local key = "player_" .. player.UserId
+	local stolen = false
 	local ok, err = retry(3, function()
 		return (store :: DataStore):UpdateAsync(key, function(saved)
-			local lock = saved and saved.sessionLock
-			if lock and lock.server ~= SERVER_ID then
-				return nil -- another server took over; never overwrite its data
+			stolen = false
+			local lock = type(saved) == "table" and saved.sessionLock
+			-- Only write while we still hold the lock. A missing lock on an existing record
+			-- means another server took the save over (and released it): never overwrite it.
+			if saved ~= nil and (not lock or lock.server ~= SERVER_ID) then
+				stolen = true
+				return nil
 			end
 			local copy = table.clone(data)
 			copy.sessionLock = if releaseLock then nil else { server = SERVER_ID, time = os.time() }
 			return copy
 		end)
 	end)
-	if ok then
-		dirty[player] = nil
-	else
+	saving[player] = nil
+	if ok and stolen then
+		lostLock[player] = true
+		warn("[Security] Save for", player.Name, "skipped: another server owns this save now")
+	elseif not ok then
+		dirty[player] = true
 		warn("[CityGrind] Save failed for", player.Name, err)
+		local okSize, encoded = pcall(HttpService.JSONEncode, HttpService, data)
+		if okSize and #encoded > SIZE_WARN_BYTES then
+			warn("[Security] Save for", player.Name, "is", #encoded, "bytes (DataStore limit 4 MB)")
+		end
 	end
 end
 
@@ -234,6 +281,7 @@ function PlayerData.release(player: Player)
 	profiles[player] = nil
 	dirty[player] = nil
 	loadFailed[player] = nil
+	lostLock[player] = nil
 end
 
 function PlayerData.get(player: Player)
@@ -290,9 +338,16 @@ local function addTransaction(data, amount: number, label: string)
 	end
 end
 
+-- [Security] Rewards must be finite positive numbers: NaN / inf would poison the save
+-- (DataStores can't encode them, so every later save of that player would fail).
+local MAX_TOTAL = 1_000_000_000
+local function goodAmount(amount: any): boolean
+	return type(amount) == "number" and amount == amount and amount > 0 and amount < math.huge
+end
+
 function PlayerData.addCash(player: Player, amount: number, label: string): boolean
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return false
 	end
 	amount = math.floor(amount)
@@ -304,7 +359,7 @@ end
 
 function PlayerData.spendCash(player: Player, amount: number, label: string): boolean
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return false
 	end
 	amount = math.floor(amount)
@@ -319,10 +374,10 @@ end
 
 function PlayerData.addXP(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 then
+	if not data or not goodAmount(amount) then
 		return
 	end
-	data.xp += math.floor(amount)
+	data.xp = math.min(data.xp + math.floor(amount), MAX_TOTAL)
 	while data.level < Config.MAX_LEVEL and data.xp >= Config.xpToNext(data.level) do
 		data.xp -= Config.xpToNext(data.level)
 		data.level += 1
@@ -336,11 +391,11 @@ end
 
 function PlayerData.addReputation(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 then
+	if not data or not goodAmount(amount) then
 		return
 	end
 	local before = Config.reputationRank(data.reputation)
-	data.reputation += math.floor(amount)
+	data.reputation = math.min(data.reputation + math.floor(amount), MAX_TOTAL)
 	local after = Config.reputationRank(data.reputation)
 	if after ~= before then
 		PlayerData.onNotify:Fire(player, "NEW RANK", "People around the city now call you " .. after .. ".")
@@ -350,11 +405,11 @@ end
 
 function PlayerData.addFame(player: Player, amount: number)
 	local data = profiles[player]
-	if not data or amount <= 0 or amount ~= amount then
+	if not data or not goodAmount(amount) then
 		return
 	end
 	local before = Config.fameLevel(data.fame)
-	data.fame += math.floor(amount)
+	data.fame = math.min(data.fame + math.floor(amount), MAX_TOTAL)
 	local after = Config.fameLevel(data.fame)
 	if after ~= before then
 		PlayerData.onNotify:Fire(player, "FAME UP", "You're now " .. after .. " around the city.")
@@ -365,10 +420,10 @@ end
 -- Training progress toward a stat. Every STAT_XP_PER_POINT raises it by 1 (max 99).
 function PlayerData.addStatXP(player: Player, stat: string, amount: number)
 	local data = profiles[player]
-	if not data or data.stats[stat] == nil or amount <= 0 then
+	if not data or data.stats[stat] == nil or not goodAmount(amount) then
 		return
 	end
-	data.statXP[stat] += amount
+	data.statXP[stat] = math.min(data.statXP[stat] + amount, 99 * Config.STAT_XP_PER_POINT)
 	while data.statXP[stat] >= Config.STAT_XP_PER_POINT and data.stats[stat] < 99 do
 		data.statXP[stat] -= Config.STAT_XP_PER_POINT
 		data.stats[stat] += 1
@@ -472,7 +527,10 @@ function PlayerData.start()
 	task.spawn(function()
 		while true do
 			task.wait(Config.AUTOSAVE_SECONDS)
-			for player in dirty do
+			-- [Security] every loaded player, not only dirty ones: the save also refreshes the
+			-- session lock, which would otherwise go stale (SESSION_LOCK_SECONDS) for an idle
+			-- player and let a second server load the same save.
+			for player in profiles do
 				task.spawn(PlayerData.save, player, false)
 			end
 		end

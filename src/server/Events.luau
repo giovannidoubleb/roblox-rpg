@@ -29,6 +29,7 @@ local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local EC = require(shared:WaitForChild("EventsConfig"))
 local VC = require(shared:WaitForChild("VehiclesConfig"))
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local Places = require(script.Parent:WaitForChild("Places"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
@@ -589,6 +590,7 @@ local function startTurn(lane: Lane, player: Player)
 	local character = player.Character
 	if first and character then
 		local stand = first.pos + Vector3.new(0, 3, 0)
+		AntiCheat.allowTeleport(player, 3)
 		character:PivotTo(CFrame.lookAt(stand, Vector3.new(lane.rim.X, stand.Y, lane.rim.Z)))
 	end
 	Basketball.announce({ player }, "YOUR TURN! 60 SECONDS")
@@ -1089,7 +1091,8 @@ local function tickRun(ev: Event)
 		local target = ROUTE[racer.nextIndex]
 		if flatDist(pos, target) <= RUN.GATE_RADIUS and math.abs(pos.Y - target.Y) < 14 then
 			local prev = if racer.nextIndex == 1 then #ROUTE else racer.nextIndex - 1
-			local minTime = legDistance(prev, racer.nextIndex) / RUN.MAX_SPEED
+			-- gates count from GATE_RADIUS out at both ends, so a leg can be that much shorter
+			local minTime = math.max(0, legDistance(prev, racer.nextIndex) - 2 * RUN.GATE_RADIUS) / RUN.MAX_SPEED
 			if t - racer.legStart < minTime then
 				knockOut(racer, "That checkpoint was reached impossibly fast. DQ.")
 				active -= 1

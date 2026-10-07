@@ -16,6 +16,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local ShopsConfig = require(shared:WaitForChild("ShopsConfig"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local EventKit = require(script.Parent:WaitForChild("EventKit"))
 
 local EventFashion = {}
@@ -236,6 +237,7 @@ function EventFashion.init(ctx: any): any
 		end
 		local held = e.player.Character
 		if held then
+			AntiCheat.allowTeleport(e.player, 3)
 			held:PivotTo(CFrame.lookAt(d.venue.startPos, d.venue.startPos + Vector3.new(0, 0, 1)))
 		end
 		local t = now()

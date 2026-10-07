@@ -112,7 +112,8 @@ local lobby: { Player } = {}
 local lobbyStartAt: number? = nil
 local watchers: { [Player]: number } = {}
 local challenges: { [string]: { id: string, from: Player, to: Player, routeId: string, expires: number } } = {}
-local rewardLog: { [Player]: { number } } = {}
+-- [Security] keyed by UserId and kept after leaving, so rejoining doesn't reset the hourly cap.
+local rewardLog: { [number]: { number } } = {}
 local root: Folder
 local liveFolder: Folder
 local raceCounter = 0
@@ -404,7 +405,7 @@ end
 -- Rewards + saving
 ---------------------------------------------------------------------------
 local function underCap(player: Player): boolean
-	local log = rewardLog[player] or {}
+	local log = rewardLog[player.UserId] or {}
 	local cutoff = os.time() - 3600
 	local kept = {}
 	for _, t in log do
@@ -412,7 +413,7 @@ local function underCap(player: Player): boolean
 			table.insert(kept, t)
 		end
 	end
-	rewardLog[player] = kept
+	rewardLog[player.UserId] = kept
 	if #kept >= RC.REWARD_CAP then
 		return false
 	end
@@ -681,6 +682,29 @@ local function finish(race: Race, r: Racer, time: number)
 	Racing.raceFinished:Fire(r.player, r.place, time, race.kind, race.id)
 end
 
+-- Lower bound on the distance a racer must cover: gate-to-gate centre distances
+-- minus both gates' half-widths (laps close on the start/finish line, the last cp).
+local function minDistance(race: Race): number
+	local cps = race.cps
+	local n = #cps
+	local function reach(cp: CP): number
+		return math.max(cp.hw, cp.radius)
+	end
+	local function gap(a: CP, b: CP): number
+		local d = Vector3.new(b.pos.X - a.pos.X, 0, b.pos.Z - a.pos.Z).Magnitude
+		return math.max(0, d - reach(a) - reach(b))
+	end
+	local one = 0
+	for i = 2, n do
+		one += gap(cps[i - 1], cps[i])
+	end
+	if race.kind == "street" or n < 2 then
+		return one
+	end
+	-- circuit / trial: every lap runs line -> cp1 -> ... -> line
+	return (one + gap(cps[n], cps[1])) * race.laps
+end
+
 local function advance(race: Race, r: Racer, p0: Vector3, p1: Vector3, t0: number, t1: number)
 	local n = #race.cps
 	local hit, frac = crossed(race.cps[r.next], p0, p1)
@@ -695,6 +719,14 @@ local function advance(race: Race, r: Racer, p0: Vector3, p1: Vector3, t0: numbe
 			if r.lap >= race.laps then
 				if race.laps == 1 then
 					r.bestLap = 0
+				end
+				-- [Security] the shortest possible line through every gate, at a bit
+				-- over the car's top speed, is a hard floor on the finish time
+				local floor = minDistance(race) / (r.spec.topSpeed * 1.15)
+				if tc - race.goT < floor then
+					warn(string.format("[Security] Racing: %s finished in %.2fs (floor %.2fs)", r.player.Name, tc - race.goT, floor))
+					dnf(race, r, "Disqualified: impossible time.")
+					return
 				end
 				finish(race, r, tc - race.goT)
 				return
@@ -1352,7 +1384,7 @@ end
 ---------------------------------------------------------------------------
 -- Remotes
 ---------------------------------------------------------------------------
-RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+local function handleAction(player: Player, action: any, a: any, b: any)
 	if type(action) ~= "string" then
 		return false, "Invalid request."
 	end
@@ -1403,6 +1435,16 @@ RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: a
 		return ok, message
 	end
 	return false, "Unknown action."
+end
+
+-- [Security] a server error must come back as a failure, never as an error thrown into the client.
+RacingAction.OnServerInvoke = function(player: Player, action: any, a: any, b: any)
+	local ok, success, message, data = pcall(handleAction, player, action, a, b)
+	if not ok then
+		warn("[Security] RacingAction failed:", success)
+		return false, "Something went wrong."
+	end
+	return success, message, data
 end
 
 ---------------------------------------------------------------------------
@@ -1565,7 +1607,6 @@ function Racing.start(city: Instance)
 			end
 		end
 		watchers[player] = nil
-		rewardLog[player] = nil
 		-- racerOf is cleared when the race notices (next tick)
 	end)
 

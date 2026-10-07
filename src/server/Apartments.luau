@@ -1116,7 +1116,12 @@ function Apartments.start(city: Instance)
 		if not sec then
 			return false, "Your save is still loading.", nil
 		end
-		local ok, message = handlers[action](player, sec, payload)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, message = pcall(handlers[action], player, sec, payload)
+		if not pok then
+			warn("[Security] ApartmentsRequest failed:", action, ok)
+			ok, message = false, "Something went wrong."
+		end
 		local state = stateFor(player)
 		if ok and action ~= "GetState" then
 			pushState(player)

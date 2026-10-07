@@ -1285,8 +1285,16 @@ function Ranked.start(city: Instance)
 		if not Net.allow(player, "RankedRequest", 0.25) then
 			return false, "Slow down.", nil
 		end
-		local ok, msg = handle(player, action, arg)
-		return ok, msg, stateFor(player)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, msg, state = pcall(function()
+			local ok, msg = handle(player, action, arg)
+			return ok, msg, stateFor(player)
+		end)
+		if not pok then
+			warn("[Security] RankedRequest failed:", ok)
+			return false, "Something went wrong.", nil
+		end
+		return ok, msg, state
 	end
 
 	PlayerData.onLoaded(function(player)

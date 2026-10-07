@@ -15,6 +15,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local G = Config.Game
@@ -58,6 +59,27 @@ type Match = {
 
 local courts: { Court } = {}
 local playerGame: { [Player]: { court: Court, team: Team } } = {}
+
+-- [Security] Pickup games have no same-opponent rule, so two alts trading 60 s games could
+-- farm cash + rep all day. After G.REWARDED_PER_HOUR rewarded games in a rolling hour a
+-- game pays half XP only. Keyed by UserId so leaving and rejoining doesn't reset it.
+local rewardedAt: { [number]: { number } } = {}
+local function underPickupCap(player: Player): boolean
+	local cutoff = os.time() - 3600
+	local kept = {}
+	local log: { number } = rewardedAt[player.UserId] or {}
+	for _, t in log do
+		if t > cutoff then
+			table.insert(kept, t)
+		end
+	end
+	rewardedAt[player.UserId] = kept
+	if #kept >= (G.REWARDED_PER_HOUR or 12) then
+		return false
+	end
+	table.insert(kept, os.time())
+	return true
+end
 
 local function other(team: Team): Team
 	return if team == "Home" then "Away" else "Home"
@@ -254,7 +276,11 @@ local function endGame(court: Court, winner: Team?, forfeit: boolean)
 				leaveGame(player)
 				continue
 			end
-			if eligible then
+			if eligible and not underPickupCap(player) then
+				PlayerData.addXP(player, math.floor((if won then G.WIN_XP else G.LOSS_XP) / 2))
+				PlayerData.recordBasketball(player, { games = 1 }) -- wins feed the leaderboards: not over the cap
+				PlayerData.onNotify:Fire(player, "REWARD LIMIT", "You've played a lot of pickup games this hour: XP only for now.")
+			elseif eligible then
 				if won then
 					PlayerData.addCash(player, math.floor(G.WIN_CASH * sizeBonus), "Won a " .. teamSize .. "v" .. teamSize .. " at " .. court.name)
 					PlayerData.addXP(player, math.floor(G.WIN_XP * sizeBonus))
@@ -344,6 +370,7 @@ local function startGame(court: Court, home: { Player }, away: { Player })
 				humanoid.Sit = false
 			end
 			if player.Character then
+				AntiCheat.allowTeleport(player, 3)
 				player.Character:PivotTo(CFrame.lookAt(pos, pos + facing))
 			end
 		end

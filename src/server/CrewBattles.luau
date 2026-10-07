@@ -30,8 +30,10 @@ local RunService = game:GetService("RunService")
 
 local Net = require(script.Parent:WaitForChild("Net"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local shared = ReplicatedStorage:WaitForChild("CityGrind")
 local CB = require(shared:WaitForChild("CrewBattlesConfig"))
+local SPRINT_CREDIT = require(shared:WaitForChild("Config")).SPRINT_SPEED * 1.15 -- studs/s of distance credit
 
 local CrewBattles = {}
 
@@ -679,8 +681,10 @@ local function trackTick(dt: number)
 			local pos = root.Position
 			if tr.lastPos then
 				local d = Vector3.new(pos.X - tr.lastPos.X, 0, pos.Z - tr.lastPos.Z).Magnitude
-				if onFoot(p) and d < 40 * math.max(dt, 0.1) then
-					tr.distance += d
+				if onFoot(p) and d < 40 * math.max(dt, 0.1) and AntiCheat.positionOk(p) then
+					-- [Security] credit at most a sprint's worth per tick, so a client
+					-- running just under the speed checks can't out-score honest runners
+					tr.distance += math.min(d, SPRINT_CREDIT * math.max(dt, 0.1))
 				end
 			end
 			tr.lastPos = pos
@@ -1349,10 +1353,7 @@ local function battleView(b: Battle, viewer: Player, myId: string): any
 	}
 end
 
-CrewBattleGet.OnServerInvoke = function(player: Player)
-	if not Net.allow(player, "CrewBattleGet", 0.3) then
-		return nil
-	end
+local function getSnapshot(player: Player): any
 	local c = crewOf(player)
 	local week = CB.week(now())
 	local snapshot: any = {
@@ -1416,6 +1417,19 @@ CrewBattleGet.OnServerInvoke = function(player: Player)
 	snapshot.history = hist
 	local sec = sectionOf(player)
 	snapshot.me = sec and { played = sec.played, wins = sec.wins, mvps = sec.mvps } or nil
+	return snapshot
+end
+
+CrewBattleGet.OnServerInvoke = function(player: Player)
+	if not Net.allow(player, "CrewBattleGet", 0.3) then
+		return nil
+	end
+	-- [Security] a failed read returns nothing instead of throwing into the client
+	local ok, snapshot = pcall(getSnapshot, player)
+	if not ok then
+		warn("[Security] CrewBattleGet failed:", snapshot)
+		return nil
+	end
 	return snapshot
 end
 

@@ -1514,6 +1514,10 @@ local function handle(player: Player, action: any, a: any, b: any): (boolean, st
 	elseif action == "delete" then
 		return deletePost(player, a)
 	elseif action == "followers" or action == "following" then
+		-- [Security] any userId costs a DataStore read: cap the flood rate
+		if not Net.budget(player, "CityGramLookup", 30, 30) then
+			return false, "Slow down.", nil
+		end
 		return followList(player, a, action)
 	elseif action == "myFollowing" then
 		return true, nil, followingIds(player.UserId)
@@ -1541,7 +1545,7 @@ function CityGram.start(_city: Instance?)
 		return success, message, data
 	end
 	CityGramProfile.OnServerInvoke = function(player: Player, userId: any)
-		if not Net.allow(player, "CityGramProfile", 0.3) then
+		if not Net.allow(player, "CityGramProfile", 0.3) or not Net.budget(player, "CityGramLookup", 30, 30) then
 			return nil
 		end
 		local ok, data = pcall(profileData, player, userId)

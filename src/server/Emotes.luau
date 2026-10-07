@@ -19,6 +19,7 @@ local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local EmotesConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("EmotesConfig"))
 
@@ -422,6 +423,7 @@ function Emotes.playPaired(a: Player, b: Player, name: string): (boolean, string
 
 	for _, entry in { { a, rootA, posA, posA + dir }, { b, rootB, posB, posB - dir } } do
 		local pl, root, pos, look = entry[1], entry[2], entry[3], entry[4]
+		AntiCheat.allowTeleport(pl, 2)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.CFrame = CFrame.lookAt(pos, Vector3.new(look.X, pos.Y, look.Z))
 		if startEmote(pl, emote) then

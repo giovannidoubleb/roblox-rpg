@@ -6,6 +6,7 @@
 local Players = game:GetService("Players")
 
 local Net = require(script.Parent:WaitForChild("Net"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 
 local Places = {}
 
@@ -33,6 +34,7 @@ function Places.teleport(player: Player, cf: CFrame)
 	if not character or not humanoid then
 		return
 	end
+	AntiCheat.allowTeleport(player, 3)
 	local seat = humanoid.SeatPart
 	if seat then
 		-- Break the seat weld first so a car (or bike) isn't dragged along and flung.

@@ -12,6 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DistrictsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("DistrictsConfig"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local EventKit = require(script.Parent:WaitForChild("EventKit"))
 
 local EventHunt = {}
@@ -322,7 +323,8 @@ function EventHunt.init(ctx: any): any
 				for p in d.hunters do
 					local r = ctx.rootOf(p)
 					local hum = ctx.humanoidOf(p)
-					if r and hum and hum.Health > 0 and p.Parent and ctx.isRegistered(ev, p) then
+					-- [Security] a character that just jumped further than it could run can't claim
+					if r and hum and hum.Health > 0 and p.Parent and ctx.isRegistered(ev, p) and AntiCheat.positionOk(p) then
 						local dist = ctx.flatDist(r.Position, c.pos)
 						if dist <= bestDist and math.abs(r.Position.Y - c.pos.Y) < 9 then
 							best, bestDist = p, dist

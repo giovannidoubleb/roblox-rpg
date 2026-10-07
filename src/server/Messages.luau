@@ -988,8 +988,8 @@ end
 
 local function sendGroup(sender: Player, gid: string, raw: any): (boolean, string?)
 	local sec = data(sender)
-	local rec = getGroup(gid)
-	if not sec or not rec or not sec.groups[gid] or not rec.members[tostring(sender.UserId)] then
+	local rec = sec and sec.groups[gid] and getGroup(gid) -- [Security] membership before any DataStore read
+	if not sec or not rec or not rec.members[tostring(sender.UserId)] then
 		return false, "You're not in that group."
 	end
 	local text = cleanText(raw, Cfg.MAX_LENGTH)
@@ -1429,8 +1429,9 @@ handlers.Open = function(player, sec, convId)
 		return false, nil, nil
 	end
 	if convId:sub(1, 1) == "g" then
-		local rec = getGroup(convId)
-		if not rec or not sec.groups[convId] then
+		-- [Security] membership first: an arbitrary group id would otherwise cost a DataStore read
+		local rec = sec.groups[convId] and getGroup(convId)
+		if not rec then
 			return false, "That group is gone.", nil
 		end
 		local msgs = {}
@@ -1446,7 +1447,7 @@ handlers.Open = function(player, sec, convId)
 	local convo = sec.convos[convId]
 	if not convo then
 		local id = tonumber(convId:match("^d(%-?%d+)$"))
-		if not id or id == player.UserId then
+		if not id or id == player.UserId or id ~= id or math.abs(id) >= 1e13 then
 			return false, nil, nil
 		end
 		-- new thread: nothing saved until the first message
@@ -1602,8 +1603,8 @@ handlers.Group = function(player, sec, payload)
 	if type(payload) ~= "table" or type(payload.id) ~= "string" then
 		return false, nil, nil
 	end
-	local rec = getGroup(payload.id)
-	if not rec or not sec.groups[payload.id] or not rec.members[tostring(player.UserId)] then
+	local rec = sec.groups[payload.id] and getGroup(payload.id) -- [Security] membership before any DataStore read
+	if not rec or not rec.members[tostring(player.UserId)] then
 		return false, "You're not in that group.", nil
 	end
 	local gid = rec.id
@@ -1850,7 +1851,12 @@ function Messages.start(_city: Instance?)
 		if not sec then
 			return false, "Your phone is still loading.", nil
 		end
-		local ok, message, result = handlers[action](player, sec, payload)
+		-- [Security] errors come back as a failure instead of being thrown into the client
+		local pok, ok, message, result = pcall(handlers[action], player, sec, payload)
+		if not pok then
+			warn("[Security] MessagesRequest failed:", action, ok)
+			return false, "Something went wrong.", nil
+		end
 		return ok, message, result
 	end
 

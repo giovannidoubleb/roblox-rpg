@@ -631,6 +631,8 @@ type Active = {
 	override: boolean,
 	restTime: number,
 	overspeed: number,
+	lastPos: Vector3?, -- chassis position last sanity step (teleport check)
+	travel: number, -- banked distance the chassis may still cover (teleport check)
 }
 
 local active: { [Player]: Active } = {}
@@ -909,6 +911,8 @@ local function spawnVehicle(player: Player, id: string): (boolean, string)
 		override = false,
 		restTime = 0,
 		overspeed = 0,
+		lastPos = nil,
+		travel = 0,
 	}
 	VC.setIgnore(sim, ignoreList)
 	active[player] = v
@@ -1046,7 +1050,12 @@ VehicleSpawn.OnServerInvoke = function(player: Player, id: any)
 	if type(id) ~= "string" then
 		return false, "Invalid request."
 	end
-	local ok, message = spawnVehicle(player, id)
+	-- [Security] a spawn error comes back as a failure instead of being thrown into the client
+	local pok, ok, message = pcall(spawnVehicle, player, id)
+	if not pok then
+		warn("[Security] VehicleSpawn failed:", ok)
+		return false, "Couldn't bring that out right now."
+	end
 	Net.notify(player, "GARAGE", message)
 	return ok, message
 end
@@ -1279,11 +1288,38 @@ local function sanityStep(dt: number)
 			Net.notify(owner, "GARAGE", "Your vehicle was towed back to the garage.")
 			continue
 		end
+		if not v.driver or v.override or chassis.Anchored then
+			v.lastPos = nil
+		end
 		if v.driver and not v.override and not chassis.Anchored then
 			local vel = chassis.AssemblyLinearVelocity
 			local flat = Vector3.new(vel.X, 0, vel.Z).Magnitude
-			if flat > v.spec.topSpeed * 1.5 + 8 or math.abs(vel.Y) > 160 then
-				v.overspeed += dt
+			-- The driver's client owns the chassis and could also set its CFrame
+			-- directly (velocity stays sane). Bank the distance the car may cover
+			-- (a few seconds' worth so replication bursts never trip it) and treat
+			-- an overdraft as a teleport: put the car back and stop it.
+			local maxRate = v.spec.topSpeed * 1.5 + 8
+			local cap = maxRate * 3 + 40
+			local last = v.lastPos
+			v.lastPos = pos
+			local teleported = false
+			if last then
+				v.travel = math.min(cap, v.travel + maxRate * dt) - Vector3.new(pos.X - last.X, 0, pos.Z - last.Z).Magnitude
+				if v.travel < 0 then
+					teleported = true
+					v.travel = cap
+					v.lastPos = last
+					if Net.allow(v.driver :: Player, "SecVehicleTeleport", 30) then
+						warn("[Security] Vehicle teleport blocked for " .. (v.driver :: Player).Name)
+					end
+					chassis.AssemblyLinearVelocity = Vector3.zero
+					v.model:PivotTo(v.model:GetPivot() - (pos - last))
+				end
+			else
+				v.travel = cap
+			end
+			if teleported or flat > v.spec.topSpeed * 1.5 + 8 or math.abs(vel.Y) > 160 then
+				v.overspeed += if teleported then 3 else dt
 			else
 				v.overspeed = math.max(0, v.overspeed - dt * 0.5)
 			end

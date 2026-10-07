@@ -575,6 +575,10 @@ local function sendRequest(player: Player, targetId: number, nameHint: string?):
 	if count(s.friends) >= SC.MAX_FRIENDS then
 		return false, "Your friends list is full (" .. SC.MAX_FRIENDS .. ")."
 	end
+	-- [Security] outgoing requests never expire on their own: cap them so the save can't grow without bound.
+	if count(s.outgoing) >= SC.MAX_INCOMING then
+		return false, "You have " .. SC.MAX_INCOMING .. " requests waiting. Cancel some first."
+	end
 	if not requestAllowed(player) then
 		return false, "Slow down - you can send " .. SC.REQUESTS_PER_MINUTE .. " requests a minute."
 	end

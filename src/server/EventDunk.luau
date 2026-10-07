@@ -13,6 +13,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 local Basketball = require(script.Parent:WaitForChild("Basketball"))
+local AntiCheat = require(script.Parent:WaitForChild("AntiCheat"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local EventDunk = {}
@@ -212,6 +213,7 @@ function EventDunk.init(ctx: any): any
 		activeTurns[p] = turn
 		local character = p.Character
 		if character then
+			AntiCheat.allowTeleport(p, 3)
 			character:PivotTo(CFrame.lookAt(d.start, Vector3.new(d.rim.X, d.start.Y, d.rim.Z)))
 		end
 		ctx.announce({ p }, string.format("YOUR TURN! %d DUNKS", D.ATTEMPTS))

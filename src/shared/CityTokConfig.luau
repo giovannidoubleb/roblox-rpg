@@ -43,6 +43,7 @@ CityTokConfig.VIRAL_AT = 60
 CityTokConfig.TRENDING_REWARD = { rep = 25, fame = 40 }
 CityTokConfig.VIRAL_REWARD = { rep = 75, fame = 120 }
 CityTokConfig.DAILY_REP_CAP = 150 -- reputation CityTok can give one player per day
+CityTokConfig.DAILY_FAME_CAP = 480 -- [Security] fame CityTok can give one player per day (alt rings re-posting clips)
 CityTokConfig.MIN_WATCH_FOR_VIEW = 1.5 -- seconds a viewer must have had the post open
 
 -- Trending score = engagement / (age in hours + 2) ^ 1.5

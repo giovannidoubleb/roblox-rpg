@@ -34,6 +34,25 @@ local RunService = game:GetService("RunService")
 local Net = require(script.Parent:WaitForChild("Net"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local LC = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("LeaderboardsConfig"))
+local Config = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("Config"))
+local EventsConfig = require(ReplicatedStorage:WaitForChild("CityGrind"):WaitForChild("EventsConfig"))
+
+-- [Security] The fastest physically possible City 5K: every leg cut short by the
+-- gate radius at both ends, run at the event's speed cap. Anything under it is bogus.
+local MIN_5K_SECONDS = (function(): number
+	local run = EventsConfig.RUN
+	local route = run and run.ROUTE
+	if type(route) ~= "table" or #route < 2 then
+		return 0
+	end
+	local total = 0
+	for i = 1, #route do
+		local a, b = route[i], route[if i == #route then 1 else i + 1]
+		total += math.max(0, Vector3.new(b.X - a.X, 0, b.Z - a.Z).Magnitude - 2 * run.GATE_RADIUS)
+	end
+	return total / run.MAX_SPEED
+end)()
+local rejectedWarned: { [string]: boolean } = {}
 
 local Leaderboards = {}
 
@@ -449,6 +468,18 @@ end
 function Leaderboards.submit(statId: string, player: Player, value: number)
 	local s = LC.BY_ID[statId]
 	if not s or s.crew or typeof(player) ~= "Instance" or not player:IsA("Player") or type(value) ~= "number" then
+		return
+	end
+	-- [Security] sane bounds: finite, non-negative, levels within the cap, no impossible 5K
+	local bad = value ~= value or value < 0 or value >= 2 ^ 53
+		or (statId == "level" and value > Config.MAX_LEVEL)
+		or (statId == "fastest5k" and value > 0 and value < MIN_5K_SECONDS)
+	if bad then
+		local warnKey = statId .. ":" .. player.UserId
+		if not rejectedWarned[warnKey] then
+			rejectedWarned[warnKey] = true
+			warn(string.format("[Security] Leaderboards rejected %s=%s for %s", statId, tostring(value), player.Name))
+		end
 		return
 	end
 	local key = tostring(player.UserId)
